@@ -1,0 +1,65 @@
+"""User settings stored as JSON values in the settings table."""
+from __future__ import annotations
+
+import copy
+import json
+from typing import Any
+
+from . import db
+
+# Tool policies: "auto" runs immediately, "confirm" queues an action for approval, "deny" blocks it.
+DEFAULTS: dict[str, Any] = {
+    "ollama_url": "http://127.0.0.1:11434",
+    "chat_model": "llama3.1:8b",
+    "embed_model": "nomic-embed-text",
+    # "auto": use the local model when reachable and fall back to the built-in rule planner.
+    # "llm": always use the model. "rules": never call a model.
+    "planner": "auto",
+    "automation_paused": False,
+    "proactive_level": "normal",  # off | low | normal
+    "large_file_mb": 100,
+    "stale_days": 180,
+    "downloads_clutter_threshold": 25,
+    "tool_policies": {},
+    "theme_accent": "violet",
+    "user_name": "",
+    "dismissed_suggestions": [],
+}
+
+
+def get_all() -> dict[str, Any]:
+    with db.session() as conn:
+        rows = conn.execute("SELECT key, value FROM settings").fetchall()
+    stored = {r["key"]: json.loads(r["value"]) for r in rows}
+    return {**copy.deepcopy(DEFAULTS), **{k: v for k, v in stored.items() if k in DEFAULTS}}
+
+
+def get(key: str) -> Any:
+    return get_all()[key]
+
+
+def update(changes: dict[str, Any]) -> dict[str, Any]:
+    unknown = set(changes) - set(DEFAULTS)
+    if unknown:
+        raise ValueError(f"Unknown settings: {', '.join(sorted(unknown))}")
+    for key, value in changes.items():
+        expected = type(DEFAULTS[key])
+        if expected is int and isinstance(value, float) and value.is_integer():
+            value = int(value)
+        if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
+            raise ValueError(f"Setting {key} must be {expected.__name__}")
+        if key == "planner" and value not in ("auto", "llm", "rules"):
+            raise ValueError("planner must be auto, llm or rules")
+        if key == "proactive_level" and value not in ("off", "low", "normal"):
+            raise ValueError("proactive_level must be off, low or normal")
+        if key == "tool_policies":
+            for tool, policy in value.items():
+                if policy not in ("auto", "confirm", "deny"):
+                    raise ValueError(f"Policy for {tool} must be auto, confirm or deny")
+    with db.session() as conn:
+        for key, value in changes.items():
+            conn.execute(
+                "INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, json.dumps(value)),
+            )
+    return get_all()
