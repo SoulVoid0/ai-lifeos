@@ -45,5 +45,15 @@
       }
     },
     "shortDescription": "Your personal AI operating system"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [],
+      "dangerousInsecureTransportProtocol": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

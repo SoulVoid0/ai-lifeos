@@ -4,6 +4,7 @@ import { api, type Settings as S } from "../lib/api";
 import { ago } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { ErrorBox, PageHeader, Section, Spinner, notifyChanged, useToast } from "../components/ui";
+import { UpdateSettings } from "../components/Updates";
 import { CloudSettings, CrewSettings, IntegrationSettings, NotificationSettings } from "../components/SettingsExtra";
 
 const ACCENTS = ["violet", "blue", "emerald", "cyan", "rose", "amber"];
@@ -64,6 +65,8 @@ export default function Settings() {
   return (
     <div className="mx-auto max-w-4xl space-y-4 p-6">
       <PageHeader title="Settings" subtitle="Models, permissions, privacy and personalization. Everything stays on this computer." />
+
+      <UpdateSettings />
 
       <Section title="Approved folders" icon={<FolderPlus size={15} className="text-accent" />}>
         <p className="mb-3 text-xs text-muted">

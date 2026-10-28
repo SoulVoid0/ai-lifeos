@@ -5,6 +5,8 @@ from . import config
 
 
 def main() -> None:
+    # Before anything opens the database.
+    config.import_store_python_data()
     # Import the app object directly instead of the "lifeos.main:app" string so PyInstaller sees the import.
     from .main import app
 

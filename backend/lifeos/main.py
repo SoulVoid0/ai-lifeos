@@ -9,13 +9,13 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, learning, llm, media, memory,
                missions, permissions, proactive, projects, scheduler, search, services, settings, tasks, tools, vault,
-               workflows)
+               updates, workflows)
 
 log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
@@ -651,6 +651,41 @@ def shutdown() -> dict[str, Any]:
     services.stop_all()
     threading.Timer(0.3, lambda: os._exit(0)).start()
     return {"ok": True}
+
+
+class UpdateCfgIn(BaseModel):
+    repo: str | None = Field(default=None, max_length=200)
+    token: str | None = Field(default=None, max_length=500)
+
+
+@app.get("/api/system/update/config")
+def update_config() -> dict[str, Any]:
+    return updates.cfg()
+
+
+@app.patch("/api/system/update/config")
+def set_update_config(body: UpdateCfgIn) -> dict[str, Any]:
+    return updates.set_cfg(body.repo, body.token)
+
+
+@app.get("/api/system/update/manifest")
+def update_manifest() -> Response:
+    """latest.json for the desktop app's updater (204 when there's no release yet)."""
+    try:
+        data = updates.manifest()
+    except updates.UpdateError as e:
+        return JSONResponse({"detail": str(e)}, status_code=502)
+    return Response(status_code=204) if data is None else JSONResponse(data)
+
+
+@app.get("/api/system/update/asset/{asset_id}")
+def update_asset(asset_id: int) -> Response:
+    try:
+        client, r = updates.open_asset(asset_id)
+    except updates.UpdateError as e:
+        return JSONResponse({"detail": str(e)}, status_code=502)
+    headers = {k: r.headers[k] for k in ("content-length",) if k in r.headers}
+    return StreamingResponse(updates.iter_asset(client, r), media_type="application/octet-stream", headers=headers)
 
 
 @app.get("/api/media/status")

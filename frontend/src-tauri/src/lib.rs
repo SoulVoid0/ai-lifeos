@@ -6,6 +6,11 @@
 //! ComfyUI, also hidden. Closing the window keeps LifeOS running in the tray; Quit in the tray menu asks the
 //! backend to stop the helper programs it started, then exits. The backend also watches LIFEOS_PARENT_PID,
 //! so it exits if the shell is killed without a clean shutdown.
+//!
+//! Updates: the app asks the backend for the newest GitHub release's manifest (the backend adds the read
+//! token a private repository needs and relays the download). The installer must carry a valid signature for
+//! the public key compiled in from LIFEOS_UPDATER_PUBKEY, which the release workflow sets; builds without it
+//! can't update themselves. Installing stops the backend first so its files can be replaced, then restarts.
 
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
@@ -17,14 +22,78 @@ use std::time::Duration;
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_updater::{Update, UpdaterExt};
 
 const BACKEND_ADDR: &str = "127.0.0.1:8765";
 /// Passed when Windows starts LifeOS at sign-in: stay in the tray instead of opening the window.
 const MINIMIZED_FLAG: &str = "--minimized";
 
+/// Set by the release workflow; empty in local builds.
+const UPDATER_PUBKEY: &str = match option_env!("LIFEOS_UPDATER_PUBKEY") {
+    Some(k) => k,
+    None => "",
+};
+
 struct Backend(Mutex<Option<Child>>);
+struct PendingUpdate(Mutex<Option<Update>>);
+
+#[derive(Clone, serde::Serialize)]
+struct UpdateInfo {
+    version: String,
+    current: String,
+    notes: Option<String>,
+}
+
+#[tauri::command]
+fn app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    if UPDATER_PUBKEY.trim().is_empty() {
+        return Err("This copy was built on your PC, so it can't update itself. Install it once from the GitHub release.".into());
+    }
+    let handle = app.clone();
+    let endpoint = format!("http://{BACKEND_ADDR}/api/system/update/manifest").parse().map_err(|e| format!("{e}"))?;
+    let update = app
+        .updater_builder()
+        .endpoints(vec![endpoint])
+        .and_then(|b| b.header("X-LifeOS-Client", "1"))
+        .map_err(|e| e.to_string())?
+        // Windows: the installer replaces the backend's files, so stop it (and what it started) first.
+        .on_before_exit(move || stop_backend(&handle))
+        .build()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+    let info = update.as_ref().map(|u| UpdateInfo { version: u.version.clone(), current: u.current_version.clone(), notes: u.body.clone() });
+    *app.state::<PendingUpdate>().0.lock().map_err(|e| e.to_string())? = update;
+    Ok(info)
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    let update = app.state::<PendingUpdate>().0.lock().map_err(|e| e.to_string())?.take();
+    let update = update.ok_or("No update is ready; check again")?;
+    let mut done: u64 = 0;
+    let progress = app.clone();
+    update
+        .download_and_install(
+            move |chunk, total| {
+                done += chunk as u64;
+                let _ = progress.emit("update-progress", (done, total));
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    // Windows exits inside install() and the installer starts the new version; elsewhere restart here.
+    app.restart();
+}
 
 fn http(method: &str, path: &str, timeout_ms: u64) -> Option<String> {
     let addr: SocketAddr = BACKEND_ADDR.parse().ok()?;
@@ -107,11 +176,12 @@ fn stop_backend(app: &AppHandle) {
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open AI LifeOS", true, None::<&str>)?;
     let comfy = MenuItem::with_id(app, "comfy", "Start ComfyUI now", true, None::<&str>)?;
+    let update = MenuItem::with_id(app, "update", "Check for updates", true, None::<&str>)?;
     let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
     let autostart = CheckMenuItem::with_id(app, "autostart", "Start with Windows", true, autostart_on, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit AI LifeOS", true, None::<&str>)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&open, &comfy, &autostart, &sep, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &comfy, &update, &autostart, &sep, &quit])?;
     let toggle = autostart.clone();
     let mut tray = TrayIconBuilder::with_id("lifeos")
         .tooltip("AI LifeOS")
@@ -123,6 +193,11 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 std::thread::spawn(|| {
                     let _ = http("POST", "/api/system/services/comfyui/start", 300_000);
                 });
+            }
+            "update" => {
+                // The window shows the result (and the Install & restart button).
+                show_main(app);
+                let _ = app.emit("check-updates", ());
             }
             "autostart" => {
                 let manager = app.autolaunch();
@@ -157,6 +232,13 @@ pub fn run() {
         // A second launch (shortcut, Start menu) just brings the running window forward.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main(app)))
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![MINIMIZED_FLAG])))
+        .plugin(if UPDATER_PUBKEY.trim().is_empty() {
+            tauri_plugin_updater::Builder::new().build()
+        } else {
+            tauri_plugin_updater::Builder::new().pubkey(UPDATER_PUBKEY.trim()).build()
+        })
+        .manage(PendingUpdate(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![app_version, check_update, install_update])
         .setup(|app| {
             let log_dir = app.path().app_log_dir().ok();
             let child = if backend_healthy() { None } else { spawn_backend(log_dir) };

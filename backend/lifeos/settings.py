@@ -12,6 +12,9 @@ DEFAULTS: dict[str, Any] = {
     "ollama_url": "http://127.0.0.1:11434",
     # Start `ollama serve` hidden when LifeOS starts and Ollama isn't running.
     "auto_start_ollama": True,
+    # GitHub repository whose releases the desktop app updates from (owner/name). A read token for a private
+    # repository is kept in the vault (see updates.py).
+    "update_repo": "SoulVoid0/ai-lifeos",
     "chat_model": "llama3.1:8b",
     "embed_model": "nomic-embed-text",
     # "auto": use the local model when reachable and fall back to the built-in rule planner.
