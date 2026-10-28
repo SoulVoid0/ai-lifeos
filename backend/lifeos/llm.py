@@ -1,26 +1,72 @@
-"""Ollama client: chat with structured (JSON-schema) output and embeddings."""
+"""Model access: local Ollama by default, optional cloud providers, usage ledger.
+
+A model reference is either a plain Ollama model name ("llama3.1:8b") or "provider:model"
+("openai:gpt-4o-mini", "anthropic:claude-sonnet-4-5", "openrouter:qwen/qwen3-32b", ...).
+Cloud providers are refused unless the user enabled cloud AI in Settings, has stored a key,
+and today's spend is under the daily cap. Every call's token usage goes to the ledger.
+"""
 from __future__ import annotations
 
 import json
 import math
+import re
 import struct
+import threading
 import time
-from typing import Any
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from typing import Any, Iterator
 
 import httpx
 
-from . import settings
+from . import db, settings, vault
 
 
 class LLMUnavailable(Exception):
     pass
 
 
+# OpenAI-compatible chat-completions endpoints. Anthropic has its own API.
+OPENAI_COMPAT = {
+    "openai": "https://api.openai.com/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "groq": "https://api.groq.com/openai/v1",
+    "mistral": "https://api.mistral.ai/v1",
+    "deepseek": "https://api.deepseek.com/v1",
+    "xai": "https://api.x.ai/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "custom": "",
+}
+PROVIDERS = ("ollama", "anthropic", *OPENAI_COMPAT)
+PROVIDER_LABELS = {
+    "ollama": "Ollama (local)", "anthropic": "Anthropic", "openai": "OpenAI", "openrouter": "OpenRouter",
+    "groq": "Groq", "mistral": "Mistral", "deepseek": "DeepSeek", "xai": "xAI (Grok)", "gemini": "Google Gemini",
+    "custom": "Custom OpenAI-compatible (LM Studio, vLLM, llama.cpp)",
+}
+
 _status_cache: dict[str, Any] = {"checked": 0.0, "ok": False, "models": [], "url": None}
+_local = threading.local()
 
 
 def _base() -> str:
     return settings.get("ollama_url").rstrip("/")
+
+
+def parse_ref(ref: str | None) -> tuple[str, str]:
+    """Split a model reference into (provider, model)."""
+    ref = (ref or "").strip() or settings.get("chat_model")
+    head, sep, rest = ref.partition(":")
+    if sep and head.lower() in PROVIDERS and rest:
+        return head.lower(), rest
+    return "ollama", ref
+
+
+def is_cloud(ref: str | None) -> bool:
+    return parse_ref(ref)[0] not in ("ollama", "custom")
+
+
+def key_name(provider: str) -> str:
+    return f"provider:{provider}"
 
 
 def status(force: bool = False) -> dict[str, Any]:
@@ -39,40 +85,241 @@ def status(force: bool = False) -> dict[str, Any]:
     return {"ok": ok, "models": models, "url": url}
 
 
-def chat_json(messages: list[dict[str, str]], schema: dict[str, Any], *, model: str | None = None,
-              timeout: float = 180) -> dict[str, Any]:
-    """Run a chat completion constrained to `schema` and return the parsed JSON object."""
-    payload = {
-        "model": model or settings.get("chat_model"),
-        "messages": messages,
-        "format": schema,
-        "stream": False,
-        "options": {"temperature": 0.1},
-    }
+def providers() -> list[dict[str, Any]]:
+    out = []
+    for p in PROVIDERS:
+        needs_key = p not in ("ollama", "custom")
+        out.append({"id": p, "label": PROVIDER_LABELS[p], "cloud": p not in ("ollama", "custom"),
+                    "needs_key": needs_key, "has_key": needs_key and vault.has_secret(key_name(p))})
+    return out
+
+
+def model_available(ref: str | None) -> bool:
+    """Cheap check used to decide between model planning and the offline fallback."""
+    provider, model = parse_ref(ref)
+    if provider == "ollama":
+        return status()["ok"]
+    if provider == "custom":
+        return bool(settings.get("custom_provider_url"))
+    return settings.get("cloud_enabled") and vault.has_secret(key_name(provider))
+
+
+# ---------------------------------------------------------------- usage ledger
+
+@contextmanager
+def track(mission_id: int | None = None, agent: str | None = None) -> Iterator[None]:
+    """Attribute model usage inside this block (on this thread) to a mission and agent."""
+    prev = getattr(_local, "attr", None)
+    _local.attr = (mission_id, agent)
     try:
-        r = httpx.post(f"{_base()}/api/chat", json=payload, timeout=timeout)
-        r.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise LLMUnavailable(f"Ollama request failed: {exc}") from exc
-    content = r.json().get("message", {}).get("content", "")
+        yield
+    finally:
+        _local.attr = prev
+
+
+def _price(ref: str) -> tuple[float, float]:
+    prices = settings.get("model_prices")
+    p = prices.get(ref) or prices.get(ref.split(":", 1)[-1]) or {}
+    return float(p.get("in", 0) or 0), float(p.get("out", 0) or 0)
+
+
+def _record(provider: str, model: str, tokens_in: int, tokens_out: int) -> None:
+    ref = model if provider == "ollama" else f"{provider}:{model}"
+    pin, pout = _price(ref)
+    cost = (tokens_in * pin + tokens_out * pout) / 1_000_000
+    mission_id, agent = getattr(_local, "attr", None) or (None, None)
+    with db.session() as conn:
+        conn.execute("INSERT INTO ledger(mission_id, agent, model, provider, tokens_in, tokens_out, cost_usd, created_at) "
+                     "VALUES (?,?,?,?,?,?,?,?)", (mission_id, agent, ref, provider, tokens_in, tokens_out, cost, db.now()))
+        if mission_id:
+            conn.execute("UPDATE missions SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, "
+                         "cost_usd = cost_usd + ? WHERE id = ?", (tokens_in, tokens_out, cost, mission_id))
+
+
+def spend_today() -> dict[str, Any]:
+    start = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    with db.session() as conn:
+        row = conn.execute("SELECT COALESCE(SUM(tokens_in),0) AS tin, COALESCE(SUM(tokens_out),0) AS tout, "
+                           "COALESCE(SUM(cost_usd),0) AS cost, COALESCE(SUM(CASE WHEN provider NOT IN ('ollama','custom') "
+                           "THEN cost_usd ELSE 0 END),0) AS cloud FROM ledger WHERE created_at >= ?",
+                           (start.isoformat(timespec="seconds"),)).fetchone()
+    return {"tokens_in": row["tin"], "tokens_out": row["tout"], "cost_usd": round(row["cost"], 4),
+            "cloud_cost_usd": round(row["cloud"], 4), "cloud_budget_usd": settings.get("cloud_daily_budget_usd")}
+
+
+def ledger(days: int = 7) -> dict[str, Any]:
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    with db.session() as conn:
+        by_model = db.rows_to_dicts(conn.execute(
+            "SELECT model, provider, COUNT(*) AS calls, SUM(tokens_in) AS tokens_in, SUM(tokens_out) AS tokens_out, "
+            "SUM(cost_usd) AS cost_usd FROM ledger WHERE created_at >= ? GROUP BY model ORDER BY cost_usd DESC, calls DESC",
+            (since,)).fetchall())
+        by_agent = db.rows_to_dicts(conn.execute(
+            "SELECT COALESCE(agent, 'assistant') AS agent, COUNT(*) AS calls, SUM(tokens_in) AS tokens_in, "
+            "SUM(tokens_out) AS tokens_out, SUM(cost_usd) AS cost_usd FROM ledger WHERE created_at >= ? "
+            "GROUP BY COALESCE(agent, 'assistant') ORDER BY calls DESC", (since,)).fetchall())
+        by_day = db.rows_to_dicts(conn.execute(
+            "SELECT substr(created_at, 1, 10) AS day, SUM(tokens_in + tokens_out) AS tokens, SUM(cost_usd) AS cost_usd "
+            "FROM ledger WHERE created_at >= ? GROUP BY day ORDER BY day", (since,)).fetchall())
+    return {"days": days, "by_model": by_model, "by_agent": by_agent, "by_day": by_day, "today": spend_today()}
+
+
+def _check_cloud(provider: str) -> str:
+    if not settings.get("cloud_enabled"):
+        raise LLMUnavailable(f"Cloud AI is turned off (Settings → Cloud AI); {provider} was not called")
+    key = vault.get_secret(key_name(provider))
+    if not key:
+        raise LLMUnavailable(f"No API key stored for {provider}")
+    today = spend_today()
+    if today["cloud_cost_usd"] >= today["cloud_budget_usd"]:
+        raise LLMUnavailable(f"Daily cloud budget of ${today['cloud_budget_usd']:.2f} reached")
+    return key
+
+
+# ---------------------------------------------------------------- completion
+
+def _extract_json(text: str) -> dict[str, Any]:
+    text = text.strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
+    if fence:
+        text = fence.group(1).strip()
     try:
-        data = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise LLMUnavailable(f"Model returned invalid JSON: {content[:200]}") from exc
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            raise LLMUnavailable(f"Model returned invalid JSON: {text[:200]}")
+        try:
+            data = json.loads(text[start:end + 1])
+        except json.JSONDecodeError as exc:
+            raise LLMUnavailable(f"Model returned invalid JSON: {text[:200]}") from exc
     if not isinstance(data, dict):
         raise LLMUnavailable("Model returned non-object JSON")
     return data
 
 
-def chat_text(messages: list[dict[str, str]], *, model: str | None = None, timeout: float = 180) -> str:
-    payload = {"model": model or settings.get("chat_model"), "messages": messages, "stream": False}
+def _schema_hint(schema: dict[str, Any]) -> str:
+    return ("Reply with a single JSON object only, no prose, matching this JSON schema:\n"
+            + json.dumps(schema, separators=(",", ":")))
+
+
+def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] | None, timeout: float,
+            temperature: float) -> str:
+    payload: dict[str, Any] = {"model": model, "messages": messages, "stream": False,
+                               "options": {"temperature": temperature}}
+    if schema is not None:
+        payload["format"] = schema
     try:
         r = httpx.post(f"{_base()}/api/chat", json=payload, timeout=timeout)
         r.raise_for_status()
     except httpx.HTTPError as exc:
         raise LLMUnavailable(f"Ollama request failed: {exc}") from exc
-    return r.json().get("message", {}).get("content", "").strip()
+    data = r.json()
+    _record("ollama", model, int(data.get("prompt_eval_count") or 0), int(data.get("eval_count") or 0))
+    return data.get("message", {}).get("content", "")
 
+
+def _openai_compat(provider: str, model: str, messages: list[dict[str, str]], schema: dict[str, Any] | None,
+                   timeout: float, temperature: float) -> str:
+    if provider == "custom":
+        base = settings.get("custom_provider_url").rstrip("/")
+        if not base:
+            raise LLMUnavailable("No URL set for the custom provider")
+        key = vault.get_secret(key_name("custom")) or "none"
+    else:
+        base = OPENAI_COMPAT[provider]
+        key = _check_cloud(provider)
+    msgs = list(messages)
+    if schema is not None:
+        msgs = [{"role": "system", "content": _schema_hint(schema)}, *msgs]
+    payload: dict[str, Any] = {"model": model, "messages": msgs, "temperature": temperature}
+    if schema is not None:
+        payload["response_format"] = {"type": "json_object"}
+    headers = {"Authorization": f"Bearer {key}"}
+    if provider == "openrouter":
+        headers.update({"HTTP-Referer": "https://github.com/SoulVoid0/ai-lifeos", "X-Title": "AI LifeOS"})
+    try:
+        r = httpx.post(f"{base}/chat/completions", json=payload, headers=headers, timeout=timeout)
+        if r.status_code == 400 and "response_format" in payload:
+            payload.pop("response_format")  # some servers don't support JSON mode; the prompt still asks for JSON
+            r = httpx.post(f"{base}/chat/completions", json=payload, headers=headers, timeout=timeout)
+        r.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise LLMUnavailable(f"{provider} returned {exc.response.status_code}: {exc.response.text[:200]}") from exc
+    except httpx.HTTPError as exc:
+        raise LLMUnavailable(f"{provider} request failed: {exc}") from exc
+    data = r.json()
+    usage = data.get("usage") or {}
+    _record(provider, model, int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0))
+    choices = data.get("choices") or [{}]
+    return (choices[0].get("message") or {}).get("content") or ""
+
+
+def _anthropic(model: str, messages: list[dict[str, str]], schema: dict[str, Any] | None, timeout: float,
+               temperature: float) -> str:
+    key = _check_cloud("anthropic")
+    system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+    if schema is not None:
+        system = (system + "\n\n" if system else "") + _schema_hint(schema)
+    turns: list[dict[str, str]] = []
+    for m in messages:
+        if m["role"] == "system":
+            continue
+        role = "assistant" if m["role"] == "assistant" else "user"
+        if turns and turns[-1]["role"] == role:
+            turns[-1]["content"] += "\n\n" + m["content"]
+        else:
+            turns.append({"role": role, "content": m["content"]})
+    if not turns or turns[0]["role"] != "user":
+        turns.insert(0, {"role": "user", "content": "(start)"})
+    payload: dict[str, Any] = {"model": model, "max_tokens": 4096, "messages": turns, "temperature": temperature}
+    if system:
+        payload["system"] = system
+    try:
+        r = httpx.post("https://api.anthropic.com/v1/messages", json=payload, timeout=timeout,
+                       headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+        r.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise LLMUnavailable(f"anthropic returned {exc.response.status_code}: {exc.response.text[:200]}") from exc
+    except httpx.HTTPError as exc:
+        raise LLMUnavailable(f"anthropic request failed: {exc}") from exc
+    data = r.json()
+    usage = data.get("usage") or {}
+    _record("anthropic", model, int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0))
+    return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+
+
+def complete(messages: list[dict[str, str]], *, model: str | None = None, schema: dict[str, Any] | None = None,
+             timeout: float = 180, temperature: float = 0.1) -> str:
+    provider, name = parse_ref(model)
+    if provider == "ollama":
+        return _ollama(name, messages, schema, timeout, temperature)
+    if provider == "anthropic":
+        return _anthropic(name, messages, schema, timeout, temperature)
+    return _openai_compat(provider, name, messages, schema, timeout, temperature)
+
+
+def chat_json(messages: list[dict[str, str]], schema: dict[str, Any], *, model: str | None = None,
+              timeout: float = 180) -> dict[str, Any]:
+    """Run a chat completion constrained to `schema` and return the parsed JSON object."""
+    return _extract_json(complete(messages, model=model, schema=schema, timeout=timeout))
+
+
+def chat_text(messages: list[dict[str, str]], *, model: str | None = None, timeout: float = 180) -> str:
+    return complete(messages, model=model, timeout=timeout, temperature=0.3).strip()
+
+
+def test_model(ref: str) -> dict[str, Any]:
+    """Send a tiny request to check a model reference works end to end."""
+    started = time.monotonic()
+    try:
+        text = chat_text([{"role": "user", "content": "Reply with the single word: ready"}], model=ref, timeout=60)
+    except LLMUnavailable as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "reply": text[:80], "seconds": round(time.monotonic() - started, 2)}
+
+
+# ---------------------------------------------------------------- embeddings (local)
 
 def embed(texts: list[str]) -> list[list[float]] | None:
     """Embed texts with the configured embedding model. Returns None when unavailable."""

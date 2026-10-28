@@ -157,7 +157,177 @@ CREATE TABLE IF NOT EXISTS notifications (
     read INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------- crew (multi-agent)
+
+CREATE TABLE IF NOT EXISTS agents (
+    id INTEGER PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    role TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    persona TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    tools TEXT NOT NULL DEFAULT '[]',
+    color TEXT NOT NULL DEFAULT 'violet',
+    icon TEXT NOT NULL DEFAULT 'bot',
+    max_steps INTEGER NOT NULL DEFAULT 6,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    builtin INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS missions (
+    id INTEGER PRIMARY KEY,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL,
+    lead TEXT NOT NULL,
+    target_agent TEXT,
+    source TEXT NOT NULL DEFAULT 'user',
+    plan TEXT,
+    result TEXT,
+    outbox_path TEXT,
+    error TEXT,
+    tokens_in INTEGER NOT NULL DEFAULT 0,
+    tokens_out INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_missions_status ON missions(status);
+
+CREATE TABLE IF NOT EXISTS mission_tasks (
+    id INTEGER PRIMARY KEY,
+    mission_id INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    title TEXT NOT NULL,
+    instructions TEXT NOT NULL DEFAULT '',
+    depends_on TEXT NOT NULL DEFAULT '[]',
+    preset TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    result TEXT,
+    steps INTEGER NOT NULL DEFAULT 0,
+    started_at TEXT,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mtasks_mission ON mission_tasks(mission_id);
+
+CREATE TABLE IF NOT EXISTS mission_events (
+    id INTEGER PRIMARY KEY,
+    mission_id INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+    task_id INTEGER,
+    agent TEXT,
+    kind TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    data TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mevents_mission ON mission_events(mission_id);
+
+CREATE TABLE IF NOT EXISTS briefs (
+    id INTEGER PRIMARY KEY,
+    mission_id INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+    task_id INTEGER,
+    agent TEXT NOT NULL,
+    question TEXT NOT NULL,
+    options TEXT NOT NULL DEFAULT '[]',
+    answer TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TEXT NOT NULL,
+    answered_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS ledger (
+    id INTEGER PRIMARY KEY,
+    mission_id INTEGER,
+    agent TEXT,
+    model TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    tokens_in INTEGER NOT NULL DEFAULT 0,
+    tokens_out INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ledger_created ON ledger(created_at);
+
+-- ---------------------------------------------------------------- automation engine
+
+CREATE TABLE IF NOT EXISTS workflows (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    trigger TEXT NOT NULL,
+    conditions TEXT NOT NULL DEFAULT '[]',
+    steps TEXT NOT NULL DEFAULT '[]',
+    source_text TEXT,
+    last_run_at TEXT,
+    next_run_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    id INTEGER PRIMARY KEY,
+    workflow_id INTEGER NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    trigger TEXT NOT NULL,
+    log TEXT NOT NULL DEFAULT '[]',
+    summary TEXT,
+    started_at TEXT NOT NULL,
+    finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wruns_workflow ON workflow_runs(workflow_id);
+
+-- ---------------------------------------------------------------- projects and integrations
+
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL DEFAULT 'folder',
+    description TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    pinned INTEGER NOT NULL DEFAULT 0,
+    auto INTEGER NOT NULL DEFAULT 1,
+    last_activity_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS calendar_sources (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    location TEXT NOT NULL UNIQUE,
+    label TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_synced_at TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY,
+    source_id INTEGER REFERENCES calendar_sources(id) ON DELETE CASCADE,
+    uid TEXT NOT NULL,
+    title TEXT NOT NULL,
+    start_at TEXT NOT NULL,
+    end_at TEXT,
+    all_day INTEGER NOT NULL DEFAULT 0,
+    location TEXT,
+    description TEXT,
+    UNIQUE(source_id, uid, start_at)
+);
+CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_at);
 """
+
+# Columns added after the first release. SQLite has no ADD COLUMN IF NOT EXISTS.
+MIGRATIONS = [
+    "ALTER TABLE notifications ADD COLUMN kind TEXT NOT NULL DEFAULT 'reminder'",
+    "ALTER TABLE actions ADD COLUMN mission_id INTEGER",
+]
 
 # Writers wait this long for the lock instead of failing with "database is locked".
 BUSY_TIMEOUT_S = 30
@@ -181,6 +351,12 @@ def connect() -> sqlite3.Connection:
         if path not in _initialized:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.executescript(SCHEMA)
+            for stmt in MIGRATIONS:
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc):
+                        raise
             conn.commit()
             _initialized.add(path)
     return conn

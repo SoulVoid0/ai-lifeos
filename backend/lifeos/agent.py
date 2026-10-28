@@ -121,7 +121,7 @@ def _use_llm(rule_plan: rules.Plan) -> bool:
         return False
     if mode == "auto" and rule_plan.complete:
         return False
-    return llm.status()["ok"]
+    return llm.model_available(settings.get("chat_model"))
 
 
 def _trim(result: Any) -> Any:

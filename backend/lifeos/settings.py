@@ -24,6 +24,21 @@ DEFAULTS: dict[str, Any] = {
     "theme_accent": "violet",
     "user_name": "",
     "dismissed_suggestions": [],
+    # Crew (multi-agent) runtime.
+    "max_parallel_agents": 3,
+    "mission_token_budget": 60000,
+    "agent_max_steps": 6,
+    # Cloud models are off until the user turns them on; spend is capped per day.
+    "cloud_enabled": False,
+    "cloud_daily_budget_usd": 5.0,
+    # USD per million tokens, keyed by model reference such as "openai:gpt-4o-mini": {"in": 0.15, "out": 0.6}.
+    "model_prices": {},
+    # Base URL for the OpenAI-compatible "custom" provider (LM Studio, vLLM, llama.cpp server, ...).
+    "custom_provider_url": "",
+    "web_access": False,
+    "notification_prefs": {"reminders": True, "workflows": True, "missions": True, "suggestions": False},
+    "quiet_hours": {"enabled": False, "start": "22:00", "end": "07:00"},
+    "email": {"host": "", "port": 993, "username": "", "folder": "INBOX"},
 }
 
 
@@ -46,12 +61,21 @@ def update(changes: dict[str, Any]) -> dict[str, Any]:
         expected = type(DEFAULTS[key])
         if expected is int and isinstance(value, float) and value.is_integer():
             value = int(value)
+        if expected is float and isinstance(value, int) and not isinstance(value, bool):
+            value = float(value)
         if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
             raise ValueError(f"Setting {key} must be {expected.__name__}")
+        changes[key] = value
         if key == "planner" and value not in ("auto", "llm", "rules"):
             raise ValueError("planner must be auto, llm or rules")
         if key == "proactive_level" and value not in ("off", "low", "normal"):
             raise ValueError("proactive_level must be off, low or normal")
+        if key in ("max_parallel_agents", "agent_max_steps") and not 1 <= value <= 12:
+            raise ValueError(f"{key} must be between 1 and 12")
+        if key in ("mission_token_budget",) and value < 1000:
+            raise ValueError("mission_token_budget must be at least 1000")
+        if key == "cloud_daily_budget_usd" and value < 0:
+            raise ValueError("cloud_daily_budget_usd can't be negative")
         if key == "tool_policies":
             for tool, policy in value.items():
                 if policy not in ("auto", "confirm", "deny"):

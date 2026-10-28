@@ -110,6 +110,46 @@ class NoArgs(BaseModel):
     pass
 
 
+class WebSearchArgs(BaseModel):
+    query: str = Field(..., min_length=1, max_length=300)
+    limit: int = Field(8, ge=1, le=20)
+
+
+class FetchUrlArgs(BaseModel):
+    url: str = Field(..., description="http(s) URL")
+
+
+class WriteFileArgs(BaseModel):
+    path: str = Field(..., description="Path inside an approved folder, e.g. 'Documents/notes/plan.md'")
+    content: str = Field(..., max_length=500_000)
+    overwrite: bool = False
+
+
+class OutboxArgs(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=120, description="e.g. 'weekly-plan.md'")
+    content: str = Field(..., max_length=500_000)
+
+
+class ProjectArgs(BaseModel):
+    name: str = Field(..., description="Project name or part of its path")
+
+
+class EventsArgs(BaseModel):
+    days_ahead: int = Field(7, ge=0, le=365)
+
+
+class EmailArgs(BaseModel):
+    limit: int = Field(10, ge=1, le=50)
+    unread_only: bool = True
+
+
+class CreateEventArgs(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+    start: str = Field(..., description="Natural language or ISO date-time")
+    end: str | None = None
+    location: str | None = None
+
+
 # ---------------------------------------------------------------- registry
 
 @dataclass
@@ -266,6 +306,123 @@ def _daily_summary(a: NoArgs, ctx: dict[str, Any]) -> dict[str, Any]:
     return {"summary": data["text"], "data": data}
 
 
+def _web_search(a: WebSearchArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import web
+
+    try:
+        results = web.search(a.query, a.limit)
+    except web.WebError as exc:
+        raise ToolError(str(exc)) from exc
+    lines = "; ".join(r["title"] for r in results[:5])
+    return {"summary": f"{len(results)} web result(s) for \"{a.query}\"" + (f": {lines}" if results else "."),
+            "results": results}
+
+
+def _fetch_url(a: FetchUrlArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import web
+
+    try:
+        page = web.fetch(a.url)
+    except web.WebError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Fetched {page['title'] or page['url']} ({len(page['text'])} characters).", "page": page}
+
+
+def outbox_dir() -> Path:
+    from . import config
+
+    d = config.data_dir() / "outbox"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def safe_filename(name: str) -> str:
+    import re
+
+    stem = re.sub(r"[^A-Za-z0-9._ -]+", "-", Path(name).name).strip(" .-") or "output.md"
+    return stem[:120] if "." in stem else stem[:116] + ".md"
+
+
+def write_outbox(filename: str, content: str) -> Path:
+    target = outbox_dir() / safe_filename(filename)
+    n = 1
+    while target.exists():
+        target = target.with_name(f"{Path(safe_filename(filename)).stem} ({n}){target.suffix}")
+        n += 1
+    target.write_text(content, encoding="utf-8")
+    return target
+
+
+def _save_outbox(a: OutboxArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    path = write_outbox(a.filename, a.content)
+    ctx.setdefault("outbox", []).append(str(path))
+    return {"summary": f"Saved {path.name} to the outbox.", "path": str(path)}
+
+
+def _undo_outbox(result: dict[str, Any]) -> dict[str, Any]:
+    p = Path(result["path"])
+    if p.is_file() and p.parent == outbox_dir():
+        p.unlink()
+    return {"summary": f"Removed {p.name} from the outbox."}
+
+
+def _list_projects(a: NoArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import projects
+
+    items = projects.list_projects()
+    names = "; ".join(f"{p['name']} ({p['kind']}, {p['open_tasks']} open tasks)" for p in items[:12])
+    return {"summary": f"{len(items)} project(s)" + (f": {names}" if items else "."), "projects": items}
+
+
+def _project_context(a: ProjectArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import projects
+
+    p = projects.find(a.name)
+    if not p:
+        raise ToolError(f"No project matching '{a.name}'")
+    data = projects.context(p["id"])
+    ctx.setdefault("found_files", []).extend(data["recent_files"])
+    recent = ", ".join(f["name"] for f in data["recent_files"][:6])
+    return {"summary": f"{p['name']} at {p['path']}: {data['file_count']} files, {len(data['open_tasks'])} open task(s)"
+                       + (f"; recently edited {recent}" if recent else "") + ".", "context": data}
+
+
+def _list_events(a: EventsArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import integrations
+
+    end = (datetime.now(timezone.utc) + timedelta(days=a.days_ahead + 1)).isoformat(timespec="seconds")
+    items = integrations.events(datetime.now(timezone.utc).isoformat(timespec="seconds"), end)
+    names = "; ".join(f"{e['title']} ({e['start_at'][:16].replace('T', ' ')} UTC)" for e in items[:10])
+    return {"summary": f"{len(items)} event(s) in the next {a.days_ahead} day(s)" + (f": {names}" if items else "."),
+            "events": items}
+
+
+def _create_event(a: CreateEventArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import integrations
+
+    e = integrations.add_event(a.title, a.start, a.end, a.location)
+    return {"summary": f"Added event \"{e['title']}\" at {e['start_at']}.", "event": e}
+
+
+def _undo_create_event(result: dict[str, Any]) -> dict[str, Any]:
+    from . import integrations
+
+    integrations.delete_event(result["event"]["id"])
+    return {"summary": f"Removed event \"{result['event']['title']}\"."}
+
+
+def _check_email(a: EmailArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import integrations
+
+    try:
+        msgs = integrations.check_email(a.limit, a.unread_only)
+    except Exception as exc:  # imaplib, socket and configuration errors
+        raise ToolError(f"Email check failed: {exc}") from exc
+    lines = "; ".join(f"{m['subject']} — {m['from']}" for m in msgs[:8])
+    return {"summary": f"{len(msgs)} {'unread ' if a.unread_only else ''}message(s)" + (f": {lines}" if msgs else "."),
+            "messages": msgs}
+
+
 # confirm-able tools -------------------------------------------------------------
 
 def _prepare_organize(a: OrganizeArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -338,6 +495,40 @@ def _undo_delete_memory(result: dict[str, Any]) -> dict[str, Any]:
     return {"summary": f"Restored memory: {restored['content']}", "memory": restored}
 
 
+def _prepare_write_file(a: WriteFileArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    _, target = permissions.resolve_allowed(a.path, must_exist=False)
+    permissions.resolve_allowed(target.parent)  # the containing folder must already exist inside an approved folder
+    if target.exists() and not a.overwrite:
+        raise ToolError(f"{target.name} already exists; set overwrite to replace it")
+    if target.exists() and not target.is_file():
+        raise ToolError(f"{target} is not a file")
+    verb = "Overwrite" if target.exists() else "Create"
+    return (f"{verb} {target} ({len(a.content)} characters)",
+            {"path": str(target), "content": a.content, "exists": target.exists(), "excerpt": a.content[:1500]})
+
+
+def _execute_write_file(args: dict[str, Any], preview: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    _, target = permissions.resolve_allowed(preview["path"], must_exist=False)
+    previous = None
+    if target.exists():
+        if target.stat().st_size > 2 * 1024 * 1024:
+            raise ToolError("Refusing to overwrite a file larger than 2 MB")
+        previous = target.read_text(encoding="utf-8", errors="replace")
+    target.write_text(preview["content"], encoding="utf-8")
+    files._reindex({permissions.resolve_allowed(target)[0]})
+    return {"summary": f"Wrote {target.name}.", "path": str(target), "previous": previous}
+
+
+def _undo_write_file(result: dict[str, Any]) -> dict[str, Any]:
+    _, target = permissions.resolve_allowed(result["path"], must_exist=False)
+    if result.get("previous") is not None:
+        target.write_text(result["previous"], encoding="utf-8")
+        return {"summary": f"Restored the previous contents of {target.name}."}
+    if target.exists():
+        target.unlink()
+    return {"summary": f"Deleted {target.name}."}
+
+
 TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("search_files", "Search indexed files in approved folders by topic, name, type, folder or date.",
          SearchFilesArgs, "read", "auto", run=_search_files),
@@ -372,6 +563,24 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          undo=_undo_create_folder),
     Tool("delete_memory", "Forget a stored memory. Requires approval.", DeleteMemoryArgs, "destructive", "confirm",
          prepare=_prepare_delete_memory, execute=_execute_delete_memory, undo=_undo_delete_memory),
+    Tool("web_search", "Search the web (only when the user enabled web access).", WebSearchArgs, "read", "auto",
+         run=_web_search),
+    Tool("fetch_url", "Read a web page as text (only when the user enabled web access).", FetchUrlArgs, "read",
+         "confirm", run=_fetch_url),
+    Tool("save_to_outbox", "Save a deliverable (report, plan, draft, code) as a file in the LifeOS outbox.",
+         OutboxArgs, "write", "auto", run=_save_outbox, undo=_undo_outbox),
+    Tool("write_file", "Create or overwrite a text file inside an approved folder. Requires approval.",
+         WriteFileArgs, "write", "confirm", prepare=_prepare_write_file, execute=_execute_write_file,
+         undo=_undo_write_file),
+    Tool("list_projects", "List the user's tracked projects with open task counts.", NoArgs, "read", "auto",
+         run=_list_projects),
+    Tool("project_context", "Get a project's location, recent files, open tasks, notes and README.", ProjectArgs,
+         "read", "auto", run=_project_context),
+    Tool("list_events", "List calendar events for the next N days.", EventsArgs, "read", "auto", run=_list_events),
+    Tool("create_event", "Add an event to the LifeOS calendar.", CreateEventArgs, "write", "auto", run=_create_event,
+         undo=_undo_create_event),
+    Tool("check_email", "Read recent email headers and snippets (read-only; needs an account in Settings).",
+         EmailArgs, "read", "auto", run=_check_email),
 ]}
 
 
@@ -432,6 +641,7 @@ def invoke(name: str, args: dict[str, Any], ctx: dict[str, Any], conversation_id
     """Validate, authorize, then run or queue a tool call. Never raises for tool failures."""
     from . import actions
 
+    mission_id = ctx.get("mission_id")
     try:
         tool, parsed = validate(name, args)
     except ToolError as exc:
@@ -449,9 +659,9 @@ def invoke(name: str, args: dict[str, Any], ctx: dict[str, Any], conversation_id
             if not preview.get("moves", True) and "moves" in preview:
                 return {"tool": name, "status": "done", "summary": summary, "result": preview}
             if policy == "confirm":
-                action = actions.create(name, parsed.model_dump(), summary, preview, conversation_id)
+                action = actions.create(name, parsed.model_dump(), summary, preview, conversation_id, mission_id)
                 return {"tool": name, "status": "pending", "summary": summary, "action": action}
-            action = actions.create(name, parsed.model_dump(), summary, preview, conversation_id)
+            action = actions.create(name, parsed.model_dump(), summary, preview, conversation_id, mission_id)
             action = actions.approve(action["id"], auto=True)
             return {"tool": name, "status": action["status"], "summary": (action.get("result") or {}).get("summary", summary),
                     "action": action}
@@ -459,7 +669,7 @@ def invoke(name: str, args: dict[str, Any], ctx: dict[str, Any], conversation_id
         if policy == "confirm":
             summary = describe_call(name, parsed.model_dump())
             action = actions.create(name, parsed.model_dump(), summary, {"args": parsed.model_dump(), "ctx": _ctx_snapshot(ctx)},
-                                    conversation_id)
+                                    conversation_id, mission_id)
             return {"tool": name, "status": "pending", "summary": summary, "action": action}
         result = tool.run(parsed, ctx)
     except (ToolError, permissions.PermissionDenied, FileNotFoundError, KeyError, ValueError) as exc:

@@ -171,7 +171,7 @@ def _clause(clause: str, plan: Plan, ctx: dict[str, Any]) -> bool:
         return True
 
     # summaries and planning
-    if re.search(r"\b(summari[sz]e|summary|recap|brief)\b", low) and re.search(r"\b(today|day|important|everything|daily)\b", low):
+    if re.search(r"\b(summari[sz]e|summary|recap|brief)\b", low) and re.search(r"\b(today|day|important|everything|daily|tasks|completed|done)\b", low):
         plan.steps.append({"tool": "daily_summary", "args": {}})
         return True
     if re.search(r"\b(plan|schedule)\b.*\b(day|today|tasks|assignments|work|study)\b", low) or \

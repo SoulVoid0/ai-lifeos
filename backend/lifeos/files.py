@@ -475,16 +475,21 @@ def _reindex(folder_ids: set[int]) -> None:
             index_folder(fid, roots[fid])
 
 
-def open_path(path: str) -> dict[str, Any]:
-    """Open a file with the OS default application (desktop only)."""
+def launch(resolved: Path) -> None:
+    """Open an already-authorized path with the OS default application."""
     import subprocess
     import sys
 
-    _, resolved = permissions.resolve_allowed(path)
     if sys.platform.startswith("win"):
         os.startfile(str(resolved))  # type: ignore[attr-defined]
     elif sys.platform == "darwin":
         subprocess.Popen(["open", str(resolved)])
     else:
         subprocess.Popen(["xdg-open", str(resolved)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def open_path(path: str) -> dict[str, Any]:
+    """Open a file with the OS default application (desktop only)."""
+    _, resolved = permissions.resolve_allowed(path)
+    launch(resolved)
     return {"opened": str(resolved)}
