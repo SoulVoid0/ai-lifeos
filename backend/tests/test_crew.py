@@ -76,6 +76,11 @@ def fake_models(monkeypatch, client):
             seen.append({"messages": messages, "schema": schema, "model": kw.get("model")})
             if "tasks" in schema["properties"]:
                 return script["plan"].pop(0)
+            if "score" in schema["properties"]:
+                reply = script.setdefault("reviews", []).pop(0) if script.get("reviews") else {"score": 4, "feedback": "Fine."}
+                return reply
+            if "lessons" in schema["properties"]:
+                return script.setdefault("reflections", []).pop(0) if script.get("reflections") else {"lessons": []}
             system = messages[0]["content"]
             for name, replies in script["steps"].items():
                 if system.startswith(f"You are {name},"):

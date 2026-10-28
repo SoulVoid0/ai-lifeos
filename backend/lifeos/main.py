@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, llm, memory,
+from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, learning, llm, memory,
                missions, permissions, proactive, projects, scheduler, search, settings, tasks, tools, vault, workflows)
 
 log = logging.getLogger("lifeos")
@@ -148,6 +148,7 @@ class AgentIn(BaseModel):
     color: str = "slate"
     icon: str = "bot"
     max_steps: int = 6
+    candidates: list[str] = []
 
 
 class AgentPatch(BaseModel):
@@ -161,6 +162,34 @@ class AgentPatch(BaseModel):
     icon: str | None = None
     max_steps: int | None = None
     enabled: bool | None = None
+    candidates: list[str] | None = None
+
+
+class LessonIn(BaseModel):
+    agent: str = Field(..., min_length=1, max_length=40)
+    text: str = Field(..., min_length=1, max_length=400)
+    pinned: bool = False
+
+
+class LessonPatch(BaseModel):
+    text: str | None = Field(None, max_length=400)
+    pinned: bool | None = None
+    agent: str | None = None
+
+
+class RatingIn(BaseModel):
+    rating: int
+    note: str = Field("", max_length=400)
+
+
+class ChatTurn(BaseModel):
+    role: str
+    content: str = Field(..., max_length=4000)
+
+
+class AgentChatIn(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    history: list[ChatTurn] = []
 
 
 class MissionIn(BaseModel):
@@ -562,6 +591,55 @@ def get_mission(mid: int) -> dict[str, Any]:
 @app.post("/api/missions/{mid}/cancel")
 def cancel_mission(mid: int) -> dict[str, Any]:
     return missions.cancel(mid)
+
+
+@app.post("/api/missions/tasks/{task_id}/rate")
+def rate_task(task_id: int, body: RatingIn) -> dict[str, Any]:
+    return learning.rate_task(task_id, body.rating, body.note)
+
+
+@app.post("/api/crew/agents/{slug}/chat")
+def chat_with_agent(slug: str, body: AgentChatIn) -> dict[str, Any]:
+    return missions.talk(slug, body.message, [t.model_dump() for t in body.history])
+
+
+@app.get("/api/learning")
+def learning_overview() -> dict[str, Any]:
+    return learning.overview()
+
+
+@app.get("/api/learning/lessons")
+def list_lessons(agent: str | None = None) -> list[dict[str, Any]]:
+    return learning.list_lessons(agent)
+
+
+@app.post("/api/learning/lessons")
+def add_lesson(body: LessonIn) -> dict[str, Any]:
+    lesson = learning.add_lesson(body.agent, body.text, "user", pinned=body.pinned)
+    if lesson is None:
+        raise ValueError("A very similar lesson already exists for this agent")
+    return lesson
+
+
+@app.patch("/api/learning/lessons/{lesson_id}")
+def patch_lesson(lesson_id: int, body: LessonPatch) -> dict[str, Any]:
+    return learning.update_lesson(lesson_id, body.text, body.pinned, body.agent)
+
+
+@app.delete("/api/learning/lessons/{lesson_id}")
+def delete_lesson(lesson_id: int) -> dict[str, Any]:
+    return learning.delete_lesson(lesson_id)
+
+
+@app.get("/api/learning/scorecard")
+def scorecard() -> list[dict[str, Any]]:
+    return learning.scorecard()
+
+
+@app.get("/api/learning/export.jsonl")
+def export_training(min_score: float = 4.0, agent: str | None = None) -> Response:
+    return Response(learning.export_training(min_score, agent), media_type="application/jsonl",
+                    headers={"Content-Disposition": "attachment; filename=lifeos-training.jsonl"})
 
 
 @app.post("/api/missions/{mid}/retry")

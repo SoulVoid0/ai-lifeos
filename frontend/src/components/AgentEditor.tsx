@@ -6,7 +6,7 @@ import { AGENT_COLORS, AGENT_ICONS, AgentAvatar } from "./crew";
 import { Spinner, notifyChanged, useToast } from "./ui";
 
 const BLANK: Partial<Agent> = {
-  name: "", role: "Specialist", description: "", persona: "", model: "", tools: [], color: "slate", icon: "bot", max_steps: 6, enabled: true,
+  name: "", role: "Specialist", description: "", persona: "", model: "", tools: [], color: "slate", icon: "bot", max_steps: 6, enabled: true, candidates: [],
 };
 
 const MODEL_HINTS = [
@@ -37,7 +37,8 @@ export function AgentEditor({ agent, tools, onClose }: { agent: Agent | null; to
     setBusy(true);
     try {
       const body = { name: form.name, role: form.role, description: form.description, persona: form.persona, model: form.model,
-        tools: form.tools, color: form.color, icon: form.icon, max_steps: form.max_steps, enabled: form.enabled };
+        tools: form.tools, color: form.color, icon: form.icon, max_steps: form.max_steps, enabled: form.enabled,
+        candidates: form.candidates ?? [] };
       if (creating) await api.createAgent({ ...body, name: form.name ?? "" });
       else await api.updateAgent(agent.slug, body);
       toast(creating ? `Recruited ${form.name}` : `Saved ${form.name}`);
@@ -88,6 +89,13 @@ export function AgentEditor({ agent, tools, onClose }: { agent: Agent | null; to
             </datalist>
             {test && <div className={`mt-1 text-xs ${test.startsWith("OK") ? "text-ok" : test === "…" ? "text-muted" : "text-danger"}`}>{test}</div>}
             <div className="mt-1 text-[11px] text-muted">Cloud models need Settings → Cloud AI turned on and an API key. Local Ollama models are free.</div>
+          </div>
+          <div className="sm:col-span-2">
+            <label className="label">Other models to try (auto-routing)</label>
+            <input className="input font-mono" list="agent-models" placeholder="qwen2.5:7b, mistral:7b"
+              value={(form.candidates ?? []).join(", ")}
+              onChange={(e) => set("candidates", e.target.value.split(",").map((x) => x.trim()).filter(Boolean))} />
+            <div className="mt-1 text-[11px] text-muted">With auto-routing on (Control Center → Learning), each model is tried a few times and the one with the best review scores and your ratings gets this agent's work.</div>
           </div>
           <div>
             <label className="label">Color</label>

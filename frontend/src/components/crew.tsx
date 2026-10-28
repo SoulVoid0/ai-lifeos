@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight, Bot, Brain, CalendarDays, ChartColumn, Check, CircleCheck, CircleHelp, CircleStop, Code, Crown, Eye,
-  Flag, Folder, Gauge, Info, ListTree, Mail, MessageSquare, Mic, MicOff, PenLine, Reply, Rocket, Search, Shield,
+  BookOpen, Flag, Folder, Gauge, GraduationCap, Route, Info, ListTree, Mail, MessageSquare, Mic, MicOff, PenLine, Reply, Rocket, Search, Shield,
   ShieldAlert, SkipForward, Sparkles, TriangleAlert, Wrench, type LucideIcon,
 } from "lucide-react";
 import type { AgentState, Brief, MissionEvent } from "../lib/api";
@@ -59,11 +59,12 @@ const EVENT_ICONS: Record<string, LucideIcon> = {
   mission: Rocket, plan: ListTree, delegate: ArrowRight, thought: MessageSquare, tool: Wrench, approval: ShieldAlert,
   decision: Check, brief: CircleHelp, answer: Reply, result: CircleCheck, error: TriangleAlert, skip: SkipForward,
   fallback: Info, done: Flag, cancel: CircleStop, cancelled: CircleStop, review: Eye, limit: Gauge,
+  lessons: BookOpen, learn: GraduationCap, revise: PenLine, route: Route,
 };
 
 export const EVENT_TONE: Record<string, string> = {
   error: "text-danger", approval: "text-warn", brief: "text-warn", done: "text-ok", result: "text-ok",
-  cancelled: "text-muted", cancel: "text-muted", thought: "text-muted",
+  cancelled: "text-muted", cancel: "text-muted", thought: "text-muted", learn: "text-ok", revise: "text-warn",
 };
 
 export function EventIcon({ kind, size = 13 }: { kind: string; size?: number }) {

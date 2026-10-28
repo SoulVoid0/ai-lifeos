@@ -37,6 +37,23 @@ of each mission, briefs and approvals, the outbox, a token/cost ledger, and per-
 persona, tools, enable). **Stop all** cancels every mission and rejects their pending actions. Crews can
 be exported and imported as JSON packs (agents + workflows; imported workflows start disabled).
 
+## How the crew learns
+
+Model weights don't change on a normal PC; the crew gets better the way a team does:
+
+- **Peer review.** Atlas scores every specialist result 1–5 with feedback. A score of 2 or less sends the work back for one revision with that feedback.
+- **Shared playbook.** Reviews, Atlas's end-of-mission reflection, failed tasks, approvals you rejected, and notes you leave when you thumbs-down a result all become short *lessons*. Agents read the most relevant lessons (theirs plus whole-crew ones) before each task, so one agent's mistake teaches the rest. Edit, pin or delete them in **Control Center → Learning**.
+- **Scorecard and auto-routing.** Every task records its model and score. Give an agent "other models to try" and turn on auto-routing: each model gets 3 tries, then the best-scoring one does the work (with a little ongoing exploration).
+- **Training export.** Download tasks scored 4+ (or thumbed up) as chat-format JSONL. To actually fine-tune, train a LoRA on it offline (for example with [Unsloth](https://github.com/unslothai/unsloth) on a GPU), add `ADAPTER ./adapter` to an Ollama Modelfile, `ollama create`, and set that model on the agent.
+
+## The Station
+
+**Station** (sidebar) is a pixel-art world of the crew. Each agent has a room; it walks to its desk when it is working
+(screens light up), wanders the lounge when idle, and comes to **your desk** with a `!` (approval) or `?` (question)
+when it needs you. Live events show as speech bubbles and delegations fly from the Command Deck. Walk with WASD/arrows
+or click; press **E** or click an agent to chat with it in character, give it a task, answer its question or approve
+its proposal on the spot. Use your desk to launch a crew mission.
+
 ## Automations
 
 Workflows are *trigger → conditions → steps → summary*:
@@ -187,7 +204,7 @@ Environment variables: `LIFEOS_DATA_DIR`, `LIFEOS_DB`, `LIFEOS_HOST`, `LIFEOS_PO
 ### Tests
 
 ```bash
-cd backend && pytest             # 67 tests: MVP flow, security, crew/missions, automations, projects, calendar, providers (models faked)
+cd backend && pytest             # 73 tests: MVP flow, security, crew/missions, learning, automations, projects, calendar, providers (models faked)
 cd frontend && npm run typecheck && npm run build
 ```
 
@@ -218,7 +235,7 @@ CI runs both on every push (`.github/workflows/ci.yml`).
 | 4 Automation engine | Done: workflows with triggers, conditions, steps, approvals, summaries, scheduler, editor, natural-language drafting, templates |
 | 5 Proactive intelligence | Done: deadline, clutter, duplicate, large-file, project-resume, calendar-overlap and workflow suggestions; daily summary; notification preferences and quiet hours |
 | 6 Integrations | Done: ICS calendars, read-only IMAP email, web search/fetch, cloud models per agent with budget, OS keychain |
-| 7 Advanced | Started: multi-agent crew with Control Center, voice dictation, crew packs. Next: cloud storage connectors, signed auto-updates |
+| 7 Advanced | Started: multi-agent crew with Control Center and pixel Station, learning loop (reviews, lessons, routing, training export), voice dictation, crew packs. Next: cloud storage connectors, signed auto-updates |
 
 Packaging: `scripts/build-windows.ps1` (above). On other OSes run the same PyInstaller command and copy the
 binary to `frontend/src-tauri/binaries/lifeos-backend-<target-triple>`, then
@@ -226,7 +243,7 @@ binary to `frontend/src-tauri/binaries/lifeos-backend-<target-triple>`, then
 
 ## Credits
 
-The Control Center's station view and the Overseer/specialist/brief/outbox model were inspired by
+The Control Center, the pixel Station and the Overseer/specialist/brief/outbox model were inspired by
 [StarNet](https://github.com/androoAGI/starnet) (MIT). No StarNet code is included.
 
 ## License

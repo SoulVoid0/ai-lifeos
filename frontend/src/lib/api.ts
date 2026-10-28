@@ -201,6 +201,10 @@ export interface Settings {
   model_prices: Record<string, { in: number; out: number }>;
   custom_provider_url: string;
   web_access: boolean;
+  peer_review: boolean;
+  reflection: boolean;
+  auto_route: boolean;
+  lessons_per_task: number;
   notification_prefs: { reminders: boolean; workflows: boolean; missions: boolean; suggestions: boolean };
   quiet_hours: { enabled: boolean; start: string; end: string };
   email: { host: string; port: number; username: string; folder: string };
@@ -252,6 +256,7 @@ export interface Agent {
   max_steps: number;
   enabled: boolean;
   builtin: boolean;
+  candidates: string[];
 }
 
 export type AgentState = "idle" | "working" | "waiting" | "asking" | "offline";
@@ -291,6 +296,49 @@ export interface MissionTask {
   steps: number;
   started_at: string | null;
   finished_at: string | null;
+  model: string | null;
+  score: number | null;
+  review: { score: number; feedback: string; lesson?: string; reviewer: string } | null;
+  user_rating: number | null;
+}
+
+export interface Lesson {
+  id: number;
+  agent: string;
+  text: string;
+  source: "review" | "reflection" | "failure" | "rejection" | "user";
+  mission_id: number | null;
+  task_id: number | null;
+  pinned: boolean;
+  uses: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScoreStats {
+  tasks: number;
+  done: number;
+  avg_score: number | null;
+  success_rate: number | null;
+  avg_steps: number | null;
+  thumbs_up: number;
+  thumbs_down: number;
+}
+
+export interface ScoreCard extends ScoreStats {
+  slug: string;
+  name: string;
+  color: string;
+  icon: string;
+  lessons: number;
+  models: (ScoreStats & { model: string })[];
+}
+
+export interface LearningOverview {
+  lessons: number;
+  reviewed_tasks: number;
+  exportable: number;
+  settings: { peer_review: boolean; reflection: boolean; auto_route: boolean; lessons_per_task: number };
 }
 
 export interface Brief {
@@ -553,6 +601,23 @@ export const api = {
   stopAll: () => post<{ stopped: number }>("/api/missions/stop-all"),
   missionEvents: (after = 0, mission_id?: number) => get<MissionEvent[]>(`/api/missions/events${qs({ after, mission_id, limit: 300 })}`),
   briefs: () => get<Brief[]>("/api/briefs"),
+  rateTask: (taskId: number, rating: 1 | -1, note = "") =>
+    post<{ ok: boolean; lesson: Lesson | null }>(`/api/missions/tasks/${taskId}/rate`, { rating, note }),
+  chatAgent: (slug: string, message: string, history: { role: "user" | "assistant"; content: string }[] = []) =>
+    post<{ reply: string; model: string | null }>(`/api/crew/agents/${slug}/chat`, { message, history }),
+
+  // learning
+  learning: () => get<LearningOverview>("/api/learning"),
+  lessons: (agent?: string) => get<Lesson[]>(`/api/learning/lessons${qs({ agent })}`),
+  addLesson: (agent: string, text: string, pinned = false) => post<Lesson>("/api/learning/lessons", { agent, text, pinned }),
+  updateLesson: (id: number, l: Partial<Pick<Lesson, "text" | "pinned" | "agent">>) => patch<Lesson>(`/api/learning/lessons/${id}`, l),
+  deleteLesson: (id: number) => del(`/api/learning/lessons/${id}`),
+  scorecard: () => get<ScoreCard[]>("/api/learning/scorecard"),
+  exportTraining: async (minScore = 4) => {
+    const res = await fetch(BASE + `/api/learning/export.jsonl${qs({ min_score: minScore })}`, { headers: { "X-LifeOS-Client": "1" } });
+    if (!res.ok) throw new ApiError(res.status, res.statusText);
+    return res.text();
+  },
   answerBrief: (id: number, answer: string) => post<Brief>(`/api/briefs/${id}/answer`, { answer }),
 
   outbox: () => get<OutboxFile[]>("/api/outbox"),
