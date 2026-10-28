@@ -10,8 +10,13 @@ PRIORITIES = {"low": 1, "normal": 2, "medium": 2, "high": 3, "urgent": 4}
 UPDATABLE = {"title", "notes", "project", "priority", "status", "due_at", "remind_at", "estimate_minutes"}
 
 
+# Words small models use for "no date"; treated as no date instead of an error.
+NO_DATE = {"null", "none", "never", "no", "n/a", "na", "tbd", "unknown", "anytime", "whenever", "no deadline", "nil",
+           "not set", "undefined", "false", "-"}
+
+
 def _norm_time(value: Any) -> str | None:
-    if value in (None, ""):
+    if value in (None, "") or str(value).strip().lower() in NO_DATE:
         return None
     dt = timeparse.parse(str(value))
     if dt is None:

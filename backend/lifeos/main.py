@@ -545,7 +545,8 @@ def crew_status() -> dict[str, Any]:
 def crew_models() -> dict[str, Any]:
     st = llm.status()
     return {"local": st["models"], "ollama_ok": st["ok"], "providers": llm.providers(),
-            "cloud_enabled": settings.get("cloud_enabled"), "default": settings.get("chat_model")}
+            "cloud_enabled": settings.get("cloud_enabled"), "default": settings.get("chat_model"),
+            "recommended": crew.RECOMMENDED}
 
 
 @app.post("/api/crew/test-model")

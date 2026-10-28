@@ -26,6 +26,32 @@ class LLMUnavailable(Exception):
     pass
 
 
+class BadOutput(LLMUnavailable):
+    """The model answered, but not with usable JSON."""
+
+
+# Small local models often write these instead of leaving a field out.
+NULLISH = {"null", "none", "undefined", "n/a", "na", "nil", "nothing", "(none)", "[]", "{}"}
+_THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
+
+
+def clean(value: Any) -> Any:
+    """Recursively turn null-like strings ("null", "None", "N/A", "") into None and drop them from objects and lists."""
+    if isinstance(value, str):
+        v = value.strip()
+        return None if not v or v.lower() in NULLISH else v
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            v = clean(v)
+            if v is not None:
+                out[k] = v
+        return out
+    if isinstance(value, list):
+        return [x for x in (clean(v) for v in value) if x is not None]
+    return value
+
+
 # OpenAI-compatible chat-completions endpoints. Anthropic has its own API.
 OPENAI_COMPAT = {
     "openai": "https://api.openai.com/v1",
@@ -94,11 +120,34 @@ def providers() -> list[dict[str, Any]]:
     return out
 
 
+def installed(model: str, models: list[str]) -> bool:
+    """Whether an Ollama model name is among the pulled ones ("llama3.1" matches "llama3.1:latest")."""
+    if model in models:
+        return True
+    if ":" not in model:
+        return f"{model}:latest" in models
+    return model.endswith(":latest") and model[:-7] in models
+
+
+def resolve(ref: str | None) -> str:
+    """The model to actually use: an Ollama model that isn't pulled falls back to the default chat model."""
+    ref = (ref or "").strip() or settings.get("chat_model")
+    provider, name = parse_ref(ref)
+    if provider != "ollama":
+        return ref
+    st = status()
+    if not st["ok"] or not st["models"] or installed(name, st["models"]):
+        return ref
+    default = settings.get("chat_model")
+    return default if installed(default, st["models"]) else ref
+
+
 def model_available(ref: str | None) -> bool:
     """Cheap check used to decide between model planning and the offline fallback."""
     provider, model = parse_ref(ref)
     if provider == "ollama":
-        return status()["ok"]
+        st = status()
+        return st["ok"] and (not st["models"] or installed(model, st["models"]))
     if provider == "custom":
         return bool(settings.get("custom_provider_url"))
     return settings.get("cloud_enabled") and vault.has_secret(key_name(provider))
@@ -179,7 +228,7 @@ def _check_cloud(provider: str) -> str:
 # ---------------------------------------------------------------- completion
 
 def _extract_json(text: str) -> dict[str, Any]:
-    text = text.strip()
+    text = _THINK.sub("", text).strip()
     fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
     if fence:
         text = fence.group(1).strip()
@@ -188,14 +237,14 @@ def _extract_json(text: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         start, end = text.find("{"), text.rfind("}")
         if start < 0 or end <= start:
-            raise LLMUnavailable(f"Model returned invalid JSON: {text[:200]}")
+            raise BadOutput(f"Model returned invalid JSON: {text[:200]}")
         try:
             data = json.loads(text[start:end + 1])
         except json.JSONDecodeError as exc:
-            raise LLMUnavailable(f"Model returned invalid JSON: {text[:200]}") from exc
+            raise BadOutput(f"Model returned invalid JSON: {text[:200]}") from exc
     if not isinstance(data, dict):
-        raise LLMUnavailable("Model returned non-object JSON")
-    return data
+        raise BadOutput("Model returned non-object JSON")
+    return clean(data)
 
 
 def _schema_hint(schema: dict[str, Any]) -> str:
@@ -301,12 +350,21 @@ def complete(messages: list[dict[str, str]], *, model: str | None = None, schema
 
 def chat_json(messages: list[dict[str, str]], schema: dict[str, Any], *, model: str | None = None,
               timeout: float = 180) -> dict[str, Any]:
-    """Run a chat completion constrained to `schema` and return the parsed JSON object."""
-    return _extract_json(complete(messages, model=model, schema=schema, timeout=timeout))
+    """Run a chat completion constrained to `schema` and return the parsed JSON object (null-like values removed).
+
+    Invalid JSON gets one retry with the error shown to the model."""
+    text = complete(messages, model=model, schema=schema, timeout=timeout)
+    try:
+        return _extract_json(text)
+    except BadOutput as exc:
+        retry = [*messages, {"role": "assistant", "content": text[:2000]},
+                 {"role": "user", "content": f"That reply was not valid JSON ({exc}). Reply again with exactly one JSON "
+                  "object that matches the schema. Leave out fields you have no value for instead of writing null."}]
+        return _extract_json(complete(retry, model=model, schema=schema, timeout=timeout))
 
 
 def chat_text(messages: list[dict[str, str]], *, model: str | None = None, timeout: float = 180) -> str:
-    return complete(messages, model=model, timeout=timeout, temperature=0.3).strip()
+    return _THINK.sub("", complete(messages, model=model, timeout=timeout, temperature=0.3)).strip()
 
 
 def test_model(ref: str) -> dict[str, Any]:

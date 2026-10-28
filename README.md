@@ -46,6 +46,23 @@ Model weights don't change on a normal PC; the crew gets better the way a team d
 - **Scorecard and auto-routing.** Every task records its model and score. Give an agent "other models to try" and turn on auto-routing: each model gets 3 tries, then the best-scoring one does the work (with a little ongoing exploration).
 - **Training export.** Download tasks scored 4+ (or thumbed up) as chat-format JSONL. To actually fine-tune, train a LoRA on it offline (for example with [Unsloth](https://github.com/unslothai/unsloth) on a GPU), add `ADAPTER ./adapter` to an Ollama Modelfile, `ollama create`, and set that model on the agent.
 
+## Choosing local models
+
+Each agent can run its own model (edit an agent in **Control Center → Crew**; the editor lists recommended models and
+shows the `ollama pull` command for any that aren't installed). Until a model is pulled the agent uses the default chat
+model, so nothing breaks.
+
+| Agent | Default | Good upgrades (Ollama tag, download) |
+| --- | --- | --- |
+| Atlas (Overseer), Chrono, Archivist | `llama3.1:8b` | `qwen3:8b` (5.2 GB): more reliable JSON plans and tool arguments; `qwen3:14b` (9.3 GB) with 12 GB+ VRAM |
+| Forge (Coder) | `qwen3-coder:30b` | 19 GB MoE (3B active): runs on 8 GB VRAM + 32 GB RAM; `qwen2.5-coder:7b` (4.7 GB) for smaller machines |
+| Scout, Herald | `llama3.1:8b` | `qwen3:8b`, `gemma3:12b` (8.1 GB) |
+| Mnemo | `llama3.1:8b` | `qwen3:4b` (2.6 GB) for speed |
+
+Small models often answer `null` or `never` instead of leaving a field out, invent tool names, or break the JSON.
+LifeOS cleans those replies, treats "never"/"none" dates as no date, drops or fixes bad arguments, tells the agent what
+went wrong and lets it retry, and if an agent still can't finish it writes up what it found instead of stopping.
+
 ## The Station
 
 **Station** (sidebar) is a pixel-art world of the crew. Each agent has a room; it walks to its desk when it is working
@@ -165,6 +182,15 @@ cd A:\ai-lifeos\backend
 python -m lifeos
 ```
 
+Models (stored wherever `OLLAMA_MODELS` points, e.g. `A:\ollama-models`):
+
+```powershell
+ollama pull llama3.1:8b
+ollama pull nomic-embed-text
+ollama pull qwen3-coder:30b
+ollama pull qwen3:8b
+```
+
 Then open http://127.0.0.1:8765/#/crew. Desktop installer (needs Rust): `powershell -ExecutionPolicy Bypass -File A:\ai-lifeos\scripts\build-windows.ps1`.
 It freezes the backend into `lifeos-backend.exe` with PyInstaller, bundles it as a Tauri sidecar, and prints the `.msi`/`.exe` paths.
 
@@ -204,7 +230,7 @@ Environment variables: `LIFEOS_DATA_DIR`, `LIFEOS_DB`, `LIFEOS_HOST`, `LIFEOS_PO
 ### Tests
 
 ```bash
-cd backend && pytest             # 73 tests: MVP flow, security, crew/missions, learning, automations, projects, calendar, providers (models faked)
+cd backend && pytest             # 77 tests: MVP flow, security, crew/missions, learning, automations, projects, calendar, providers (models faked)
 cd frontend && npm run typecheck && npm run build
 ```
 
