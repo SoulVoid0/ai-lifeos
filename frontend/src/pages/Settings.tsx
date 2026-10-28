@@ -105,6 +105,11 @@ export default function Settings() {
           </div>
           <datalist id="models">{llm?.models.map((m) => <option key={m} value={m} />)}</datalist>
         </div>
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input type="checkbox" className="accent-[var(--color-accent)]" checked={form.auto_start_ollama ?? true}
+            onChange={(e) => save({ auto_start_ollama: e.target.checked })} />
+          Start Ollama in the background when LifeOS starts (if it isn't already running)
+        </label>
         <div className="mt-3">
           <label className="label">Planner</label>
           <select className="input sm:w-96" value={form.planner} onChange={(e) => save({ planner: e.target.value as S["planner"] })}>

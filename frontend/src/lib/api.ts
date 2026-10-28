@@ -181,6 +181,7 @@ export interface Dashboard {
 
 export interface Settings {
   ollama_url: string;
+  auto_start_ollama: boolean;
   chat_model: string;
   embed_model: string;
   planner: "auto" | "llm" | "rules";
@@ -379,6 +380,8 @@ export interface MediaSettings {
   cloud_image_model: string;
   cloud_price_usd: number;
   free_vram: boolean;
+  comfy_launcher: string;
+  comfy_autostart: boolean;
 }
 
 export interface MediaStatus {
@@ -387,7 +390,13 @@ export interface MediaStatus {
   checkpoints: string[];
   video: boolean;
   detail: string;
+  launcher?: string | null;
   settings: MediaSettings;
+}
+
+export interface Services {
+  ollama: { up: boolean; started_by_lifeos: boolean; binary: string | null; note: string };
+  comfyui: { up: boolean; started_by_lifeos: boolean; launcher: string | null; note: string };
 }
 
 export interface AgentActivity {
@@ -741,6 +750,8 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, res.statusText);
     return res.blob();
   },
+  services: () => get<Services>("/api/system/services"),
+  startService: (name: "ollama" | "comfyui") => post<Services & { ok: boolean }>(`/api/system/services/${name}/start`),
   agentActivity: (slug: string) => get<AgentActivity>(`/api/crew/agents/${slug}/activity`),
 
   emailStatus: () => get<EmailStatus>("/api/email/status"),

@@ -95,6 +95,9 @@ def watch_parent() -> None:
         while _process_alive(int(pid)):
             time.sleep(2)
         log.info("Desktop shell %s exited; stopping backend", pid)
+        from . import services
+
+        services.stop_all()
         os._exit(0)
 
     threading.Thread(target=loop, name="lifeos-parent-watch", daemon=True).start()

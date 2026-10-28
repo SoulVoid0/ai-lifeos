@@ -18,6 +18,19 @@ export default function Gallery() {
   const crew = useAsync(() => api.agents(), []);
   const [refresh, setRefresh] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const startComfy = async () => {
+    setStarting(true);
+    try {
+      const r = await api.startService("comfyui");
+      toast(r.ok ? "ComfyUI is running" : r.comfyui.note || "ComfyUI didn't start", r.ok ? "ok" : "error");
+      status.reload();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    } finally {
+      setStarting(false);
+    }
+  };
   const creators = (crew.data ?? []).filter((a) => a.tools.some((t) => t.startsWith("generate_")) || ["creative", "photo", "video"].includes(a.slug));
 
   const st = status.data;
@@ -32,7 +45,11 @@ export default function Gallery() {
         <div className={`mb-4 rounded-lg border p-3 text-sm ${st.ok ? "border-ok/30 bg-ok/5" : "border-warn/40 bg-warn/10"}`}>
           <span className={st.ok ? "text-ok" : "text-warn"}>{st.ok ? "Ready" : "Not ready"}</span> · {st.detail}
           {st.ok && st.backend === "comfyui" && !st.video && <span className="text-muted"> · add the LTX-Video model for clips</span>}
-          {!st.ok && st.backend === "comfyui" && <span className="text-muted"> · start ComfyUI (comfyui-user.bat) and press refresh</span>}
+          {!st.ok && st.backend === "comfyui" && st.launcher && (
+            <button className="btn-ghost ml-2 px-2 py-0.5 text-xs text-accent" onClick={startComfy} disabled={starting}>
+              {starting ? "Starting ComfyUI… (first start can take a few minutes)" : "Start it now"}
+            </button>
+          )}
         </div>
       )}
       {showSettings && st && <MediaSettingsCard s={st.settings} checkpoints={st.checkpoints} onSaved={() => { status.reload(); toast("Media settings saved"); }} />}
@@ -83,6 +100,11 @@ function MediaSettingsCard({ s, checkpoints, onSaved }: { s: MediaSettings; chec
         </label>
         {field("output_folder", "Save to folder (must be an approved folder)", "Default: LifeOS data folder\\media")}
         {v.backend === "comfyui" && <>
+          {field("comfy_launcher", "ComfyUI launcher (LifeOS starts it hidden when needed)", "A:\\comfyui-rocm\\comfyui-user.bat (found automatically if empty)")}
+          <label className="mt-5 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={v.comfy_autostart} onChange={(e) => set("comfy_autostart", e.target.checked)} />
+            Start ComfyUI with LifeOS (instead of on the first generation)
+          </label>
           {field("video_checkpoint", "Video model (LTX-Video checkpoint)")}
           {field("video_text_encoder", "Video text encoder (in models/text_encoders)")}
           {field("image_workflow", "Custom image workflow (API JSON, optional)")}
