@@ -273,8 +273,35 @@ ollama pull qwen3-coder:30b
 ollama pull qwen3:8b
 ```
 
-Then open http://127.0.0.1:8765/#/crew. Desktop installer (needs Rust): `powershell -ExecutionPolicy Bypass -File A:\ai-lifeos\scripts\build-windows.ps1`.
-It freezes the backend into `lifeos-backend.exe` with PyInstaller, bundles it as a Tauri sidecar, and prints the `.msi`/`.exe` paths.
+Then open http://127.0.0.1:8765/#/crew.
+
+### Without a terminal window
+
+LifeOS starts its helper programs hidden: **Ollama** (`ollama serve`, if it isn't already running; Settings → Local
+AI can turn this off) and **ComfyUI** through its launcher (found automatically at `A:\comfyui-rocm\comfyui-user.bat`
+and similar paths, or set under Gallery → Backend). ComfyUI starts on the first generation, or with LifeOS if you tick
+*Start ComfyUI with LifeOS*. Programs LifeOS started are stopped again when it quits. Logs are in `%APPDATA%\AI-LifeOS`.
+
+**Quick option (no build):** shortcuts that run LifeOS hidden and open it in an Edge app window.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File A:\ai-lifeos\scripts\windows\install-shortcuts.ps1 -Startup
+```
+
+This makes *AI LifeOS* on the desktop and in the Start menu, *Stop AI LifeOS* in the Start menu, and (with `-Startup`)
+starts LifeOS when you sign in. Closing the window leaves LifeOS running so automations keep working.
+
+**Desktop app:** a tray app with its own window. Closing the window keeps it in the tray. The tray menu has Open,
+*Start ComfyUI now*, *Start with Windows* and Quit, and a second launch just brings the window back. Build and install
+it (needs Rust and VS Build Tools with C++):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File A:\ai-lifeos\scripts\build-windows.ps1 -Install
+```
+
+It freezes the backend into `lifeos-backend.exe` with PyInstaller, bundles it as a hidden Tauri sidecar, builds the
+NSIS installer and runs it with `A:\AI-LifeOS` as the install folder. Your data stays in `%APPDATA%\AI-LifeOS`, so the
+app, the shortcuts and `python -m lifeos` all share it.
 
 ## Running it (any OS)
 

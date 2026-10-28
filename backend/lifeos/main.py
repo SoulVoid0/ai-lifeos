@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, learning, llm, media, memory,
-               missions, permissions, proactive, projects, scheduler, search, settings, tasks, tools, vault, workflows)
+               missions, permissions, proactive, projects, scheduler, search, services, settings, tasks, tools, vault,
+               workflows)
 
 log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
@@ -30,8 +31,11 @@ async def lifespan(app: FastAPI):
         _scheduler.start()
         workflows.run_startup()
     scheduler.watch_parent()
+    if not os.environ.get("LIFEOS_NO_SERVICES"):
+        services.start_background()
     yield
     _scheduler.stop()
+    services.stop_all()
 
 
 app = FastAPI(title="AI LifeOS", version=__version__, lifespan=lifespan)
@@ -624,6 +628,29 @@ class MediaIn(BaseModel):
     size: str = "square"
     seconds: int = Field(4, ge=1, le=10)
     seed: int | None = None
+
+
+@app.get("/api/system/services")
+def services_status() -> dict[str, Any]:
+    return services.status()
+
+
+@app.post("/api/system/services/{name}/start")
+def start_service(name: str) -> dict[str, Any]:
+    if name not in ("ollama", "comfyui"):
+        raise KeyError(f"Unknown service {name}")
+    ok = services.ensure_ollama() if name == "ollama" else services.ensure_comfy()
+    return {"ok": ok, **services.status()}
+
+
+@app.post("/api/system/shutdown")
+def shutdown() -> dict[str, Any]:
+    """Used by the desktop app on Quit: stop helper programs LifeOS started, then exit."""
+    import threading
+
+    services.stop_all()
+    threading.Timer(0.3, lambda: os._exit(0)).start()
+    return {"ok": True}
 
 
 @app.get("/api/media/status")

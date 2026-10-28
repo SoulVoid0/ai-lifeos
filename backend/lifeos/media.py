@@ -24,7 +24,7 @@ from typing import Any
 
 import httpx
 
-from . import activity, config, db, llm, permissions, settings, vault
+from . import activity, config, db, llm, permissions, services, settings, vault
 
 KINDS = ("image", "video")
 BACKENDS = ("comfyui", "a1111", "openai", "off")
@@ -57,6 +57,8 @@ DEFAULTS: dict[str, Any] = {
     "cloud_image_model": "gpt-image-1",
     "cloud_price_usd": 0.04,         # per image, for the ledger and the daily cap
     "free_vram": True,               # unload Ollama models first when both share one GPU
+    "comfy_launcher": "",            # e.g. A:\\comfyui-rocm\\comfyui-user.bat; empty: look in the usual places
+    "comfy_autostart": False,        # start ComfyUI with LifeOS (otherwise only when something is generated)
 }
 
 
@@ -82,9 +84,11 @@ def update_cfg(changes: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("cloud_price_usd can't be negative")
     if merged["output_folder"]:
         permissions.resolve_allowed(merged["output_folder"])
-    for key in ("image_workflow", "video_workflow"):
+    for key in ("image_workflow", "video_workflow", "comfy_launcher"):
         if merged[key] and not Path(merged[key]).expanduser().is_file():
             raise ValueError(f"{key}: file not found")
+    if merged["comfy_launcher"] and Path(merged["comfy_launcher"]).suffix.lower() not in services.LAUNCHER_TYPES:
+        raise ValueError("comfy_launcher must be a .bat, .cmd, .ps1, .sh or .exe file")
     settings.update({"media": {k: v for k, v in merged.items() if v != DEFAULTS[k]}})
     return cfg()
 
@@ -198,6 +202,12 @@ def status() -> dict[str, Any]:
             out["detail"] = "Generation is turned off"
     except (httpx.HTTPError, ValueError) as exc:
         out["detail"] = f"Can't reach {c['backend']}: {str(exc)[:160]}"
+        if c["backend"] == "comfyui":
+            launcher = services.comfy_launcher()
+            out["launcher"] = str(launcher) if launcher else None
+            out["detail"] = (f"ComfyUI isn't running; LifeOS starts it hidden with {launcher.name} when you generate "
+                             "something" if launcher else "ComfyUI isn't running and no launcher is set (Backend → "
+                             "ComfyUI launcher)")
     return out
 
 
@@ -337,6 +347,9 @@ def fill_workflow(workflow: dict[str, Any], values: dict[str, Any]) -> dict[str,
 
 def _comfy(kind: str, prompt: str, p: dict[str, Any], c: dict[str, Any]) -> tuple[bytes, str, str]:
     base = c["comfy_url"].rstrip("/")
+    if not services.ensure_comfy():  # starts ComfyUI hidden if it isn't running and a launcher is known
+        note = services.status()["comfyui"]["note"]
+        raise MediaError(f"ComfyUI isn't running at {base}" + (f". {note}" if note else ""))
     custom = c["video_workflow" if kind == "video" else "image_workflow"].strip()
     if kind == "image":
         checkpoint = c["image_checkpoint"].strip()

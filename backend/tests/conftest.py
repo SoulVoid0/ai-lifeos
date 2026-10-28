@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 os.environ["LIFEOS_NO_SCHEDULER"] = "1"
+os.environ["LIFEOS_NO_SERVICES"] = "1"
 os.environ["LIFEOS_NO_KEYRING"] = "1"
 
 

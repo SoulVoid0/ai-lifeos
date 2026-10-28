@@ -33,6 +33,8 @@ class FakeComfy:
             return httpx.Response(200, json={"p1": {"status": {"status_str": "success", "completed": True},
                                                     "outputs": {"9": {key: [{"filename": name, "subfolder": "",
                                                                              "type": "output"}]}}}}, request=req)
+        if url.endswith("/system_stats"):
+            return httpx.Response(200, json={"system": {}}, request=req)
         if url.endswith("/view"):
             return httpx.Response(200, content=PNG, request=req)
         if url.endswith("/api/ps"):

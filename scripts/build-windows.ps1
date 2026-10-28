@@ -1,7 +1,12 @@
-# Builds the Windows installer: Python backend -> lifeos-backend.exe sidecar, then the Tauri app.
-# Run from anywhere:  powershell -ExecutionPolicy Bypass -File A:\ai-lifeos\scripts\build-windows.ps1
-# Needs: Python 3.11+, Node 18+, Rust (rustup, MSVC toolchain) and the WebView2 runtime.
+# Builds the Windows app: Python backend -> lifeos-backend.exe sidecar, then the Tauri tray app and its installer.
+# Run from anywhere:  powershell -ExecutionPolicy Bypass -File A:\ai-lifeos\scripts\build-windows.ps1 -Install
+# -Install runs the installer afterwards with the install folder set to -InstallDir (default A:\AI-LifeOS).
+# Needs: Python 3.11+, Node 18+, Rust (rustup, MSVC toolchain), VS Build Tools (C++) and the WebView2 runtime.
+param([switch]$Install, [string]$InstallDir = "A:\AI-LifeOS")
 $ErrorActionPreference = "Stop"
+if (-not (Get-Command rustc -ErrorAction SilentlyContinue)) {
+  throw "Rust isn't installed. Install it with:  winget install Rustlang.Rustup   then open a new PowerShell window."
+}
 $root = Split-Path -Parent $PSScriptRoot
 $backend = Join-Path $root "backend"
 $frontend = Join-Path $root "frontend"
@@ -35,5 +40,10 @@ npm.cmd run tauri -- build --config src-tauri/tauri.release.conf.json
 if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
 Pop-Location
 
-Write-Host "==> Done. Installers:"
-Get-ChildItem (Join-Path $frontend "src-tauri\target\release\bundle") -Recurse -Include *.msi, *.exe | ForEach-Object { $_.FullName }
+$setup = Get-ChildItem (Join-Path $frontend "src-tauri\target\release\bundle\nsis") -Filter *-setup.exe |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+Write-Host "==> Done. Installer: $($setup.FullName)"
+if ($Install) {
+  Write-Host "==> Installing to $InstallDir (quit AI LifeOS from the tray first if it's running)"
+  Start-Process -FilePath $setup.FullName -ArgumentList "/D=$InstallDir" -Wait
+}
