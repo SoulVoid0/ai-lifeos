@@ -12,6 +12,9 @@ import Calendar from "./pages/Calendar";
 import ActivityLog from "./pages/ActivityLog";
 import Settings from "./pages/Settings";
 import SearchPage from "./pages/SearchPage";
+import ControlCenter from "./pages/ControlCenter";
+import Automations from "./pages/Automations";
+import Projects from "./pages/Projects";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -20,7 +23,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Routes>
           <Route element={<Layout />}>
             <Route index element={<Dashboard />} />
+            <Route path="crew" element={<ControlCenter />} />
             <Route path="assistant" element={<Assistant />} />
+            <Route path="automations" element={<Automations />} />
+            <Route path="projects" element={<Projects />} />
             <Route path="memory" element={<Memory />} />
             <Route path="files" element={<Files />} />
             <Route path="calendar" element={<Calendar />} />

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { Bot, MessageSquarePlus, Send, Trash2, User } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Bot, MessageSquarePlus, Network, Send, Trash2, User } from "lucide-react";
 import { api, type Message } from "../lib/api";
 import { ago } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { StepView } from "../components/StepView";
 import { ErrorBox, Spinner, notifyChanged } from "../components/ui";
+import { MicButton } from "../components/crew";
 
 const EXAMPLES = [
   "Find all PDFs in my Downloads folder, organize them by category, and remind me to review the important ones tomorrow.",
@@ -21,6 +22,7 @@ export default function Assistant() {
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
+  const navigate = useNavigate();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
   const convs = useAsync(api.conversations, []);
@@ -175,6 +177,11 @@ export default function Assistant() {
                 }
               }}
             />
+            <MicButton onText={(t) => setInput((v) => (v ? `${v} ${t}` : t))} />
+            <button type="button" className="btn-outline h-[44px]" disabled={!input.trim()} title="Hand this to the crew as a mission"
+              onClick={() => navigate(`/crew?goal=${encodeURIComponent(input.trim())}`)}>
+              <Network size={15} />
+            </button>
             <button className="btn-primary h-[44px]" disabled={sending || !input.trim()}>
               <Send size={15} />
             </button>

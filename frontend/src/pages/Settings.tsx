@@ -4,6 +4,7 @@ import { api, type Settings as S } from "../lib/api";
 import { ago } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { ErrorBox, PageHeader, Section, Spinner, notifyChanged, useToast } from "../components/ui";
+import { CloudSettings, CrewSettings, IntegrationSettings, NotificationSettings } from "../components/SettingsExtra";
 
 const ACCENTS = ["violet", "blue", "emerald", "cyan", "rose", "amber"];
 const ACCENT_HEX: Record<string, string> = { violet: "#8b5cf6", blue: "#3b82f6", emerald: "#10b981", rose: "#f43f5e", amber: "#f59e0b", cyan: "#06b6d4" };
@@ -123,6 +124,11 @@ export default function Settings() {
           )}
         </div>
       </Section>
+
+      <CrewSettings form={form} setForm={setForm} save={save} />
+      <CloudSettings form={form} setForm={setForm} save={save} />
+      <IntegrationSettings />
+      <NotificationSettings form={form} setForm={setForm} save={save} />
 
       <Section title="Tool permissions" icon={<Shield size={15} className="text-accent" />}>
         <p className="mb-3 text-xs text-muted">
