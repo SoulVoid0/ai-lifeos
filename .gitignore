@@ -13,3 +13,5 @@ frontend/src-tauri/target/
 frontend/src-tauri/gen/
 .DS_Store
 *.tsbuildinfo
+build/
+frontend/src-tauri/binaries/

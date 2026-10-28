@@ -4,8 +4,56 @@ A local-first personal AI operating system. LifeOS finds and organizes your file
 reminders, remembers what you tell it, and suggests useful actions. It acts only through a fixed set of
 permission-checked tools, and it asks before it changes anything.
 
-This repository contains the **MVP** (spec section 10): a desktop app (Tauri + React) backed by a
-local Python service (FastAPI + SQLite) with a local model through Ollama.
+It is a desktop app (Tauri + React) backed by a local Python service (FastAPI + SQLite). On top of the
+MVP it runs a **crew of AI agents**: an Overseer that splits your goal into a task graph and specialists
+(planning, files, research, coding, memory, email) that work on it in parallel, each with its own model,
+watched and steered from a live **Control Center**. Models run locally through Ollama by default; cloud
+models (OpenAI, Anthropic, OpenRouter, Groq, Mistral, DeepSeek, xAI, Gemini or any OpenAI-compatible URL)
+are optional, per agent, and behind a daily budget.
+
+## The crew and the Control Center
+
+| Agent | Role | Tools |
+| --- | --- | --- |
+| **Atlas**, Overseer | Breaks a goal into tasks, picks the specialist for each, sets dependencies, checks results, writes the final report | delegation, `ask_user` |
+| **Chrono**, Planner | Schedules, deadlines, day/week plans, calendar | tasks, reminders, calendar events, day plan |
+| **Archivist**, Files | Finds, reads and organizes files in approved folders | search, read, organize, create folder, large/old/duplicate finders |
+| **Scout**, Research | Web search and page reading (off until you allow web access) | `web_search`, `fetch_url`, outbox |
+| **Forge**, Coder | Reads and writes code and project files | project context, read, `write_file` (with approval and undo) |
+| **Mnemo**, Memory | Recalls and saves what you told LifeOS | memory search/save |
+| **Herald**, Comms | Reads your inbox (read-only IMAP) and drafts messages | `check_email`, outbox |
+
+How a mission runs:
+
+1. You type or dictate a goal in the Control Center (or the Assistant hands it over, or a workflow starts it).
+2. Atlas plans a DAG of tasks (model-planned with a JSON schema; rule-based fallback if no model). If the goal is ambiguous it asks you a question first (a **brief**).
+3. Tasks run in parallel up to *agents working at once*; each agent runs a step loop (think → tool / ask you / finish) with its own model, step limit and tool list.
+4. Every tool call goes through the same permission policy as the assistant: writes queue an approval card in **Needs you**, and the agent waits (without holding a parallel slot).
+5. Atlas writes a report to the mission, saves it to the **Outbox** (`%APPDATA%\AI-LifeOS\outbox`), and you get a notification.
+
+The Control Center shows the station (agents as nodes; links light up as work moves between them), each
+agent's live state (idle, working, waiting on you, asking), a live event feed, the plan graph and timeline
+of each mission, briefs and approvals, the outbox, a token/cost ledger, and per-agent editing (model,
+persona, tools, enable). **Stop all** cancels every mission and rejects their pending actions. Crews can
+be exported and imported as JSON packs (agents + workflows; imported workflows start disabled).
+
+## Automations
+
+Workflows are *trigger → conditions → steps → summary*:
+
+- Triggers: interval, daily, weekly, monthly, on startup, manual.
+- Conditions on live metrics: open/overdue tasks, tasks due within N hours, loose files, duplicate MB, large files, pending actions, weekday, hour.
+- Steps: any tool (args validated against its schema), a crew mission, or a notification. Steps can reference earlier results (`{{steps.scan.summary}}`), retry, and continue or stop on error.
+- Write the workflow in plain English ("Every Friday at 5pm, organize my downloads, summarize my completed tasks and plan next week"), review the draft, save. Six templates included.
+- Pause automation (sidebar) stops scheduled runs and makes every write wait for approval.
+
+## Projects, calendar, email, web
+
+- **Projects** are detected in approved folders (git, Node, Python, Rust, Go, .NET, Java, docs) with recent files, open tasks, README and memories; LifeOS suggests resuming stale ones and the crew gets their context.
+- **Calendar**: subscribe to ICS URLs or files (Google/Outlook/iCloud "secret address"), recurring events and time zones, overlap warnings, local events, export as `.ics`.
+- **Email**: read-only IMAP (app password stored in the OS keychain); Herald can summarize and triage.
+- **Web**: `web_search` and `fetch_url` for Scout, off by default; private/local addresses are always blocked.
+- **Voice**: dictation in the composer (Web Speech API, where the webview supports it).
 
 ## What works
 
@@ -58,8 +106,14 @@ React UI (Tauri webview)  ──HTTP + X-LifeOS-Client header──▶  FastAPI 
 | `tasks.py`, `timeparse.py` | Tasks, natural-language dates, prioritization, day planning, reminders |
 | `memory.py`, `search.py` | Long-term memory (FTS5 + embedding cosine hybrid) and universal search |
 | `proactive.py` | Suggestions (deadlines, clutter, duplicates, large unused files, unfinished projects), daily summary, dashboard |
-| `llm.py` | Ollama client: status, structured chat, embeddings |
-| `scheduler.py` | Background jobs and notifications |
+| `llm.py` | Model router: Ollama plus cloud providers (`provider:model` refs), structured chat, embeddings, token/cost ledger, budget checks |
+| `vault.py` | API keys and passwords in the OS keychain (`keyring`), DPAPI-protected file fallback on Windows |
+| `crew.py` | Agent definitions, defaults, packs |
+| `missions.py` | Mission runtime: planning, task DAG, parallel limiter, agent step loop, briefs, approvals, cancel, report |
+| `workflows.py` | Automation engine: triggers, conditions, steps, runs, natural-language drafting, templates |
+| `projects.py` | Project detection and context |
+| `integrations.py`, `web.py` | ICS calendars, IMAP email, web search/fetch with SSRF guard |
+| `scheduler.py` | Background jobs: reminders, workflows, project/calendar refresh, notifications |
 | `main.py` | HTTP API |
 
 ## Security model
@@ -72,9 +126,32 @@ Each item maps to the spec's section 8.
 - **Untrusted content.** Document text is passed to the model as data inside delimiters, with instructions to ignore any commands it contains. Whatever the model proposes still goes through the same validation and policy checks.
 - **Local API hardening.** The API binds to `127.0.0.1`. Every request needs an `X-LifeOS-Client` header, which browsers can't send cross-origin without a CORS preflight that only the app's origins pass. This stops other websites from driving the API.
 - **Reversible and logged.** Moves never overwrite: a name collision gets a ` (1)` suffix. Executed actions keep what they did so they can be undone. Every event goes to the activity log.
-- **Your data stays local.** SQLite lives in your OS app-data folder (`~/.local/share/ai-lifeos`, `%APPDATA%\AI-LifeOS`, or `LIFEOS_DATA_DIR`). Cloud AI isn't used.
+- **Your data stays local.** SQLite lives in your OS app-data folder (`~/.local/share/ai-lifeos`, `%APPDATA%\AI-LifeOS`, or `LIFEOS_DATA_DIR`).
+- **Cloud is opt-in.** Cloud models are refused unless *Allow cloud models* is on, the provider has a key, and today's spend is under the daily budget. Keys live in the OS keychain, never in the database or the API responses.
+- **Agents are contained.** Agents only get the tools listed on them, results from files/web/email are passed back as untrusted data, missions have step and token budgets, and every write still needs your approval by default.
 
-## Running it
+## Running it on Windows (PowerShell)
+
+Assumes the repo at `A:\ai-lifeos`, Python 3.11+, Node 18+, and Ollama with `llama3.1:8b` and `nomic-embed-text`.
+
+```powershell
+cd A:\ai-lifeos
+git fetch origin
+git checkout claude/project-thread-pcka0b
+git pull
+cd A:\ai-lifeos\backend
+python -m pip install -e ".[dev]"
+cd A:\ai-lifeos\frontend
+npm.cmd install
+npm.cmd run build
+cd A:\ai-lifeos\backend
+python -m lifeos
+```
+
+Then open http://127.0.0.1:8765/#/crew. Desktop installer (needs Rust): `powershell -ExecutionPolicy Bypass -File A:\ai-lifeos\scripts\build-windows.ps1`.
+It freezes the backend into `lifeos-backend.exe` with PyInstaller, bundles it as a Tauri sidecar, and prints the `.msi`/`.exe` paths.
+
+## Running it (any OS)
 
 Requirements: Python 3.10+, Node 18+, and optionally [Ollama](https://ollama.com) and Rust (for the desktop build).
 
@@ -110,7 +187,7 @@ Environment variables: `LIFEOS_DATA_DIR`, `LIFEOS_DB`, `LIFEOS_HOST`, `LIFEOS_PO
 ### Tests
 
 ```bash
-cd backend && pytest             # 27 tests: MVP flow, security boundaries, features, model planner (with Ollama faked)
+cd backend && pytest             # 67 tests: MVP flow, security, crew/missions, automations, projects, calendar, providers (models faked)
 cd frontend && npm run typecheck && npm run build
 ```
 
@@ -135,16 +212,22 @@ CI runs both on every push (`.github/workflows/ci.yml`).
 
 | Phase | Status |
 | --- | --- |
-| 1 Foundation | Done: desktop shell, backend, local model, chat, settings, database |
-| 2 Real-world actions | Done: file search, document reading, folder creation, organization with confirmation, tasks and reminders, logs |
-| 3 Memory and context | Mostly done: approved memories, semantic + keyword search, memory controls, memory recall in prompts, universal search. Automatic project tracking is next |
-| 4 Automation engine | Next: workflow definitions (trigger → conditions → tool steps → approvals → summary), scheduler, editor |
-| 5 Proactive intelligence | Started: deadline, clutter, duplicate, large-file and project suggestions, daily summary, configurable level |
-| 6 Integrations | Planned: calendar/email/cloud storage connectors, optional cloud models with per-request consent, credentials in the OS keychain |
-| 7 Advanced | Planned |
+| 1 Foundation | Done |
+| 2 Real-world actions | Done |
+| 3 Memory and context | Done: memories, semantic + keyword search, universal search, project tracking and context |
+| 4 Automation engine | Done: workflows with triggers, conditions, steps, approvals, summaries, scheduler, editor, natural-language drafting, templates |
+| 5 Proactive intelligence | Done: deadline, clutter, duplicate, large-file, project-resume, calendar-overlap and workflow suggestions; daily summary; notification preferences and quiet hours |
+| 6 Integrations | Done: ICS calendars, read-only IMAP email, web search/fetch, cloud models per agent with budget, OS keychain |
+| 7 Advanced | Started: multi-agent crew with Control Center, voice dictation, crew packs. Next: cloud storage connectors, signed auto-updates |
 
-Packaging note: for a release that doesn't depend on a system Python, freeze the backend with PyInstaller as
-`lifeos-backend` and place it next to the app executable (Tauri `externalBin`). The shell uses it automatically.
+Packaging: `scripts/build-windows.ps1` (above). On other OSes run the same PyInstaller command and copy the
+binary to `frontend/src-tauri/binaries/lifeos-backend-<target-triple>`, then
+`npm run tauri build -- --config src-tauri/tauri.release.conf.json`.
+
+## Credits
+
+The Control Center's station view and the Overseer/specialist/brief/outbox model were inspired by
+[StarNet](https://github.com/androoAGI/starnet) (MIT). No StarNet code is included.
 
 ## License
 

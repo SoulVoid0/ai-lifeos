@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
-  Activity, Bell, Bot, Brain, CalendarDays, FolderOpen, LayoutDashboard, Pause, Play, Search, Settings as Cog,
+  Activity, Bell, Bot, Brain, CalendarDays, FolderGit2, FolderOpen, LayoutDashboard, Network, Pause, Play, Search,
+  Settings as Cog, Workflow,
 } from "lucide-react";
 import { api, type Notification } from "../lib/api";
 import { ago } from "../lib/format";
@@ -10,7 +11,10 @@ import { notifyChanged, useToast } from "./ui";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/crew", label: "Control Center", icon: Network },
   { to: "/assistant", label: "Assistant", icon: Bot },
+  { to: "/automations", label: "Automations", icon: Workflow },
+  { to: "/projects", label: "Projects", icon: FolderGit2 },
   { to: "/memory", label: "Memory", icon: Brain },
   { to: "/files", label: "Files", icon: FolderOpen },
   { to: "/calendar", label: "Calendar", icon: CalendarDays },
@@ -24,19 +28,21 @@ export function Layout() {
   const [q, setQ] = useState("");
   const [bellOpen, setBellOpen] = useState(false);
   const settings = useAsync(api.settings, []);
-  const notes = useAsync(api.notifications, [], 20000);
+  const notes = useAsync(api.notifications, [], 8000);
+  const crew = useAsync(api.crewStatus, [], 5000);
   const health = useAsync(api.health, [], 15000);
   const seen = useRef<Set<number>>(new Set());
 
-  // Surface new reminders as toasts and OS notifications.
+  // Surface new reminders, crew questions and workflow summaries as toasts and OS notifications.
   useEffect(() => {
+    const quiet = inQuietHours(settings.data?.quiet_hours);
     for (const n of notes.data ?? []) {
       if (seen.current.has(n.id)) continue;
       seen.current.add(n.id);
-      toast(n.title + (n.body ? `\n${n.body}` : ""), "info");
-      if ("Notification" in window && Notification.permission === "granted") new Notification(n.title, { body: n.body ?? "" });
+      toast(n.title + (n.body ? `\n${n.body.slice(0, 300)}` : ""), "info");
+      if (!quiet && "Notification" in window && Notification.permission === "granted") new Notification(n.title, { body: (n.body ?? "").slice(0, 300) });
     }
-  }, [notes.data, toast]);
+  }, [notes.data, toast, settings.data?.quiet_hours]);
 
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
@@ -60,6 +66,8 @@ export function Layout() {
   };
 
   const unread: Notification[] = notes.data ?? [];
+  const working = (crew.data?.agents ?? []).filter((a) => a.state === "working").length;
+  const needsYou = (crew.data?.briefs.length ?? 0) + (crew.data?.pending_actions.length ?? 0);
 
   return (
     <div className="flex h-full">
@@ -87,6 +95,12 @@ export function Layout() {
               }
             >
               <Icon size={16} /> {label}
+              {to === "/crew" && (working > 0 || needsYou > 0) && (
+                <span className={`ml-auto rounded-full px-1.5 text-[10px] ${needsYou ? "bg-warn/20 text-warn" : "bg-ok/15 text-ok"}`}
+                  title={needsYou ? `${needsYou} waiting for you` : `${working} agent(s) working`}>
+                  {needsYou || working}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -131,7 +145,7 @@ export function Layout() {
             {bellOpen && (
               <div className="card absolute right-0 z-40 mt-2 w-80 p-2 shadow-xl">
                 <div className="flex items-center justify-between px-2 py-1">
-                  <span className="text-sm font-semibold">Reminders</span>
+                  <span className="text-sm font-semibold">Notifications</span>
                   {unread.length > 0 && (
                     <button
                       className="text-xs text-muted hover:text-text"
@@ -167,4 +181,13 @@ export function Layout() {
       </div>
     </div>
   );
+}
+
+function inQuietHours(q?: { enabled: boolean; start: string; end: string }): boolean {
+  if (!q?.enabled) return false;
+  const now = new Date();
+  const mins = now.getHours() * 60 + now.getMinutes();
+  const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + (m || 0); };
+  const s = toMin(q.start), e = toMin(q.end);
+  return s <= e ? mins >= s && mins < e : mins >= s || mins < e;
 }

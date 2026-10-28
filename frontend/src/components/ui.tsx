@@ -65,7 +65,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             {t.tone === "ok" && <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-ok" />}
             {t.tone === "error" && <AlertTriangle size={16} className="mt-0.5 shrink-0 text-danger" />}
             {t.tone === "info" && <Info size={16} className="mt-0.5 shrink-0 text-accent" />}
-            <span className="flex-1 whitespace-pre-line">{t.text}</span>
+            <span className="flex-1 whitespace-pre-line [overflow-wrap:anywhere]">{t.text}</span>
             <button onClick={() => setToasts((x) => x.filter((y) => y.id !== t.id))} className="text-muted hover:text-text">
               <X size={14} />
             </button>

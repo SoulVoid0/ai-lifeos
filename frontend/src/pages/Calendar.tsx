@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, CalendarRange, ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
-import { api, type Task } from "../lib/api";
+import { useSearchParams } from "react-router-dom";
+import { AlertTriangle, Bell, CalendarPlus, CalendarRange, ChevronLeft, ChevronRight, Download, Link2, MapPin, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { api, type CalEvent, type Task } from "../lib/api";
 import { isOverdue, PRIORITY_LABEL, when } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { Empty, ErrorBox, PageHeader, Section, notifyChanged, useToast } from "../components/ui";
@@ -18,7 +19,12 @@ export default function Calendar() {
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
   const [selected, setSelected] = useState<string | null>(null);
-  const [draft, setDraft] = useState({ title: "", due_at: "", remind_at: "", priority: "2", project: "", estimate_minutes: "" });
+  const [params] = useSearchParams();
+  const [draft, setDraft] = useState({ title: "", due_at: "", remind_at: "", priority: "2", project: params.get("project") ?? "", estimate_minutes: "" });
+  const [ev, setEv] = useState({ title: "", start: "", end: "", location: "" });
+  const [source, setSource] = useState("");
+  const sources = useAsync(api.calendarSources, []);
+  const overlaps = useAsync(api.overlaps, []);
 
   useEffect(() => {
     const h = () => { tasks.reload(); allOpen.reload(); plan.reload(); };
@@ -44,6 +50,48 @@ export default function Calendar() {
     return Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
   }, [month]);
 
+  const events = useAsync(() => api.events(cells[0].toISOString(), new Date(cells[41].getTime() + 86400000).toISOString()), [cells[0].getTime()]);
+  const eventsByDay = useMemo(() => {
+    const m: Record<string, CalEvent[]> = {};
+    for (const e of events.data ?? []) (m[dayKey(new Date(e.start_at))] ??= []).push(e);
+    return m;
+  }, [events.data]);
+
+  const reloadCalendars = () => { sources.reload(); events.reload(); overlaps.reload(); };
+
+  const addEvent = async () => {
+    if (!ev.title.trim() || !ev.start.trim()) return;
+    try {
+      await api.addEvent({ title: ev.title, start: ev.start, end: ev.end || undefined, location: ev.location || undefined });
+      setEv({ title: "", start: "", end: "", location: "" });
+      reloadCalendars();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  };
+
+  const addSource = async () => {
+    if (!source.trim()) return;
+    try {
+      const s = await api.addCalendarSource(source.trim());
+      setSource("");
+      toast(s.last_error ? `Added, but sync failed: ${s.last_error}` : `Imported ${s.event_count} event(s)`, s.last_error ? "error" : "ok");
+      reloadCalendars();
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  };
+
+  const exportIcs = async () => {
+    const text = await api.exportIcs();
+    const url = URL.createObjectURL(new Blob([text], { type: "text/calendar" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "lifeos.ics";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const add = async () => {
     if (!draft.title.trim()) return;
     try {
@@ -63,6 +111,7 @@ export default function Calendar() {
   };
 
   const today = dayKey(new Date());
+  const dayEvents = selected ? eventsByDay[selected] ?? [] : (events.data ?? []).filter((e) => new Date(e.end_at ?? e.start_at).getTime() >= Date.now()).slice(0, 8);
   const visible = (tasks.data ?? []).filter((t) => {
     if (!selected) return true;
     const iso = t.due_at ?? t.remind_at;
@@ -71,7 +120,16 @@ export default function Calendar() {
 
   return (
     <div className="mx-auto max-w-6xl p-6">
-      <PageHeader title="Calendar" subtitle="Tasks, deadlines and reminders." />
+      <PageHeader title="Calendar" subtitle="Events from your calendars, plus tasks, deadlines and reminders."
+        actions={<button className="btn-outline" onClick={exportIcs}><Download size={14} /> Export .ics</button>} />
+      {(overlaps.data ?? []).length > 0 && (
+        <div className="mb-4 rounded-lg border border-warn/40 bg-warn/10 p-3 text-sm text-warn">
+          <div className="flex items-center gap-2 font-medium"><AlertTriangle size={15} /> {overlaps.data!.length} overlapping appointment(s) in the next two weeks</div>
+          <ul className="mt-1 space-y-0.5 text-xs">
+            {overlaps.data!.slice(0, 5).map(({ a, b }) => <li key={`${a.id}-${b.id}`}>“{a.title}” and “{b.title}” · {when(a.start_at)}</li>)}
+          </ul>
+        </div>
+      )}
       <ErrorBox error={tasks.error} />
 
       <div className="grid gap-4 lg:grid-cols-5">
@@ -98,12 +156,15 @@ export default function Calendar() {
                   } ${inMonth ? "bg-panel-2" : "opacity-40"}`}
                 >
                   <div className={`mb-0.5 ${k === today ? "font-bold text-accent" : "text-muted"}`}>{d.getDate()}</div>
-                  {items.slice(0, 2).map((t) => (
+                  {(eventsByDay[k] ?? []).slice(0, 2).map((e) => (
+                    <div key={`e${e.id}`} className="truncate rounded border-l-2 border-ok bg-ok/10 px-1">{e.title}</div>
+                  ))}
+                  {items.slice(0, Math.max(0, 2 - (eventsByDay[k] ?? []).length)).map((t) => (
                     <div key={t.id} className={`truncate rounded px-1 ${isOverdue(t.due_at) ? "bg-danger/15 text-danger" : "bg-accent-soft"}`}>
                       {t.title}
                     </div>
                   ))}
-                  {items.length > 2 && <div className="px-1 text-muted">+{items.length - 2}</div>}
+                  {items.length + (eventsByDay[k] ?? []).length > 2 && <div className="px-1 text-muted">+{items.length + (eventsByDay[k] ?? []).length - 2}</div>}
                 </button>
               );
             })}
@@ -129,6 +190,39 @@ export default function Calendar() {
             </div>
           </Section>
 
+          <Section title="New event" icon={<CalendarPlus size={15} className="text-accent" />}>
+            <div className="space-y-2">
+              <input className="input" placeholder="Title" value={ev.title} onChange={(e) => setEv({ ...ev, title: e.target.value })} />
+              <div className="grid grid-cols-2 gap-2">
+                <input className="input" placeholder="Start: tomorrow 3pm" value={ev.start} onChange={(e) => setEv({ ...ev, start: e.target.value })} />
+                <input className="input" placeholder="End (optional)" value={ev.end} onChange={(e) => setEv({ ...ev, end: e.target.value })} />
+              </div>
+              <input className="input" placeholder="Location (optional)" value={ev.location} onChange={(e) => setEv({ ...ev, location: e.target.value })} />
+              <button className="btn-outline w-full justify-center" onClick={addEvent}><Plus size={14} /> Add event</button>
+            </div>
+          </Section>
+
+          <Section title="Calendars" icon={<Link2 size={15} className="text-accent" />}>
+            <p className="mb-2 text-xs text-muted">Subscribe to an .ics URL (Google, Outlook and iCloud all offer one) or import an .ics file from an approved folder. Read-only, synced every 30 minutes.</p>
+            <div className="mb-2 flex gap-2">
+              <input className="input" placeholder="https://…/basic.ics or Downloads/calendar.ics" value={source} onChange={(e) => setSource(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && addSource()} />
+              <button className="btn-primary" onClick={addSource}><Plus size={14} /></button>
+            </div>
+            <ul className="divide-y divide-line">
+              {(sources.data ?? []).map((s) => (
+                <li key={s.id} className="flex items-center gap-2 py-1.5 text-xs">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate font-mono">{s.label || s.location}</div>
+                    <div className={s.last_error ? "text-danger" : "text-muted"}>{s.last_error ?? `${s.event_count} events · synced ${when(s.last_synced_at)}`}</div>
+                  </div>
+                  <button className="btn-ghost px-1.5" title="Sync now" onClick={async () => { await api.syncCalendarSource(s.id); reloadCalendars(); }}><RefreshCw size={13} /></button>
+                  <button className="btn-ghost px-1.5" title="Remove" onClick={async () => { await api.removeCalendarSource(s.id); reloadCalendars(); }}><Trash2 size={13} /></button>
+                </li>
+              ))}
+            </ul>
+          </Section>
+
           <Section title={`Suggested plan for ${plan.data?.day ?? "today"}`} icon={<CalendarRange size={15} className="text-accent" />}>
             {!plan.data?.blocks.length ? <Empty>No open tasks to schedule.</Empty> : (
               <ul className="space-y-1 text-sm">
@@ -144,6 +238,31 @@ export default function Calendar() {
           </Section>
         </div>
       </div>
+
+      {dayEvents.length > 0 && (
+        <div className="card mt-4 p-4">
+          <h2 className="mb-2 text-sm font-semibold">{selected ? "Events that day" : "Upcoming events"}</h2>
+          <ul className="divide-y divide-line">
+            {dayEvents.map((e) => (
+              <li key={e.id} className="group flex items-start gap-3 py-2 text-sm">
+                <span className="w-32 shrink-0 text-xs text-muted">{e.all_day ? new Date(e.start_at).toLocaleDateString() : when(e.start_at)}</span>
+                <div className="min-w-0 flex-1">
+                  <div>{e.title}</div>
+                  <div className="flex flex-wrap gap-x-3 text-xs text-muted">
+                    {e.location && <span className="inline-flex items-center gap-1"><MapPin size={11} /> {e.location}</span>}
+                    <span>{e.source_label ?? (e.source_id ? "subscribed" : "LifeOS")}</span>
+                  </div>
+                </div>
+                {!e.source_id && (
+                  <button className="btn-ghost px-1.5 opacity-0 hover:text-danger group-hover:opacity-100" onClick={async () => { await api.deleteEvent(e.id); reloadCalendars(); }}>
+                    <Trash2 size={14} />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <div className="card mt-4 p-4">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">

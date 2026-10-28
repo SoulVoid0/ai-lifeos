@@ -56,7 +56,7 @@ export function ApprovalCard({ action: initial, onChange }: { action: Action; on
       <div className="flex items-start gap-2">
         <ShieldAlert size={16} className="mt-0.5 shrink-0 text-warn" />
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium">{action.summary}</div>
+          <div className="text-sm font-medium [overflow-wrap:anywhere]">{action.summary}</div>
           <div className="mt-0.5 text-xs text-muted">
             {action.tool.replace(/_/g, " ")} · #{action.id}
           </div>

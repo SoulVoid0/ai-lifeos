@@ -600,12 +600,17 @@ def _rule_draft(text: str) -> dict[str, Any]:
         plan = rules.plan(clause)
         if plan.complete:
             for s in plan.steps:
-                steps.append({"type": "tool", "tool": s["tool"], "args": s.get("args") or {},
-                              "label": tools.describe_call(s["tool"], s.get("args") or {})[:120]})
+                args = s.get("args") or {}
+                shown = ", ".join(str(v) if not isinstance(v, list) else "/".join(map(str, v)) for v in args.values()
+                                  if v not in (None, "", []))
+                label = s["tool"].replace("_", " ").capitalize() + (f": {shown}" if shown else "")
+                steps.append({"type": "tool", "tool": s["tool"], "args": args, "label": label[:120]})
         else:
             steps.append({"type": "mission", "goal": clause, "label": f"Crew: {clause[:100]}"})
-    name = re.sub(r"\s+", " ", text).strip()
-    return {"name": (name[:1].upper() + name[1:])[:60], "description": text.strip()[:500], "trigger": trigger,
+    name = re.sub(r"\s+", " ", text).strip().rstrip(".")
+    if len(name) > 60:
+        name = name[:60].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return {"name": name[:1].upper() + name[1:], "description": text.strip()[:500], "trigger": trigger,
             "conditions": [], "steps": steps, "source_text": text, "planner": "rules"}
 
 
