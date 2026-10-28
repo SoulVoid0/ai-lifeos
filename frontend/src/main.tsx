@@ -16,6 +16,7 @@ import ControlCenter from "./pages/ControlCenter";
 import World from "./pages/World";
 import Automations from "./pages/Automations";
 import Projects from "./pages/Projects";
+import Gallery from "./pages/Gallery";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -29,6 +30,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="assistant" element={<Assistant />} />
             <Route path="automations" element={<Automations />} />
             <Route path="projects" element={<Projects />} />
+            <Route path="gallery" element={<Gallery />} />
             <Route path="memory" element={<Memory />} />
             <Route path="files" element={<Files />} />
             <Route path="calendar" element={<Calendar />} />

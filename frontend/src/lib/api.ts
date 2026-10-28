@@ -344,6 +344,60 @@ export interface LearningOverview {
   settings: { peer_review: boolean; reflection: boolean; auto_route: boolean; lessons_per_task: number };
 }
 
+export interface MediaItem {
+  id: number;
+  kind: "image" | "video";
+  prompt: string;
+  backend: string;
+  model: string | null;
+  status: "queued" | "running" | "done" | "failed";
+  path: string | null;
+  name: string | null;
+  params: { size?: string; width?: number; height?: number; seed?: number; frames?: number; negative?: string } | null;
+  error: string | null;
+  seconds: number | null;
+  mission_id: number | null;
+  agent: string | null;
+  created_at: string;
+  finished_at: string | null;
+}
+
+export interface MediaSettings {
+  backend: "comfyui" | "a1111" | "openai" | "off";
+  comfy_url: string;
+  a1111_url: string;
+  image_checkpoint: string;
+  video_checkpoint: string;
+  video_text_encoder: string;
+  image_workflow: string;
+  video_workflow: string;
+  output_folder: string;
+  cloud_image_model: string;
+  cloud_price_usd: number;
+  free_vram: boolean;
+}
+
+export interface MediaStatus {
+  backend: string;
+  ok: boolean;
+  checkpoints: string[];
+  video: boolean;
+  detail: string;
+  settings: MediaSettings;
+}
+
+export interface AgentActivity {
+  agent: AgentStatus;
+  task: { id: number; title: string; instructions: string; status: string; steps: number; model: string | null; started_at: string | null } | null;
+  last_tool: MissionEvent | null;
+  log: MissionEvent[];
+  recent_tasks: { id: number; mission_id: number; title: string; status: string; result: string; score: number | null;
+    user_rating: number | null; model: string | null; steps: number; finished_at: string | null; goal: string }[];
+  lessons: Lesson[];
+  media: MediaItem[];
+  stats: ScoreCard | null;
+}
+
 export interface Brief {
   id: number;
   mission_id: number;
@@ -668,6 +722,23 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, res.statusText);
     return res.text();
   },
+  // media
+  media: (kind?: string, limit = 60) => get<MediaItem[]>(`/api/media${qs({ kind, limit })}`),
+  mediaItem: (id: number) => get<MediaItem>(`/api/media/${id}`),
+  mediaStatus: () => get<MediaStatus>("/api/media/status"),
+  generateMedia: (m: { kind: "image" | "video"; prompt: string; negative?: string; size?: string; seconds?: number; seed?: number | null }) =>
+    post<MediaItem>("/api/media", m),
+  setMediaSettings: (m: Partial<MediaSettings>) => patch<MediaSettings>("/api/media/settings", m),
+  deleteMedia: (id: number) => del(`/api/media/${id}`),
+  openMedia: (id: number) => post(`/api/media/${id}/open`),
+  // Files need the client header, so they're fetched as blobs and shown through object URLs.
+  mediaBlob: async (id: number) => {
+    const res = await fetch(BASE + `/api/media/${id}/file`, { headers: { "X-LifeOS-Client": "1" } });
+    if (!res.ok) throw new ApiError(res.status, res.statusText);
+    return res.blob();
+  },
+  agentActivity: (slug: string) => get<AgentActivity>(`/api/crew/agents/${slug}/activity`),
+
   emailStatus: () => get<EmailStatus>("/api/email/status"),
   setEmail: (e: { host: string; port: number; username: string; folder: string; password?: string }) =>
     request<EmailStatus>("PUT", "/api/email", e),

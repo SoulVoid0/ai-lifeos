@@ -54,10 +54,14 @@ model, so nothing breaks.
 
 | Agent | Default | Good upgrades (Ollama tag, download) |
 | --- | --- | --- |
-| Atlas (Overseer), Chrono, Archivist | `llama3.1:8b` | `qwen3:8b` (5.2 GB): more reliable JSON plans and tool arguments; `qwen3:14b` (9.3 GB) with 12 GB+ VRAM |
-| Forge (Coder) | `qwen3-coder:30b` | 19 GB MoE (3B active): runs on 8 GB VRAM + 32 GB RAM; `qwen2.5-coder:7b` (4.7 GB) for smaller machines |
+| Atlas (Overseer), Chrono, Archivist | `llama3.1:8b` | `qwen3:14b` (9.3 GB) on 12–16 GB VRAM: the most reliable JSON plans and tool arguments; `qwen3:8b` (5.2 GB) on 8 GB |
+| Forge (Coder) | `qwen3-coder:30b` | 19 GB MoE (3B active). On a 16 GB card it spills ~3 GB to RAM and stays usable because only 3B parameters are active per token (needs 32 GB system RAM). With 16 GB RAM, or for speed, use `qwen2.5-coder:14b` (9 GB, fits fully) |
 | Scout, Herald | `llama3.1:8b` | `qwen3:8b`, `gemma3:12b` (8.1 GB) |
 | Mnemo | `llama3.1:8b` | `qwen3:4b` (2.6 GB) for speed |
+| Muse (Creative) | `llama3.1:8b` | `qwen3:8b`: writes the image prompts; the pictures come from the image backend below |
+
+On one 16 GB GPU, set **Settings → Max parallel agents** to 1–2: two 9 GB models can't both stay loaded, and Ollama
+swapping them in and out is slower than running tasks one after another.
 
 Small models often answer `null` or `never` instead of leaving a field out, invent tool names, or break the JSON.
 LifeOS cleans those replies, treats "never"/"none" dates as no date, drops or fixes bad arguments, tells the agent what
@@ -70,6 +74,75 @@ went wrong and lets it retry, and if an agent still can't finish it writes up wh
 when it needs you. Live events show as speech bubbles and delegations fly from the Command Deck. Walk with WASD/arrows
 or click; press **E** or click an agent to chat with it in character, give it a task, answer its question or approve
 its proposal on the spot. Use your desk to launch a crew mission.
+
+Props are interactive too (walk up and press **E**, or click): the Command Deck holo table and board are the
+**mission board**, the Planning Room board shows your week, Archive cabinets open Files, the Workshop bench opens
+Projects, the server racks show which model each agent runs, the printer opens the activity log, the Memory Vault shelves
+are a searchable **memory library** and the orb lists the crew's **lessons**, the arcade shows the crew's **high scores**,
+the coffee machine sends idle agents on a break, the radio and mailboxes open the outbox, and the dish opens
+Automations. The **Studio** is Muse's room, where the easel generates images and clips, and the **Gallery** walls show
+your latest pictures (click a frame to view it).
+
+Click an agent for its live view: **Now** (current task, step progress, model, last tool call and a live log),
+**Chat**, and **History** (recent work with review scores and your ratings, what it made, lessons learned, stats).
+
+## Images and video
+
+**Gallery** (sidebar) and Muse, the creative agent, generate images and short clips. The default is local and free:
+
+- **ComfyUI** (recommended): images from any SDXL or Flux-schnell checkpoint, and 2–10 s clips with **LTX-Video**.
+- **Automatic1111 / Forge WebUI**: images only.
+- **OpenAI images** (opt-in): only when cloud AI is on and a key is stored. Each image (≈$0.04, configurable) counts
+  against the daily cloud budget and stops at the cap.
+
+Files are saved to `<LifeOS data>\media`, or to any approved folder set under **Gallery → Backend**. Since ComfyUI and
+Ollama share the GPU, LifeOS unloads Ollama models before each generation (turn this off under Backend if you have two
+GPUs). Agents get `generate_image`, `generate_video` and `list_media` tools; generations can be undone from Activity.
+For other models or graphs, export a workflow from ComfyUI with *Save (API)* and set it as a custom workflow; the
+placeholders `{{prompt}}`, `{{negative}}`, `{{seed}}`, `{{width}}`, `{{height}}`, `{{frames}}`, `{{steps}}` and
+`{{checkpoint}}` are filled in.
+
+### AMD Radeon (RX 6800 XT and other RDNA2) on Windows
+
+There's no CUDA on AMD, so use these:
+
+- **Ollama** runs on AMD through Vulkan on Windows. Cards that aren't on the ROCm list (like the 6800 XT) use it automatically.
+- **ComfyUI** runs through [comfyui-rocm](https://github.com/patientx-cfz/comfyui-rocm), a community Windows build
+  with ROCm and PyTorch that supports RDNA2 (its author tests on an RX 6800). The official ComfyUI Desktop
+  AMD support doesn't list RDNA2. [ComfyUI-Zluda](https://github.com/patientx/ComfyUI-Zluda) is the fallback if
+  comfyui-rocm misbehaves.
+
+Install (everything goes on A:):
+
+1. Install [Git for Windows](https://git-scm.com/download/win), the [VC++ runtime](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+   and [VS Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe) with *Desktop development with C++*. No
+   Python or HIP SDK is needed. Remove leftover NVIDIA drivers, and disable the integrated GPU (in the BIOS) if your CPU has one.
+2. Download the latest release zip from <https://github.com/patientx-cfz/comfyui-rocm/releases> and unzip it to
+   `A:\comfyui-rocm`. Use the root of a drive, not your user folder or Program Files, and only English characters in the path.
+3. In that folder, run `install.bat` and then `comfyui-rocm-updater.bat`. Start ComfyUI with `comfyui-user.bat`; it listens on `http://127.0.0.1:8188`.
+4. Download the models into `A:\comfyui-rocm\ComfyUI\models\…`:
+
+```powershell
+$M = "A:\comfyui-rocm\ComfyUI\models"
+curl.exe -L -o "$M\checkpoints\sd_xl_base_1.0.safetensors" https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors
+curl.exe -L -o "$M\checkpoints\flux1-schnell-fp8.safetensors" https://huggingface.co/Comfy-Org/flux1-schnell/resolve/main/flux1-schnell-fp8.safetensors
+curl.exe -L -o "$M\checkpoints\ltx-video-2b-v0.9.5.safetensors" https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltx-video-2b-v0.9.5.safetensors
+curl.exe -L -o "$M\text_encoders\t5xxl_fp8_e4m3fn.safetensors" https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn.safetensors
+```
+
+5. Open **Gallery → Backend**, choose ComfyUI, and pick the image model. Press refresh until it says *Ready*.
+
+What 16 GB of VRAM gets you (RDNA2 has no tensor cores, so expect slower results than an NVIDIA card of the same class):
+
+| Job | Model (download) | Fits in 16 GB | Rough time on a 6800 XT |
+| --- | --- | --- | --- |
+| Image 1024² | SDXL base (6.9 GB) | yes | ~20–60 s at 28 steps |
+| Image 1024² | Flux-schnell fp8 (17 GB file, incl. text encoders) | yes, with offloading | ~1–2 min at 4 steps |
+| Clip 4 s, 768×512 | LTX-Video 2B 0.9.5 (6.3 GB) + T5 fp8 (4.9 GB) | yes | several minutes; first run is slower |
+
+These times are estimates; they depend on drivers and the ROCm build. Keep clips short (2–5 s) at 768×512. Wan 2.x
+14B, HunyuanVideo and the LTX 13B models don't fit comfortably in 16 GB on AMD. On a 16 GB card, close games and other
+GPU apps while generating.
 
 ## Automations
 
@@ -261,7 +334,7 @@ CI runs both on every push (`.github/workflows/ci.yml`).
 | 4 Automation engine | Done: workflows with triggers, conditions, steps, approvals, summaries, scheduler, editor, natural-language drafting, templates |
 | 5 Proactive intelligence | Done: deadline, clutter, duplicate, large-file, project-resume, calendar-overlap and workflow suggestions; daily summary; notification preferences and quiet hours |
 | 6 Integrations | Done: ICS calendars, read-only IMAP email, web search/fetch, cloud models per agent with budget, OS keychain |
-| 7 Advanced | Started: multi-agent crew with Control Center and pixel Station, learning loop (reviews, lessons, routing, training export), voice dictation, crew packs. Next: cloud storage connectors, signed auto-updates |
+| 7 Advanced | Started: multi-agent crew with Control Center and pixel Station, learning loop (reviews, lessons, routing, training export), local image and video generation (ComfyUI, LTX-Video) with Muse and a gallery, voice dictation, crew packs. Next: cloud storage connectors, signed auto-updates |
 
 Packaging: `scripts/build-windows.ps1` (above). On other OSes run the same PyInstaller command and copy the
 binary to `frontend/src-tauri/binaries/lifeos-backend-<target-triple>`, then

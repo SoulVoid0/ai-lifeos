@@ -34,7 +34,7 @@ export default function ControlCenter() {
   const [goal, setGoal] = useState(params.get("goal") ?? "");
   const [target, setTarget] = useState<string>("");
   const [selected, setSelected] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("missions");
+  const [tab, setTab] = useState<Tab>((params.get("tab") as Tab | null) ?? "missions");
   const [openMission, setOpenMission] = useState<number | null>(params.get("mission") ? Number(params.get("mission")) : null);
   const [editing, setEditing] = useState<Agent | null | "new">(null);
   const [launching, setLaunching] = useState(false);

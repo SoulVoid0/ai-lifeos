@@ -15,7 +15,8 @@ from . import activity, db, llm, settings, tools
 
 OVERSEER = "overseer"
 COLORS = ("violet", "amber", "cyan", "emerald", "rose", "blue", "orange", "pink", "lime", "slate")
-ICONS = ("crown", "calendar", "folder", "search", "code", "brain", "mail", "bot", "pen", "shield", "chart", "sparkles")
+ICONS = ("crown", "calendar", "folder", "search", "code", "brain", "mail", "bot", "pen", "shield", "chart", "sparkles",
+         "image")
 
 DEFAULT_CREW: list[dict[str, Any]] = [
     {"slug": OVERSEER, "name": "Atlas", "role": "Overseer", "color": "violet", "icon": "crown",
@@ -57,6 +58,11 @@ DEFAULT_CREW: list[dict[str, Any]] = [
      "persona": "You are a concise chief of staff. You triage messages by urgency, never send anything, and save drafts "
                 "to the outbox for the user to review.",
      "tools": ["check_email", "list_events", "daily_summary", "list_tasks", "create_task", "save_to_outbox"]},
+    {"slug": "creative", "name": "Muse", "role": "Creative", "color": "pink", "icon": "image",
+     "description": "Generates images and short videos from descriptions (local ComfyUI or WebUI), and writes prompts.",
+     "persona": "You are an art director. You turn vague requests into vivid, specific prompts (subject, style, lighting, "
+                "composition, camera), generate one piece at a time, and describe what you made.",
+     "tools": ["generate_image", "generate_video", "list_media", "search_memory", "save_to_outbox"]},
 ]
 
 _JSON = ("tools", "candidates")
@@ -64,23 +70,27 @@ _JSON = ("tools", "candidates")
 # Local models that suit each role on a consumer PC (Ollama tags, approximate download size).
 # Agents whose model isn't pulled use the default chat model until it is.
 RECOMMENDED: dict[str, list[dict[str, str]]] = {
-    OVERSEER: [{"model": "qwen3:8b", "size": "5.2 GB", "why": "reliable JSON plans and tool choice"},
-               {"model": "qwen3:14b", "size": "9.3 GB", "why": "better planning with 12 GB+ VRAM"}],
-    "planner": [{"model": "qwen3:8b", "size": "5.2 GB", "why": "follows tool schemas well"},
-                {"model": "llama3.1:8b", "size": "4.9 GB", "why": "default all-rounder"}],
-    "files": [{"model": "qwen3:8b", "size": "5.2 GB", "why": "accurate tool arguments"},
-              {"model": "llama3.1:8b", "size": "4.9 GB", "why": "default all-rounder"}],
+    OVERSEER: [{"model": "qwen3:14b", "size": "9.3 GB", "why": "best plans and tool choice that fit a 16 GB GPU"},
+               {"model": "qwen3:8b", "size": "5.2 GB", "why": "for 8-12 GB GPUs"}],
+    "planner": [{"model": "qwen3:14b", "size": "9.3 GB", "why": "reliable tool arguments (16 GB GPU)"},
+                {"model": "qwen3:8b", "size": "5.2 GB", "why": "follows tool schemas well, smaller"}],
+    "files": [{"model": "qwen3:14b", "size": "9.3 GB", "why": "accurate tool arguments (16 GB GPU)"},
+              {"model": "qwen3:8b", "size": "5.2 GB", "why": "smaller"}],
     "research": [{"model": "qwen3:8b", "size": "5.2 GB", "why": "good at summarizing with sources"},
                  {"model": "gemma3:12b", "size": "8.1 GB", "why": "strong reading and writing"}],
-    "coder": [{"model": "qwen3-coder:30b", "size": "19 GB", "why": "best local coder; MoE (3B active) runs with 8 GB VRAM + 32 GB RAM"},
-              {"model": "qwen2.5-coder:7b", "size": "4.7 GB", "why": "for smaller GPUs"}],
+    "coder": [{"model": "qwen3-coder:30b", "size": "19 GB", "why": "best local coder; MoE with 3B active, so it stays usable "
+               "when a few GB spill from a 16 GB GPU into RAM (needs 32 GB RAM)"},
+              {"model": "qwen2.5-coder:14b", "size": "9 GB", "why": "fits fully on a 16 GB GPU"},
+              {"model": "qwen2.5-coder:7b", "size": "4.7 GB", "why": "for 8 GB GPUs"}],
     "memory": [{"model": "llama3.1:8b", "size": "4.9 GB", "why": "default all-rounder"},
                {"model": "qwen3:4b", "size": "2.6 GB", "why": "light and fast for lookups"}],
+    "creative": [{"model": "qwen3:8b", "size": "5.2 GB", "why": "writes detailed image prompts"},
+                 {"model": "llama3.1:8b", "size": "4.9 GB", "why": "default all-rounder"}],
     "comms": [{"model": "llama3.1:8b", "size": "4.9 GB", "why": "natural writing for drafts"},
               {"model": "gemma3:12b", "size": "8.1 GB", "why": "polished drafts"}],
 }
 # Bumped when DEFAULT_CREW gains new default models, so existing installs pick them up once.
-DEFAULTS_VERSION = 2
+DEFAULTS_VERSION = 3
 
 
 def _row(row: Any) -> dict[str, Any]:
@@ -110,7 +120,13 @@ def ensure_seeded() -> None:
                     "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?)",
                     (a["slug"], a["name"], a["role"], a["description"], a["persona"], a.get("model", ""),
                      json.dumps(a["tools"]), a["color"], a["icon"], db.now(), db.now()))
-        else:  # give untouched built-in agents their new default models
+        else:  # add new built-in agents and give untouched built-in agents their new default models
+            for a in DEFAULT_CREW:
+                conn.execute(
+                    "INSERT OR IGNORE INTO agents(slug, name, role, description, persona, model, tools, color, icon, builtin, "
+                    "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?)",
+                    (a["slug"], a["name"], a["role"], a["description"], a["persona"], a.get("model", ""),
+                     json.dumps(a["tools"]), a["color"], a["icon"], db.now(), db.now()))
             for a in DEFAULT_CREW:
                 if a.get("model"):
                     conn.execute("UPDATE agents SET model = ? WHERE slug = ? AND builtin = 1 AND model = ''",

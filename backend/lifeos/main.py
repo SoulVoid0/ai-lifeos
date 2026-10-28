@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, learning, llm, memory,
+from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, learning, llm, media, memory,
                missions, permissions, proactive, projects, scheduler, search, settings, tasks, tools, vault, workflows)
 
 log = logging.getLogger("lifeos")
@@ -602,6 +602,69 @@ def rate_task(task_id: int, body: RatingIn) -> dict[str, Any]:
 @app.post("/api/crew/agents/{slug}/chat")
 def chat_with_agent(slug: str, body: AgentChatIn) -> dict[str, Any]:
     return missions.talk(slug, body.message, [t.model_dump() for t in body.history])
+
+
+@app.get("/api/crew/agents/{slug}/activity")
+def agent_activity(slug: str) -> dict[str, Any]:
+    return missions.agent_activity(slug)
+
+
+class MediaIn(BaseModel):
+    kind: str = "image"
+    prompt: str = Field(..., min_length=3, max_length=2000)
+    negative: str = Field("", max_length=500)
+    size: str = "square"
+    seconds: int = Field(4, ge=1, le=10)
+    seed: int | None = None
+
+
+@app.get("/api/media/status")
+def media_status() -> dict[str, Any]:
+    return {**media.status(), "settings": media.cfg()}
+
+
+@app.patch("/api/media/settings")
+def media_settings(body: dict[str, Any]) -> dict[str, Any]:
+    out = media.update_cfg(body)
+    activity.log("settings", "Updated media settings: " + ", ".join(sorted(body)))
+    return out
+
+
+@app.get("/api/media")
+def list_media(kind: str | None = None, limit: int = 60) -> list[dict[str, Any]]:
+    return media.list_media(min(limit, 200), kind)
+
+
+@app.post("/api/media")
+def generate_media(body: MediaIn) -> dict[str, Any]:
+    try:
+        return media.generate(body.kind, body.prompt, negative=body.negative, size=body.size, seed=body.seed,
+                              frames=body.seconds * 24 + 1, wait=False)
+    except media.MediaError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+@app.get("/api/media/{media_id}")
+def get_media(media_id: int) -> dict[str, Any]:
+    return media.get(media_id)
+
+
+@app.get("/api/media/{media_id}/file")
+def media_file(media_id: int) -> FileResponse:
+    path, mime = media.file_for(media_id)
+    return FileResponse(path, media_type=mime)
+
+
+@app.post("/api/media/{media_id}/open")
+def open_media(media_id: int) -> dict[str, Any]:
+    path, _ = media.file_for(media_id)
+    files.launch(path)
+    return {"ok": True}
+
+
+@app.delete("/api/media/{media_id}")
+def delete_media(media_id: int) -> dict[str, Any]:
+    return media.delete(media_id)
 
 
 @app.get("/api/learning")

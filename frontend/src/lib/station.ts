@@ -4,15 +4,15 @@
 import type { AgentState } from "./api";
 
 export const TILE = 16;
-export const W = 48;
+export const W = 63;
 export const H = 30;
 
 export type Pt = { x: number; y: number };
 type Rect = { x: number; y: number; w: number; h: number };
 type Door = { side: "n" | "s" | "e" | "w"; at: number };
 type FurnKind = "desk" | "holo" | "board" | "plant" | "table" | "cabinet" | "rack" | "bench" | "printer" | "shelf" | "orb"
-  | "couch" | "coffee" | "arcade" | "radio" | "dish" | "mail" | "yourdesk" | "lab" | "scope";
-type Furn = Rect & { kind: FurnKind; owner?: string };
+  | "couch" | "coffee" | "arcade" | "radio" | "dish" | "mail" | "yourdesk" | "lab" | "scope" | "easel" | "frame" | "camera";
+export type Furn = Rect & { kind: FurnKind; owner?: string; use?: string };
 
 export interface Room extends Rect {
   id: string;
@@ -30,43 +30,83 @@ export const ROOMS: Room[] = [
   { id: "memory", name: "Memory Vault", owner: "memory", x: 1, y: 21, w: 13, h: 8, door: { side: "n", at: 6 } },
   { id: "lounge", name: "Lounge", x: 17, y: 21, w: 14, h: 8, door: { side: "n", at: 6 } },
   { id: "comms", name: "Comms Room", owner: "comms", x: 34, y: 21, w: 13, h: 8, door: { side: "n", at: 6 } },
+  { id: "studio", name: "Studio", owner: "creative", x: 50, y: 1, w: 12, h: 13, door: { side: "w", at: 7 } },
+  { id: "gallery", name: "Gallery", x: 50, y: 16, w: 12, h: 13, door: { side: "w", at: 4 } },
 ];
 
 const f = (kind: FurnKind, x: number, y: number, w = 1, h = 1, owner?: string): Furn => ({ kind, x, y, w, h, owner });
+const u = (use: string, it: Furn): Furn => ({ ...it, use });
 
 export const FURNITURE: Furn[] = [
   // planning
-  f("desk", 3, 3, 2, 1, "planner"), f("board", 7, 2, 4, 1), f("table", 7, 5, 3, 2), f("plant", 12, 2), f("plant", 2, 8),
+  f("desk", 3, 3, 2, 1, "planner"), u("planning", f("board", 7, 2, 4, 1)), f("table", 7, 5, 3, 2), f("plant", 12, 2), f("plant", 2, 8),
   // command
-  f("holo", 22, 3, 4, 2), f("desk", 19, 2, 2, 1, "overseer"), f("board", 27, 2, 2, 1), f("plant", 18, 8), f("plant", 29, 8),
+  u("missions", f("holo", 22, 3, 4, 2)), f("desk", 19, 2, 2, 1, "overseer"), u("missions", f("board", 27, 2, 2, 1)), f("plant", 18, 8), f("plant", 29, 8),
   // research
-  f("desk", 36, 3, 2, 1, "research"), f("lab", 40, 2, 4, 1), f("scope", 44, 6), f("plant", 35, 8), f("table", 39, 5, 2, 2),
+  f("desk", 36, 3, 2, 1, "research"), u("research", f("lab", 40, 2, 4, 1)), f("scope", 44, 6), f("plant", 35, 8), f("table", 39, 5, 2, 2),
   // archive
-  f("desk", 3, 13, 2, 1, "files"), f("cabinet", 7, 13), f("cabinet", 8, 13), f("cabinet", 9, 13), f("cabinet", 10, 13),
-  f("cabinet", 11, 13), f("cabinet", 7, 16), f("cabinet", 8, 16), f("cabinet", 9, 16), f("plant", 2, 17),
+  f("desk", 3, 13, 2, 1, "files"), ...[7, 8, 9, 10, 11].map((x) => u("files", f("cabinet", x, 13))), ...[7, 8, 9].map((x) => u("files", f("cabinet", x, 16))), f("plant", 2, 17),
   // workshop
-  f("desk", 36, 13, 2, 1, "coder"), f("bench", 40, 13, 3, 1), f("rack", 45, 13), f("rack", 45, 14), f("printer", 44, 16),
+  f("desk", 36, 13, 2, 1, "coder"), u("projects", f("bench", 40, 13, 3, 1)), u("models", f("rack", 45, 13)), u("models", f("rack", 45, 14)),
+  u("activity", f("printer", 44, 16)),
   // memory
-  f("shelf", 2, 22, 4, 1), f("shelf", 10, 22, 3, 1), f("desk", 3, 25, 2, 1, "memory"), f("orb", 10, 25), f("plant", 12, 27),
+  u("memory", f("shelf", 2, 22, 4, 1)), u("memory", f("shelf", 10, 22, 3, 1)), f("desk", 3, 25, 2, 1, "memory"), u("lessons", f("orb", 10, 25)), f("plant", 12, 27),
   // lounge
-  f("couch", 19, 24, 3, 1), f("couch", 19, 27, 3, 1), f("table", 23, 25, 2, 1), f("coffee", 29, 22), f("arcade", 27, 22),
+  f("couch", 19, 24, 3, 1), f("couch", 19, 27, 3, 1), f("table", 23, 25, 2, 1), u("coffee", f("coffee", 29, 22)), u("arcade", f("arcade", 27, 22)),
   f("plant", 18, 22), f("plant", 29, 27),
   // comms
-  f("desk", 36, 24, 2, 1, "comms"), f("radio", 41, 23, 3, 1), f("dish", 45, 27), f("mail", 35, 22, 3, 1), f("plant", 45, 22),
+  f("desk", 36, 24, 2, 1, "comms"), u("outbox", f("radio", 41, 23, 3, 1)), u("automations", f("dish", 45, 27)), u("outbox", f("mail", 35, 22, 3, 1)), f("plant", 45, 22),
   // hub
-  f("yourdesk", 22, 15, 4, 1), f("desk", 18, 12, 2, 1, "hot-0"), f("desk", 28, 12, 2, 1, "hot-1"),
+  // studio
+  f("desk", 52, 3, 2, 1, "creative"), u("easel", f("easel", 56, 3, 2, 2)), f("camera", 59, 7), f("table", 54, 8, 3, 2),
+  f("plant", 51, 12), f("plant", 60, 12), f("plant", 60, 2),
+  // gallery: the frames show the latest generated images
+  ...[51, 54, 57].map((x, i) => u(`frame:${i}`, f("frame", x, 17, 3, 1))),
+  ...[52, 56].map((x, i) => u(`frame:${i + 3}`, f("frame", x, 22, 3, 1))),
+  f("couch", 54, 25, 3, 1), f("plant", 51, 27), f("plant", 60, 27),
+  // hub
+  u("desk", f("yourdesk", 22, 15, 4, 1)), f("desk", 18, 12, 2, 1, "hot-0"), f("desk", 28, 12, 2, 1, "hot-1"),
   f("desk", 18, 18, 2, 1, "hot-2"), f("desk", 28, 18, 2, 1, "hot-3"), f("plant", 15, 10), f("plant", 32, 10),
 ];
 
 /** Where each agent stands to work (the tile in front of its desk, or the holo table for the Overseer). */
 export const SEATS: Record<string, Pt> = {
   planner: { x: 3, y: 4 }, overseer: { x: 23, y: 5 }, research: { x: 36, y: 4 }, files: { x: 3, y: 14 },
-  coder: { x: 36, y: 14 }, memory: { x: 3, y: 26 }, comms: { x: 36, y: 25 },
+  coder: { x: 36, y: 14 }, memory: { x: 3, y: 26 }, comms: { x: 36, y: 25 }, creative: { x: 52, y: 4 },
   "hot-0": { x: 18, y: 13 }, "hot-1": { x: 28, y: 13 }, "hot-2": { x: 18, y: 19 }, "hot-3": { x: 28, y: 19 },
 };
 export const PLAYER_START: Pt = { x: 23.5, y: 14.5 };
 export const QUEUE: Pt[] = [{ x: 22, y: 17 }, { x: 25, y: 17 }, { x: 20, y: 17 }, { x: 27, y: 17 }, { x: 23, y: 18 }, { x: 24, y: 18 }];
 export const YOUR_DESK = FURNITURE.find((x) => x.kind === "yourdesk")!;
+export const FRAMES = FURNITURE.filter((x) => x.kind === "frame");
+
+/** What pressing E (or clicking) on a prop does. */
+export const OBJECTS: Record<string, string> = {
+  desk: "use your desk: start a crew mission", missions: "open the mission board", planning: "check the planning board",
+  research: "open search", files: "browse the archive (Files)", projects: "open the project bench", models: "check the model rack",
+  activity: "read the activity printout", memory: "browse the memory library", lessons: "consult the lesson orb",
+  arcade: "play the arcade: crew high scores", coffee: "call a coffee break", outbox: "check the outbox",
+  automations: "tune the automation dish", easel: "paint something with Muse", frame: "look at this piece",
+};
+export const objectLabel = (use: string) => OBJECTS[use.split(":")[0]] ?? use;
+
+const distToRect = (p: Pt, r: Rect) => Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.w)), Math.max(r.y - p.y, 0, p.y - (r.y + r.h)));
+
+/** The interactive prop closest to p, within radius tiles. */
+export function nearObject(p: Pt, radius = 1.2): Furn | null {
+  let best: Furn | null = null, d = radius;
+  for (const it of FURNITURE) {
+    if (!it.use) continue;
+    const dd = distToRect(p, it);
+    if (dd < d) { d = dd; best = it; }
+  }
+  return best;
+}
+
+/** The prop under a clicked point (props are drawn a little taller than their tiles). */
+export function objectAt(p: Pt): Furn | null {
+  return FURNITURE.find((it) => it.use && p.x >= it.x && p.x < it.x + it.w && p.y >= it.y - 0.6 && p.y < it.y + it.h) ?? null;
+}
 
 // ---------------------------------------------------------------- grid and path finding
 
@@ -234,12 +274,14 @@ export function renderStatic(colors: Record<string, string>): HTMLCanvasElement 
     }
   // room floors
   for (const r of ROOMS) {
-    const tint = r.owner ? colors[r.owner] ?? "#94a3b8" : "#a78b6d";
+    const tint = r.owner ? colors[r.owner] ?? "#94a3b8" : r.id === "gallery" ? "#c084fc" : "#a78b6d";
     for (let y = r.y + 1; y < r.y + r.h - 1; y++)
       for (let x = r.x + 1; x < r.x + r.w - 1; x++) {
         px(x * TILE, y * TILE, TILE, TILE, mix("#1f2433", tint, (x + y) % 2 ? 0.1 : 0.14));
         px(x * TILE, y * TILE + TILE - 1, TILE, 1, mix("#171b26", tint, 0.08));
       }
+    if (r.id === "gallery") // carpet runner
+      for (let x = r.x + 2; x < r.x + r.w - 2; x++) px(x * TILE, (r.y + 7) * TILE + 3, TILE, TILE - 6, "#3b2f4f");
     if (r.id === "lounge") // rug
       for (let y = r.y + 3; y < r.y + 6; y++) for (let x = r.x + 5; x < r.x + 9; x++) px(x * TILE + 2, y * TILE + 2, TILE - 4, TILE - 4, "#5b3b4f");
   }
@@ -255,7 +297,7 @@ export function renderStatic(colors: Record<string, string>): HTMLCanvasElement 
   // door frames
   for (const r of ROOMS)
     for (const d of doorTiles(r)) {
-      const tint = r.owner ? colors[r.owner] ?? "#94a3b8" : "#a78b6d";
+      const tint = r.owner ? colors[r.owner] ?? "#94a3b8" : r.id === "gallery" ? "#c084fc" : "#a78b6d";
       if (r.door.side === "n" || r.door.side === "s") px(d.x * TILE, d.y * TILE + 6, TILE, 4, shade(tint, -0.35));
       else px(d.x * TILE + 6, d.y * TILE, 4, TILE, shade(tint, -0.35));
     }
@@ -351,6 +393,20 @@ function drawFurniture(g: CanvasRenderingContext2D, it: Furn, colors: Record<str
     case "scope":
       px(6, 8, 4, 8, "#6b7280"); px(2, 2, 12, 5, "#9ca3af"); px(12, 1, 3, 7, "#4b5563");
       break;
+    case "easel":
+      px(6, -4, 2, Ht + 4, "#7c4a2d"); px(Wd - 8, -4, 2, Ht + 4, "#7c4a2d"); px(Wd / 2 - 1, -6, 2, Ht + 6, "#6b3f24");
+      px(3, -3, Wd - 6, 18, "#f5f0e6"); px(3, 15, Wd - 6, 2, "#6b3f24");
+      px(6, 0, 8, 6, colors.creative ?? "#ec4899"); px(14, 4, 9, 7, "#38bdf8"); px(8, 8, 6, 4, "#facc15");
+      px(Wd - 5, Ht - 6, 4, 3, "#e5e7eb"); px(Wd - 4, Ht - 5, 1, 1, "#f43f5e"); px(Wd - 3, Ht - 5, 1, 1, "#22c55e");
+      break;
+    case "frame":
+      px(0, -6, Wd, 20, "#b08d57"); px(1, -5, Wd - 2, 18, "#8a6a3d"); px(2, -4, Wd - 4, 16, "#1b1f2b");
+      px(Wd / 2 - 3, 14, 6, 2, "#4b5563");
+      break;
+    case "camera":
+      px(7, 6, 2, 10, "#4b5563"); px(4, 14, 8, 2, "#374151"); px(2, 0, 11, 7, "#1f2937"); px(12, 2, 3, 3, "#64748b");
+      px(4, 2, 3, 2, "#ef4444");
+      break;
   }
 }
 
@@ -391,6 +447,9 @@ export function drawAmbient(g: CanvasRenderingContext2D, t: number, colors: Reco
     }
     if (it.kind === "radio")
       for (let k = 0; k < 6; k++) px(X + 4 + k * 7, Y + 7 + 4 - Math.round(2 + 2 * Math.sin(t * 5 + k)), 4, 1, "#f97316");
+    if (it.kind === "camera" && working.has("creative")) px(X + 4, Y + 2, 3, 2, Math.floor(t * 2) % 2 ? "#ef4444" : "#7f1d1d");
+    if (it.kind === "easel" && working.has("creative"))
+      for (let k = 0; k < 3; k++) px(X + 5 + ((Math.floor(t * 5) + k * 7) % 20), Y + 1 + k * 4, 3, 2, ["#f43f5e", "#a3e635", "#c084fc"][k]);
     if (it.kind === "arcade") px(X + 5, Y - 3 + (Math.floor(t * 3) % 4), 6, 2, ["#f43f5e", "#22d3ee", "#facc15", "#a3e635"][Math.floor(t) % 4]);
   }
 }
@@ -457,6 +516,9 @@ export function drawCharacter(g: CanvasRenderingContext2D, x: number, y: number,
       break;
     case "mail":
       px(-3, -17 + bob, 6, 2, hat); px(2, -19 + bob, 1, 2, "#fde68a");
+      break;
+    case "image": // beret
+      px(-4, -18 + bob, 8, 2, hat); px(-2, -19 + bob, 5, 1, hat); px(0, -20 + bob, 1, 1, shade(o.color, -0.5));
       break;
     case "player":
       px(-3, -17 + bob, 6, 2, "#1f2937"); px(-4, -16 + bob, 1, 3, "#1f2937"); px(3, -16 + bob, 1, 3, "#1f2937");

@@ -1046,3 +1046,28 @@ def talk(slug: str, message: str, history: list[dict[str, str]] | None = None) -
              f"My local model isn't reachable, so I can't chat freely, but press \"Give task\" and I'll work on "
              f"\"{message[:80]}\" with my tools.")
     return {"reply": reply, "model": None}
+
+
+def agent_activity(slug: str) -> dict[str, Any]:
+    """Everything the Station's agent panel shows: what it's doing now, its live log, recent work and what it learned."""
+    from . import media
+
+    crew.get(slug)
+    me = next(a for a in crew_status() if a["slug"] == slug)
+    with db.session() as conn:
+        log = db.rows_to_dicts(conn.execute(
+            "SELECT * FROM mission_events WHERE agent = ? ORDER BY id DESC LIMIT 25", (slug,)).fetchall(), ("data",))
+        recent = db.rows_to_dicts(conn.execute(
+            "SELECT t.id, t.mission_id, t.title, t.status, t.result, t.score, t.user_rating, t.model, t.steps, t.finished_at, "
+            "m.goal FROM mission_tasks t JOIN missions m ON m.id = t.mission_id WHERE t.agent = ? "
+            "ORDER BY t.id DESC LIMIT 6", (slug,)).fetchall())
+        task = None
+        if me.get("current") and me["current"].get("task_id"):
+            task = db.row_to_dict(conn.execute("SELECT id, title, instructions, status, steps, model, started_at "
+                                               "FROM mission_tasks WHERE id = ?", (me["current"]["task_id"],)).fetchone())
+    for r in recent:
+        r["result"] = (r["result"] or "")[:600]
+    last_tool = next((e for e in log if e["kind"] == "tool"), None)
+    card = next((c for c in learning.scorecard() if c["slug"] == slug), None)
+    return {"agent": me, "task": task, "last_tool": last_tool, "log": log, "recent_tasks": recent,
+            "lessons": learning.list_lessons(slug, limit=6), "media": media.list_media(8, agent=slug), "stats": card}

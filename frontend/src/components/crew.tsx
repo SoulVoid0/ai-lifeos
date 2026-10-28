@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight, Bot, Brain, CalendarDays, ChartColumn, Check, CircleCheck, CircleHelp, CircleStop, Code, Crown, Eye,
   BookOpen, Flag, Folder, Gauge, GraduationCap, Route, Info, ListTree, Mail, MessageSquare, Mic, MicOff, PenLine, Reply, Rocket, Search, Shield,
-  ShieldAlert, SkipForward, Sparkles, TriangleAlert, Wrench, type LucideIcon,
+  ShieldAlert, SkipForward, Sparkles, TriangleAlert, Wrench, Image, type LucideIcon,
 } from "lucide-react";
 import type { AgentState, Brief, MissionEvent } from "../lib/api";
 import { api } from "../lib/api";
@@ -15,7 +15,7 @@ export const AGENT_COLORS: Record<string, string> = {
 
 export const AGENT_ICONS: Record<string, LucideIcon> = {
   crown: Crown, calendar: CalendarDays, folder: Folder, search: Search, code: Code, brain: Brain, mail: Mail, bot: Bot,
-  pen: PenLine, shield: Shield, chart: ChartColumn, sparkles: Sparkles,
+  pen: PenLine, shield: Shield, chart: ChartColumn, sparkles: Sparkles, image: Image,
 };
 
 export const STATE_LABEL: Record<AgentState, string> = {
