@@ -8,17 +8,19 @@ import threading
 import time
 from typing import Callable
 
-from . import activity, db, files, memory, tasks
+from . import activity, db, files, integrations, memory, projects, settings, tasks, workflows
 
 log = logging.getLogger("lifeos.scheduler")
 
 
 def fire_reminders() -> int:
     due = tasks.due_reminders()
+    notify = settings.get("notification_prefs").get("reminders", True)
     for t in due:
-        with db.session() as conn:
-            conn.execute("INSERT INTO notifications(title, body, task_id, created_at) VALUES (?,?,?,?)",
-                         (f"Reminder: {t['title']}", t.get("notes"), t["id"], db.now()))
+        if notify:
+            with db.session() as conn:
+                conn.execute("INSERT INTO notifications(title, body, task_id, kind, created_at) VALUES (?,?,?,?,?)",
+                             (f"Reminder: {t['title']}", t.get("notes"), t["id"], "reminder", db.now()))
         tasks.mark_reminded(t["id"])
         activity.log("reminder", f"Reminder sent: {t['title']}", details={"task_id": t["id"]})
     return len(due)
@@ -30,7 +32,10 @@ class Scheduler:
         self._thread: threading.Thread | None = None
         self._jobs: list[tuple[str, float, Callable[[], object]]] = [
             ("reminders", 20, fire_reminders),
+            ("workflows", 30, workflows.run_due),
             ("reindex", 30 * 60, files.index_all),
+            ("projects", 30 * 60, projects.detect),
+            ("calendars", 30 * 60, integrations.sync_all),
             ("embed-memories", 10 * 60, memory.reembed_missing),
         ]
         self._last: dict[str, float] = {}

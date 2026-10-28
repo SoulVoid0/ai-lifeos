@@ -22,7 +22,7 @@ def get(action_id: int) -> dict[str, Any]:
 
 
 def create(tool: str, args: dict[str, Any], summary: str, preview: dict[str, Any],
-           conversation_id: int | None = None) -> dict[str, Any]:
+           conversation_id: int | None = None, mission_id: int | None = None) -> dict[str, Any]:
     with db.session() as conn:
         if preview.get("folder"):
             # A fresh plan for the same folder replaces older unapproved ones, which would be stale.
@@ -30,8 +30,10 @@ def create(tool: str, args: dict[str, Any], summary: str, preview: dict[str, Any
                 if json.loads(row["preview"] or "{}").get("folder") == preview["folder"]:
                     conn.execute("UPDATE actions SET status = 'superseded', decided_at = ? WHERE id = ?", (db.now(), row["id"]))
         cur = conn.execute(
-            "INSERT INTO actions(tool, args, summary, preview, status, conversation_id, created_at) VALUES (?,?,?,?,?,?,?)",
-            (tool, json.dumps(args), summary, json.dumps(preview, default=str), "pending", conversation_id, db.now()),
+            "INSERT INTO actions(tool, args, summary, preview, status, conversation_id, mission_id, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (tool, json.dumps(args), summary, json.dumps(preview, default=str), "pending", conversation_id, mission_id,
+             db.now()),
         )
         action = _get(conn, int(cur.lastrowid))
     activity.log("proposal", f"Proposed: {summary}", tool=tool, details={"args": args}, status="pending",

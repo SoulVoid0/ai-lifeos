@@ -9,12 +9,12 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (__version__, actions, activity, agent, config, conversations, files, llm, memory, permissions,
-               proactive, scheduler, search, settings, tasks, tools)
+from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, llm, memory,
+               missions, permissions, proactive, projects, scheduler, search, settings, tasks, tools, vault, workflows)
 
 log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
@@ -22,8 +22,13 @@ _scheduler = scheduler.Scheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    crew.ensure_seeded()
+    interrupted = missions.recover()
+    if interrupted:
+        activity.log("crew", f"Marked {interrupted} interrupted mission(s) as failed after a restart", status="error")
     if not os.environ.get("LIFEOS_NO_SCHEDULER"):
         _scheduler.start()
+        workflows.run_startup()
     scheduler.watch_parent()
     yield
     _scheduler.stop()
@@ -130,6 +135,101 @@ class PauseIn(BaseModel):
 
 class RenameIn(BaseModel):
     title: str = Field(..., min_length=1, max_length=80)
+
+
+class AgentIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=40)
+    slug: str | None = None
+    role: str = "Specialist"
+    description: str = ""
+    persona: str = ""
+    model: str = ""
+    tools: list[str] = []
+    color: str = "slate"
+    icon: str = "bot"
+    max_steps: int = 6
+
+
+class AgentPatch(BaseModel):
+    name: str | None = None
+    role: str | None = None
+    description: str | None = None
+    persona: str | None = None
+    model: str | None = None
+    tools: list[str] | None = None
+    color: str | None = None
+    icon: str | None = None
+    max_steps: int | None = None
+    enabled: bool | None = None
+
+
+class MissionIn(BaseModel):
+    goal: str = Field(..., min_length=1, max_length=8000)
+    agent: str | None = None
+
+
+class AnswerIn(BaseModel):
+    answer: str = Field(..., min_length=1, max_length=2000)
+
+
+class ModelIn(BaseModel):
+    model: str
+
+
+class KeyIn(BaseModel):
+    key: str = Field(..., min_length=1, max_length=500)
+
+
+class TextIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+
+
+class WorkflowIn(BaseModel):
+    name: str
+    description: str = ""
+    enabled: bool = True
+    trigger: dict[str, Any] = {"type": "manual"}
+    conditions: list[dict[str, Any]] = []
+    steps: list[dict[str, Any]]
+    source_text: str | None = None
+
+
+class ProjectIn(BaseModel):
+    path: str
+    name: str | None = None
+    description: str = ""
+
+
+class ProjectPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    status: str | None = None
+    pinned: bool | None = None
+
+
+class SourceIn(BaseModel):
+    location: str
+    label: str | None = None
+
+
+class EventIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+    start: str
+    end: str | None = None
+    location: str | None = None
+    description: str | None = None
+
+
+class EmailIn(BaseModel):
+    host: str
+    port: int = 993
+    username: str
+    folder: str = "INBOX"
+    password: str | None = None
+
+
+class NameIn(BaseModel):
+    name: str
 
 
 # ---------------------------------------------------------------- routes
@@ -376,6 +476,345 @@ def get_notifications(all: bool = False) -> list[dict[str, Any]]:
 def read_notifications(notification_id: int | None = None) -> dict[str, Any]:
     scheduler.mark_read(notification_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- crew and missions
+
+@app.get("/api/crew/agents")
+def list_agents() -> list[dict[str, Any]]:
+    return crew.list_agents()
+
+
+@app.post("/api/crew/agents")
+def create_agent(body: AgentIn) -> dict[str, Any]:
+    return crew.create(body.model_dump())
+
+
+@app.patch("/api/crew/agents/{slug}")
+def patch_agent(slug: str, body: AgentPatch) -> dict[str, Any]:
+    return crew.update(slug, body.model_dump(exclude_unset=True))
+
+
+@app.delete("/api/crew/agents/{slug}")
+def delete_agent(slug: str) -> dict[str, Any]:
+    return crew.delete(slug)
+
+
+@app.post("/api/crew/reset")
+def reset_crew() -> list[dict[str, Any]]:
+    return crew.reset_defaults()
+
+
+@app.get("/api/crew/status")
+def crew_status() -> dict[str, Any]:
+    return {"agents": missions.crew_status(), "briefs": missions.open_briefs(),
+            "active": missions.list_missions(20, "active"), "spend": llm.spend_today(),
+            "pending_actions": actions.list_actions("pending", 50)}
+
+
+@app.get("/api/crew/models")
+def crew_models() -> dict[str, Any]:
+    st = llm.status()
+    return {"local": st["models"], "ollama_ok": st["ok"], "providers": llm.providers(),
+            "cloud_enabled": settings.get("cloud_enabled"), "default": settings.get("chat_model")}
+
+
+@app.post("/api/crew/test-model")
+def crew_test_model(body: ModelIn) -> dict[str, Any]:
+    return llm.test_model(body.model)
+
+
+@app.get("/api/crew/pack")
+def export_pack() -> dict[str, Any]:
+    return crew.export_pack()
+
+
+@app.post("/api/crew/pack")
+def import_pack(body: dict[str, Any]) -> dict[str, Any]:
+    return crew.import_pack(body)
+
+
+@app.get("/api/missions")
+def list_missions(status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    return missions.list_missions(min(limit, 200), status)
+
+
+@app.post("/api/missions")
+def start_mission(body: MissionIn) -> dict[str, Any]:
+    return missions.start(body.goal, body.agent or None)
+
+
+@app.get("/api/missions/events")
+def mission_events(after: int = 0, mission_id: int | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    return missions.events(after, mission_id, min(limit, 1000))
+
+
+@app.post("/api/missions/stop-all")
+def stop_all_missions() -> dict[str, Any]:
+    return {"stopped": missions.stop_all()}
+
+
+@app.get("/api/missions/{mid}")
+def get_mission(mid: int) -> dict[str, Any]:
+    return missions.get(mid)
+
+
+@app.post("/api/missions/{mid}/cancel")
+def cancel_mission(mid: int) -> dict[str, Any]:
+    return missions.cancel(mid)
+
+
+@app.post("/api/missions/{mid}/retry")
+def retry_mission(mid: int) -> dict[str, Any]:
+    m = missions.get(mid)
+    return missions.start(m["goal"], m["target_agent"])
+
+
+@app.get("/api/briefs")
+def list_briefs() -> list[dict[str, Any]]:
+    return missions.open_briefs()
+
+
+@app.post("/api/briefs/{bid}/answer")
+def answer_brief(bid: int, body: AnswerIn) -> dict[str, Any]:
+    return missions.answer_brief(bid, body.answer)
+
+
+def _outbox_file(name: str) -> Path:
+    folder = tools.outbox_dir()
+    target = (folder / Path(name).name).resolve()
+    if target.parent != folder.resolve() or not target.is_file():
+        raise KeyError(f"No outbox file named {name}")
+    return target
+
+
+@app.get("/api/outbox")
+def list_outbox() -> list[dict[str, Any]]:
+    folder = tools.outbox_dir()
+    items = []
+    for p in sorted(folder.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if p.is_file():
+            st = p.stat()
+            items.append({"name": p.name, "path": str(p), "size": st.st_size,
+                          "modified_at": files._iso(st.st_mtime)})
+    return items
+
+
+@app.get("/api/outbox/file")
+def read_outbox(name: str) -> dict[str, Any]:
+    target = _outbox_file(name)
+    return {"name": target.name, "path": str(target), "text": target.read_text(encoding="utf-8", errors="replace")[:500_000]}
+
+
+@app.post("/api/outbox/open")
+def open_outbox(body: NameIn) -> dict[str, Any]:
+    target = _outbox_file(body.name)
+    files.launch(target)
+    return {"opened": str(target)}
+
+
+@app.delete("/api/outbox/{name}")
+def delete_outbox(name: str) -> dict[str, Any]:
+    target = _outbox_file(name)
+    target.unlink()
+    activity.log("data", f"Deleted outbox file {target.name}")
+    return {"ok": True}
+
+
+@app.get("/api/ledger")
+def get_ledger(days: int = 7) -> dict[str, Any]:
+    return llm.ledger(max(1, min(days, 365)))
+
+
+# ---------------------------------------------------------------- providers and credentials
+
+@app.get("/api/providers")
+def list_providers() -> dict[str, Any]:
+    return {"providers": llm.providers(), "vault": vault.backend(), "cloud_enabled": settings.get("cloud_enabled")}
+
+
+@app.put("/api/providers/{provider}/key")
+def set_provider_key(provider: str, body: KeyIn) -> dict[str, Any]:
+    if provider not in llm.PROVIDERS or provider == "ollama":
+        raise KeyError(f"Unknown provider {provider}")
+    vault.set_secret(llm.key_name(provider), body.key.strip())
+    activity.log("settings", f"Stored an API key for {provider}")
+    return {"ok": True}
+
+
+@app.delete("/api/providers/{provider}/key")
+def delete_provider_key(provider: str) -> dict[str, Any]:
+    if provider not in llm.PROVIDERS:
+        raise KeyError(f"Unknown provider {provider}")
+    vault.delete_secret(llm.key_name(provider))
+    activity.log("settings", f"Removed the API key for {provider}")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- workflows
+
+@app.get("/api/workflows")
+def list_workflows() -> list[dict[str, Any]]:
+    return workflows.list_workflows()
+
+
+@app.post("/api/workflows")
+def create_workflow(body: WorkflowIn) -> dict[str, Any]:
+    return workflows.create(body.model_dump())
+
+
+@app.get("/api/workflows/meta")
+def workflow_meta() -> dict[str, Any]:
+    return {"triggers": list(workflows.TRIGGERS), "metrics": workflows.METRICS, "ops": list(workflows.OPS),
+            "step_types": list(workflows.STEP_TYPES), "days": workflows.DAYS}
+
+
+@app.get("/api/workflows/templates")
+def workflow_templates() -> list[dict[str, Any]]:
+    return workflows.templates()
+
+
+@app.post("/api/workflows/draft")
+def draft_workflow(body: TextIn) -> dict[str, Any]:
+    return workflows.draft_from_text(body.text)
+
+
+@app.get("/api/workflow-runs")
+def all_workflow_runs(limit: int = 50) -> list[dict[str, Any]]:
+    return workflows.runs(None, min(limit, 500))
+
+
+@app.get("/api/workflows/{wid}")
+def get_workflow(wid: int) -> dict[str, Any]:
+    return workflows.get(wid)
+
+
+@app.patch("/api/workflows/{wid}")
+def patch_workflow(wid: int, body: dict[str, Any]) -> dict[str, Any]:
+    return workflows.update(wid, body)
+
+
+@app.delete("/api/workflows/{wid}")
+def delete_workflow(wid: int) -> dict[str, Any]:
+    return workflows.delete(wid)
+
+
+@app.post("/api/workflows/{wid}/run")
+def run_workflow(wid: int) -> dict[str, Any]:
+    workflows.run_async(wid, "manual")
+    return {"started": True}
+
+
+@app.get("/api/workflows/{wid}/runs")
+def workflow_runs(wid: int, limit: int = 30) -> list[dict[str, Any]]:
+    return workflows.runs(wid, min(limit, 500))
+
+
+# ---------------------------------------------------------------- projects
+
+@app.get("/api/projects")
+def list_projects(status: str | None = None) -> list[dict[str, Any]]:
+    return projects.list_projects(status)
+
+
+@app.post("/api/projects")
+def add_project(body: ProjectIn) -> dict[str, Any]:
+    return projects.add(body.path, body.name, body.description)
+
+
+@app.post("/api/projects/detect")
+def detect_projects() -> dict[str, Any]:
+    return projects.detect()
+
+
+@app.get("/api/projects/{pid}")
+def project_context(pid: int) -> dict[str, Any]:
+    return projects.context(pid)
+
+
+@app.patch("/api/projects/{pid}")
+def patch_project(pid: int, body: ProjectPatch) -> dict[str, Any]:
+    return projects.update(pid, body.model_dump(exclude_unset=True))
+
+
+@app.delete("/api/projects/{pid}")
+def delete_project(pid: int) -> dict[str, Any]:
+    return projects.delete(pid)
+
+
+# ---------------------------------------------------------------- calendar and email
+
+@app.get("/api/calendar/sources")
+def calendar_sources() -> list[dict[str, Any]]:
+    return integrations.list_sources()
+
+
+@app.post("/api/calendar/sources")
+def add_calendar_source(body: SourceIn) -> dict[str, Any]:
+    return integrations.add_source(body.location, body.label)
+
+
+@app.delete("/api/calendar/sources/{sid}")
+def remove_calendar_source(sid: int) -> dict[str, Any]:
+    integrations.remove_source(sid)
+    return {"ok": True}
+
+
+@app.post("/api/calendar/sources/{sid}/sync")
+def sync_calendar_source(sid: int) -> dict[str, Any]:
+    return integrations.sync_source(sid)
+
+
+@app.get("/api/calendar/overlaps")
+def calendar_overlaps(days: int = 14) -> list[dict[str, Any]]:
+    return integrations.overlaps(days)
+
+
+@app.get("/api/calendar/export.ics")
+def export_calendar() -> Response:
+    return Response(integrations.export_ics(), media_type="text/calendar",
+                    headers={"Content-Disposition": "attachment; filename=lifeos.ics"})
+
+
+@app.get("/api/events")
+def list_events(start: str | None = None, end: str | None = None) -> list[dict[str, Any]]:
+    return integrations.events(start, end)
+
+
+@app.post("/api/events")
+def create_event(body: EventIn) -> dict[str, Any]:
+    return integrations.add_event(body.title, body.start, body.end, body.location, body.description)
+
+
+@app.delete("/api/events/{eid}")
+def delete_event(eid: int) -> dict[str, Any]:
+    integrations.delete_event(eid)
+    return {"ok": True}
+
+
+@app.get("/api/email/status")
+def email_status() -> dict[str, Any]:
+    return integrations.email_status()
+
+
+@app.put("/api/email")
+def set_email(body: EmailIn) -> dict[str, Any]:
+    settings.update({"email": {"host": body.host.strip(), "port": body.port, "username": body.username.strip(),
+                               "folder": body.folder.strip() or "INBOX"}})
+    if body.password is not None:
+        integrations.set_email_password(body.password)
+    activity.log("settings", f"Email account set to {body.username}@{body.host}")
+    return integrations.email_status()
+
+
+@app.post("/api/email/test")
+def test_email() -> dict[str, Any]:
+    return integrations.test_email()
+
+
+@app.get("/api/email/messages")
+def email_messages(limit: int = 15, unread: bool = True) -> list[dict[str, Any]]:
+    return integrations.check_email(limit, unread)
 
 
 # Serve the built web UI when present (browser mode without Tauri).
