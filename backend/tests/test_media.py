@@ -143,11 +143,13 @@ def test_a1111_backend(client, monkeypatch):
     assert m["status"] == "done" and media.file_for(m["id"])[0].read_bytes() == PNG
 
 
-def test_muse_generates_through_tool(client, comfy):
+def test_lumen_generates_through_tool(client, comfy):
     from lifeos import tools
 
-    muse = next(a for a in client.get("/api/crew/agents").json() if a["slug"] == "creative")
-    assert muse["name"] == "Muse" and "generate_image" in muse["tools"]
+    crew = {a["slug"]: a for a in client.get("/api/crew/agents").json()}
+    assert crew["photo"]["name"] == "Lumen" and crew["photo"]["tools"] == ["generate_image", "list_media"]
+    assert crew["video"]["name"] == "Reel" and "generate_video" in crew["video"]["tools"]
+    assert "generate_image" not in crew["creative"]["tools"]  # Muse directs, Lumen and Reel generate
     out = tools.invoke("generate_image", {"prompt": "a cozy cabin in snow", "size": "null", "seed": "never"},
                        {"mission_id": None})
     assert out["status"] == "done", out
@@ -155,15 +157,84 @@ def test_muse_generates_through_tool(client, comfy):
     assert client.get(f"/api/media/{media_id}").json()["status"] == "done"
     listed = tools.invoke("list_media", {}, {})
     assert listed["status"] == "done" and listed["result"]["media"][0]["id"] == media_id
-    activity = client.get("/api/crew/agents/creative/activity").json()
-    assert activity["agent"]["slug"] == "creative" and isinstance(activity["log"], list)
+    activity = client.get("/api/crew/agents/photo/activity").json()
+    assert activity["agent"]["slug"] == "photo" and isinstance(activity["log"], list)
+
+
+def test_offline_mission_routes_pictures_to_lumen_and_clips_to_reel(client, comfy):
+    from lifeos import crew, rules
+
+    assert crew.agent_for_tool("generate_image") == "photo" and crew.agent_for_tool("generate_video") == "video"
+    p = rules.plan("make a 3 second video of waves on rocks")
+    assert p.steps == [{"tool": "generate_video", "args": {"prompt": "waves on rocks", "seconds": 3}}]
+    assert rules.plan("create a poster for my band").steps[0]["args"]["prompt"] == "poster for my band"
+    m = client.post("/api/missions", json={"goal": "generate an image of a red fox in snow"}).json()
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        cur = client.get(f"/api/missions/{m['id']}").json()
+        if cur["status"] in ("done", "failed"):
+            break
+        time.sleep(0.05)
+    assert cur["status"] == "done", cur
+    assert [t["agent"] for t in cur["tasks"]] == ["photo"]
+    items = client.get("/api/media", params={"agent": "photo"}).json()
+    assert items and items[0]["prompt"] == "a red fox in snow" and items[0]["mission_id"] == m["id"]
+    assert client.get("/api/media", params={"agent": "video"}).json() == []
+
+
+def test_gpu_jobs_run_one_at_a_time(client, comfy, monkeypatch):
+    import threading
+
+    from lifeos import media
+
+    running, peak, lock = [0], [0], threading.Lock()
+    real = media._comfy
+
+    def slow(*a, **k):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        time.sleep(0.15)
+        with lock:
+            running[0] -= 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(media, "_comfy", slow)
+    ids = [client.post("/api/media", json={"prompt": f"test image {i}"}).json()["id"] for i in range(3)]
+    assert all(wait_done(client, i)["status"] == "done" for i in ids)
+    assert peak[0] == 1
 
 
 def test_muse_added_on_upgrade(env):
     from lifeos import crew, db
 
     crew.ensure_seeded()
+    old = ["generate_image", "generate_video", "list_media", "search_memory", "save_to_outbox"]
     with db.session() as conn:
-        conn.execute("DELETE FROM agents WHERE slug = 'creative'")
-        conn.execute("UPDATE settings SET value = '2' WHERE key = 'crew_defaults_version'")
-    assert "creative" in [a["slug"] for a in crew.list_agents()]
+        conn.execute("DELETE FROM agents WHERE slug IN ('photo', 'video')")
+        conn.execute("UPDATE agents SET tools = ?, voice = '', quirks = '', catchphrases = '[]' WHERE slug = 'creative'",
+                     (json.dumps(old),))
+        conn.execute("UPDATE agents SET voice = '', quirks = '', catchphrases = '[]', idle_lines = '[]' WHERE slug = 'files'")
+        conn.execute("UPDATE agents SET quirks = 'my own quirk' WHERE slug = 'coder'")
+        conn.execute("UPDATE settings SET value = '3' WHERE key = 'crew_defaults_version'")
+    agents = {a["slug"]: a for a in crew.list_agents()}
+    assert {"creative", "photo", "video"} <= set(agents)
+    assert agents["creative"]["tools"] == ["list_media", "search_memory", "save_to_outbox"]
+    assert agents["files"]["catchphrases"][0] == "Everything in its folder." and agents["files"]["idle_lines"]
+    assert agents["coder"]["quirks"] == "my own quirk"  # edited personalities are kept
+
+
+def test_personality_is_editable_and_used_in_chat(client, monkeypatch):
+    from lifeos import llm
+
+    r = client.patch("/api/crew/agents/photo", json={"voice": "Speaks like a pirate", "catchphrases": ["Arr!", "Arr!", " "],
+                                                       "idle_lines": ["Ahoy"] * 20})
+    a = r.json()
+    assert a["voice"] == "Speaks like a pirate" and a["catchphrases"] == ["Arr!"] and a["idle_lines"] == ["Ahoy"]
+    seen = {}
+    monkeypatch.setattr(llm, "model_available", lambda ref=None: True)
+    monkeypatch.setattr(llm, "chat_text", lambda msgs, **k: seen.update(msgs=msgs) or "Arr, a fine shot.")
+    out = client.post("/api/crew/agents/photo/chat", json={"message": "hi"}).json()
+    system = seen["msgs"][0]["content"]
+    assert out["reply"] == "Arr, a fine shot." and "Speaks like a pirate" in system and "Arr!" in system
+    assert "chat mode" in system

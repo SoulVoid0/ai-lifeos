@@ -260,6 +260,10 @@ export interface Agent {
   wanted_model: string;
   model_missing: boolean;
   recommended: { model: string; size: string; why: string }[];
+  voice: string;
+  quirks: string;
+  catchphrases: string[];
+  idle_lines: string[];
 }
 
 export type AgentState = "idle" | "working" | "waiting" | "asking" | "offline";
@@ -723,7 +727,7 @@ export const api = {
     return res.text();
   },
   // media
-  media: (kind?: string, limit = 60) => get<MediaItem[]>(`/api/media${qs({ kind, limit })}`),
+  media: (kind?: string, limit = 60, agent?: string, since?: string) => get<MediaItem[]>(`/api/media${qs({ kind, limit, agent, since })}`),
   mediaItem: (id: number) => get<MediaItem>(`/api/media/${id}`),
   mediaStatus: () => get<MediaStatus>("/api/media/status"),
   generateMedia: (m: { kind: "image" | "video"; prompt: string; negative?: string; size?: string; seconds?: number; seed?: number | null }) =>

@@ -3,10 +3,12 @@ import { Save, Trash2, X, Zap } from "lucide-react";
 import { api, type Agent, type ToolInfo } from "../lib/api";
 import { useAsync } from "../lib/hooks";
 import { AGENT_COLORS, AGENT_ICONS, AgentAvatar } from "./crew";
+import { PersonalityFields } from "./Personality";
 import { Spinner, notifyChanged, useToast } from "./ui";
 
 const BLANK: Partial<Agent> = {
   name: "", role: "Specialist", description: "", persona: "", model: "", tools: [], color: "slate", icon: "bot", max_steps: 6, enabled: true, candidates: [],
+  voice: "", quirks: "", catchphrases: [], idle_lines: [],
 };
 
 const MODEL_HINTS = [
@@ -38,7 +40,8 @@ export function AgentEditor({ agent, tools, onClose }: { agent: Agent | null; to
     try {
       const body = { name: form.name, role: form.role, description: form.description, persona: form.persona, model: form.model,
         tools: form.tools, color: form.color, icon: form.icon, max_steps: form.max_steps, enabled: form.enabled,
-        candidates: form.candidates ?? [] };
+        candidates: form.candidates ?? [], voice: form.voice ?? "", quirks: form.quirks ?? "",
+        catchphrases: form.catchphrases ?? [], idle_lines: form.idle_lines ?? [] };
       if (creating) await api.createAgent({ ...body, name: form.name ?? "" });
       else await api.updateAgent(agent.slug, body);
       toast(creating ? `Recruited ${form.name}` : `Saved ${form.name}`);
@@ -145,6 +148,12 @@ export function AgentEditor({ agent, tools, onClose }: { agent: Agent | null; to
             <input type="checkbox" className="accent-[var(--color-accent)]" checked={form.enabled ?? true}
               disabled={agent?.slug === "overseer"} onChange={(e) => set("enabled", e.target.checked)} /> Enabled
           </label>
+        </div>
+
+        <div className="mt-4">
+          <div className="mb-2 text-sm font-semibold">Personality</div>
+          <PersonalityFields value={{ voice: form.voice ?? "", quirks: form.quirks ?? "", catchphrases: form.catchphrases ?? [], idle_lines: form.idle_lines ?? [] }}
+            onChange={(v) => setForm((f) => ({ ...f, ...v }))} />
         </div>
 
         <div className="mt-4">

@@ -22,6 +22,12 @@ are optional, per agent, and behind a daily budget.
 | **Forge**, Coder | Reads and writes code and project files | project context, read, `write_file` (with approval and undo) |
 | **Mnemo**, Memory | Recalls and saves what you told LifeOS | memory search/save |
 | **Herald**, Comms | Reads your inbox (read-only IMAP) and drafts messages | `check_email`, outbox |
+| **Muse**, Creative director | Turns vague ideas into briefs and prompts, plans series, reviews and captions the results | gallery, memory, outbox |
+| **Lumen**, Photographer | Generates images: photos, posters, wallpapers, logos, concept art | `generate_image` |
+| **Reel**, Video maker | Generates short clips (2–10 s) | `generate_video` |
+
+Every agent has its own personality (voice, quirks, catchphrases and idle lines on the Station), editable in the agent
+editor or the Station's **Personality** tab. Personality shapes chat and speech bubbles; task results stay plain.
 
 How a mission runs:
 
@@ -58,7 +64,7 @@ model, so nothing breaks.
 | Forge (Coder) | `qwen3-coder:30b` | 19 GB MoE (3B active). On a 16 GB card it spills ~3 GB to RAM and stays usable because only 3B parameters are active per token (needs 32 GB system RAM). With 16 GB RAM, or for speed, use `qwen2.5-coder:14b` (9 GB, fits fully) |
 | Scout, Herald | `llama3.1:8b` | `qwen3:8b`, `gemma3:12b` (8.1 GB) |
 | Mnemo | `llama3.1:8b` | `qwen3:4b` (2.6 GB) for speed |
-| Muse (Creative) | `llama3.1:8b` | `qwen3:8b`: writes the image prompts; the pictures come from the image backend below |
+| Muse, Lumen, Reel | `llama3.1:8b` | `qwen3:8b`: writes the prompts; the pictures and clips come from the image backend below |
 
 On one 16 GB GPU, set **Settings → Max parallel agents** to 1–2: two 9 GB models can't both stay loaded, and Ollama
 swapping them in and out is slower than running tasks one after another.
@@ -72,7 +78,8 @@ went wrong and lets it retry, and if an agent still can't finish it writes up wh
 **Station** (sidebar) is a pixel-art world of the crew. Each agent has a room; it walks to its desk when it is working
 (screens light up), wanders the lounge when idle, and comes to **your desk** with a `!` (approval) or `?` (question)
 when it needs you. Live events show as speech bubbles and delegations fly from the Command Deck. Walk with WASD/arrows
-or click; press **E** or click an agent to chat with it in character, give it a task, answer its question or approve
+or click; press **E** or click an agent to chat with it in character (**Chat only** mode is the default and can't start
+any work; switch to **Give a task** to make it act), answer its question or approve
 its proposal on the spot. Use your desk to launch a crew mission.
 
 Props are interactive too (walk up and press **E**, or click): the Command Deck holo table and board are the
@@ -80,15 +87,17 @@ Props are interactive too (walk up and press **E**, or click): the Command Deck 
 Projects, the server racks show which model each agent runs, the printer opens the activity log, the Memory Vault shelves
 are a searchable **memory library** and the orb lists the crew's **lessons**, the arcade shows the crew's **high scores**,
 the coffee machine sends idle agents on a break, the radio and mailboxes open the outbox, and the dish opens
-Automations. The **Studio** is Muse's room, where the easel generates images and clips, and the **Gallery** walls show
-your latest pictures (click a frame to view it).
+Automations. The **Studio** is where Muse, Lumen and Reel work, and its easel generates images and clips. The **Gallery**
+walls show your latest pictures (click a frame to view it), and its **photo album** and **video album** let you browse
+everything they've made, filtered by creator and date, full size, with ← → to flip through.
 
 Click an agent for its live view: **Now** (current task, step progress, model, last tool call and a live log),
 **Chat**, and **History** (recent work with review scores and your ratings, what it made, lessons learned, stats).
 
 ## Images and video
 
-**Gallery** (sidebar) and Muse, the creative agent, generate images and short clips. The default is local and free:
+**Gallery** (sidebar), Lumen (images) and Reel (video) generate pictures and short clips; Atlas sends them work when a
+task needs it, and Muse plans series. Jobs on a local GPU run one at a time. The default is local and free:
 
 - **ComfyUI** (recommended): images from any SDXL or Flux-schnell checkpoint, and 2–10 s clips with **LTX-Video**.
 - **Automatic1111 / Forge WebUI**: images only.
@@ -334,7 +343,7 @@ CI runs both on every push (`.github/workflows/ci.yml`).
 | 4 Automation engine | Done: workflows with triggers, conditions, steps, approvals, summaries, scheduler, editor, natural-language drafting, templates |
 | 5 Proactive intelligence | Done: deadline, clutter, duplicate, large-file, project-resume, calendar-overlap and workflow suggestions; daily summary; notification preferences and quiet hours |
 | 6 Integrations | Done: ICS calendars, read-only IMAP email, web search/fetch, cloud models per agent with budget, OS keychain |
-| 7 Advanced | Started: multi-agent crew with Control Center and pixel Station, learning loop (reviews, lessons, routing, training export), local image and video generation (ComfyUI, LTX-Video) with Muse and a gallery, voice dictation, crew packs. Next: cloud storage connectors, signed auto-updates |
+| 7 Advanced | Started: multi-agent crew with Control Center and pixel Station, learning loop (reviews, lessons, routing, training export), local image and video generation (ComfyUI, LTX-Video) with Muse, Lumen and Reel, albums, agent personalities, chat-only mode, voice dictation, crew packs. Next: cloud storage connectors, signed auto-updates |
 
 Packaging: `scripts/build-windows.ps1` (above). On other OSes run the same PyInstaller command and copy the
 binary to `frontend/src-tauri/binaries/lifeos-backend-<target-triple>`, then

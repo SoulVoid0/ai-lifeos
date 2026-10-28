@@ -132,6 +132,24 @@ def _clause(clause: str, plan: Plan, ctx: dict[str, Any]) -> bool:
     low = c.lower()
     refers_back = bool(re.search(r"\b(them|these|those|the ones|ones|it)\b", low))
 
+    # images and video ("make a picture of...", "generate a 5 second video of...")
+    m = re.match(r"^(?:please )?(?:can you |could you )?(?:generate|make|create|draw|paint|render|design)\s+(?:me\s+)?"
+                 r"(?:an?\s+|some\s+|\d+\s+)?(?:(\d+)[- ]?(?:s|sec|secs|second|seconds)\s+)?"
+                 r"(video|clip|animation|movie|image|picture|photo|illustration|poster|wallpaper|drawing|painting|art(?:work)?|logo)s?"
+                 r"\b(?:\s+(of|showing|with|for|about))?\s*(.*)$", c, re.I)
+    if m and len(m.group(4).strip()) >= 3:
+        noun = m.group(2).lower()
+        video = noun in ("video", "clip", "animation", "movie")
+        subject = m.group(4).strip().rstrip(".!")
+        # "a poster for my band" keeps the kind of picture; "an image of a cat" is just "a cat".
+        if noun not in ("video", "clip", "movie", "image", "picture", "photo"):
+            subject = " ".join(x for x in (noun, m.group(3), subject) if x)
+        args = {"prompt": subject}
+        if video and m.group(1):
+            args["seconds"] = max(1, min(int(m.group(1)), 10))
+        plan.steps.append({"tool": "generate_video" if video else "generate_image", "args": args})
+        return True
+
     # remember / forget
     m = re.match(r"^(?:please )?(?:remember|note|keep in mind)(?: that)?\s+(.+)$", c, re.I)
     if m and not low.startswith("remind"):
