@@ -26,6 +26,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+export interface OldData { found: string | null; imported: boolean; pending: boolean }
 export interface UpdateConfig { repo: string; has_token: boolean }
 
 const get = <T>(p: string) => request<T>("GET", p);
@@ -754,6 +755,8 @@ export const api = {
   },
   services: () => get<Services>("/api/system/services"),
   startService: (name: "ollama" | "comfyui") => post<Services & { ok: boolean }>(`/api/system/services/${name}/start`),
+  oldData: () => get<OldData>("/api/system/old-data"),
+  importOldData: () => post<OldData>("/api/system/old-data/import"),
   updateConfig: () => get<UpdateConfig>("/api/system/update/config"),
   setUpdateConfig: (c: { repo?: string; token?: string }) => patch<UpdateConfig>("/api/system/update/config", c),
   agentActivity: (slug: string) => get<AgentActivity>(`/api/crew/agents/${slug}/activity`),

@@ -306,7 +306,7 @@ app, the shortcuts and `python -m lifeos` all share it.
 Python from the Microsoft Store keeps what it writes to `%APPDATA%` in a private folder
 (`%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.*\LocalCache\Roaming\AI-LifeOS`), so data made with
 `python -m lifeos` from Store Python isn't visible to the app. On its first start the app copies that data over once
-when it holds more than the app's own (the app's previous database is kept in `backup-before-import-*`).
+when it holds at least as much as the app's own, not counting settings or agent models (the app's previous database is kept in `backup-before-import-*`). Settings → *Data from before the app* forces the import on the next start.
 
 ### Updates without building
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, KeyRound, Loader2, RefreshCw, Save } from "lucide-react";
+import { DatabaseBackup, Download, KeyRound, Loader2, RefreshCw, Save } from "lucide-react";
 import { api } from "../lib/api";
 import { useAsync } from "../lib/hooks";
 import { appVersion, checkUpdate, installUpdate, isDesktop, onDesktopEvent, type UpdateInfo } from "../lib/desktop";
@@ -131,6 +131,36 @@ export function UpdateSettings() {
         </div>
       )}
       <p className="mt-2 text-xs text-muted">The token is stored in Windows Credential Manager. It only needs read access to this repository's contents. Every update is checked against the signing key built into the app before it installs; your data in %APPDATA%\AI-LifeOS is never touched.</p>
+    </Section>
+  );
+}
+
+/** Shown when LifeOS once ran with Microsoft Store Python, whose data lives in a folder the app can't see. */
+export function OldDataSettings() {
+  const toast = useToast();
+  const d = useAsync(() => api.oldData(), []);
+  if (!d.data?.found) return null;
+  const { found, imported, pending } = d.data;
+  const go = async () => {
+    try {
+      await api.importOldData();
+      d.reload();
+      toast("Quit AI LifeOS from the tray and open it again to import");
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  };
+  return (
+    <Section title="Data from before the app" icon={<DatabaseBackup size={15} className="text-accent" />}
+      actions={<button className="btn-outline" onClick={go} disabled={pending}>{pending ? "Imports on next start" : imported ? "Import again" : "Import old data"}</button>}>
+      <p className="text-sm">
+        {imported ? "Imported. " : ""}Data saved while LifeOS ran with Microsoft Store Python (agents' models, folders, lessons, gallery, chats)
+        is in <code className="break-all text-xs">{found}</code>.
+      </p>
+      <p className="mt-1 text-xs text-muted">
+        {pending ? "Quit AI LifeOS from the tray and open it again; it imports before loading anything. "
+          : "Importing replaces what's in the app now. "}The app's current database is kept in a backup-before-import folder in %APPDATA%\AI-LifeOS.
+      </p>
     </Section>
   );
 }
