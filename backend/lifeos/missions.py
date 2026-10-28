@@ -441,7 +441,9 @@ def _llm_plan(mid: int, m: dict[str, Any], overseer: dict[str, Any]) -> dict[str
               "If the goal is a simple question or greeting that needs no tools, return no tasks and answer in reply.\n"
               "If the goal is too ambiguous to plan (you would have to guess something important), return no tasks and "
               "ask one concrete question with 2-4 short options.\n"
-              "Never plan work no agent's tools can do; say so in reply instead.")
+              "Never plan work no agent's tools can do; say so in reply instead.\n"
+              "Pictures go to the agent with generate_image and clips to the agent with generate_video, one task per "
+              "piece; add a creative-director task first only when the request is vague or needs a series planned.")
     _ctx[mid]["categorizer"] = _categorizer()
     messages = [{"role": "system", "content": system}, {"role": "user", "content": m["goal"]}]
     slugs = [a["slug"] for a in team] or [crew.OVERSEER]
@@ -1018,6 +1020,17 @@ def wait(mid: int, timeout: float = 3600) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- talking to an agent (Control Center, world)
 
+def _personality(agent: dict[str, Any]) -> str:
+    parts = []
+    if agent.get("voice"):
+        parts.append(f"Your voice: {agent['voice']}")
+    if agent.get("quirks"):
+        parts.append(f"Your quirks: {agent['quirks']}")
+    if agent.get("catchphrases"):
+        parts.append("Catchphrases you sometimes use: " + " | ".join(agent["catchphrases"]))
+    return "\n".join(parts) or agent.get("persona", "")
+
+
 def talk(slug: str, message: str, history: list[dict[str, str]] | None = None) -> dict[str, Any]:
     """A quick in-character chat with one agent. No tools run; to make it act, start a mission for it."""
     agent = crew.get(slug)
@@ -1028,10 +1041,12 @@ def talk(slug: str, message: str, history: list[dict[str, str]] | None = None) -
     tools_list = ", ".join(agent["tools"]) or "none"
     if llm.model_available(agent["effective_model"]):
         system = (f"You are {agent['name']}, the {agent['role']} on the user's LifeOS crew, chatting with the user in the "
-                  f"crew's station. {agent['persona']}\n{doing}\nYour tools (only usable during a mission): {tools_list}.\n"
+                  f"crew's station. {agent['description']}\n{_personality(agent)}\n{doing}\n"
+                  f"Your tools (only usable during a task): {tools_list}.\n"
                   + (learning.playbook_text(lessons) + "\n" if lessons else "")
-                  + "Reply in character, briefly (1-4 sentences). You cannot act in this chat: if the user wants something "
-                    "done, say what you would do and tell them to press \"Give task\" so you can start.")
+                  + "This is chat mode: just talk. Reply in character, briefly (1-4 sentences), with your own voice and "
+                    "an occasional catchphrase (not every time). You cannot act in this chat and must not claim you did: "
+                    "if the user wants something done, say how you'd approach it and tell them to switch to Task mode.")
         msgs = [{"role": "system", "content": system}]
         for h in (history or [])[-10:]:
             if h.get("role") in ("user", "assistant") and h.get("content"):
@@ -1042,9 +1057,10 @@ def talk(slug: str, message: str, history: list[dict[str, str]] | None = None) -
                 return {"reply": llm.chat_text(msgs, model=agent["effective_model"]), "model": agent["effective_model"]}
         except Exception as exc:  # fall through to the canned reply
             activity.log("crew", f"Chat with {agent['name']} fell back: {exc}"[:200], status="error")
-    reply = (f"I'm {agent['name']}, the {agent['role'].lower()}. {agent['description']} {doing} "
-             f"My local model isn't reachable, so I can't chat freely, but press \"Give task\" and I'll work on "
-             f"\"{message[:80]}\" with my tools.")
+    hello = (agent.get("catchphrases") or [""])[0]
+    reply = (f"{hello} I'm {agent['name']}, the {agent['role'].lower()}. {agent['description']} {doing} "
+             f"My local model isn't reachable, so I can't chat freely. Switch to Task mode if you want me to work on "
+             f"\"{message[:80]}\".").strip()
     return {"reply": reply, "model": None}
 
 

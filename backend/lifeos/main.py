@@ -149,6 +149,10 @@ class AgentIn(BaseModel):
     icon: str = "bot"
     max_steps: int = 6
     candidates: list[str] = []
+    voice: str = ""
+    quirks: str = ""
+    catchphrases: list[str] = []
+    idle_lines: list[str] = []
 
 
 class AgentPatch(BaseModel):
@@ -163,6 +167,10 @@ class AgentPatch(BaseModel):
     max_steps: int | None = None
     enabled: bool | None = None
     candidates: list[str] | None = None
+    voice: str | None = None
+    quirks: str | None = None
+    catchphrases: list[str] | None = None
+    idle_lines: list[str] | None = None
 
 
 class LessonIn(BaseModel):
@@ -631,8 +639,9 @@ def media_settings(body: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/api/media")
-def list_media(kind: str | None = None, limit: int = 60) -> list[dict[str, Any]]:
-    return media.list_media(min(limit, 200), kind)
+def list_media(kind: str | None = None, agent: str | None = None, since: str | None = None,
+               limit: int = 60) -> list[dict[str, Any]]:
+    return media.list_media(min(limit, 500), kind, agent or None, since or None)
 
 
 @app.post("/api/media")

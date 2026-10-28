@@ -69,7 +69,7 @@ export default function World() {
         act = makeActor(a.slug, a.name, colorOf(a.color), a.icon, a.state === "idle" ? randomFloor(LOUNGE) : seatFor(a.slug, extras));
         map.set(a.slug, act);
       }
-      Object.assign(act, { name: a.name, color: colorOf(a.color), icon: a.icon, state: a.state });
+      Object.assign(act, { name: a.name, color: colorOf(a.color), icon: a.icon, state: a.state, idleLines: a.idle_lines ?? [] });
     }
     for (const slug of [...map.keys()]) if (!agents.some((a) => a.slug === slug)) map.delete(slug);
     const needYou = agents.filter((a) => a.state === "waiting" || a.state === "asking").map((a) => a.slug);
@@ -227,6 +227,12 @@ export default function World() {
           a.path = findPath(a.pos, randomFloor(room));
           a.targetKey = `wander-${now}`;
           a.nextWander = now + 4000 + Math.random() * 8000;
+        }
+        // Idle crew mutter their personality lines now and then.
+        if (a.state === "idle" && a.idleLines.length && now > a.nextChatter) {
+          if (!a.bubble || now > a.bubble.until)
+            a.bubble = { text: a.idleLines[Math.floor(Math.random() * a.idleLines.length)], until: now + 4000 };
+          a.nextChatter = now + 18000 + Math.random() * 30000;
         }
         step(a, dt, SPEED);
         if (!a.path.length && a.targetKey === "seat") a.facing = a.state === "offline" ? "down" : "up";

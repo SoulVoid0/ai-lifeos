@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Activity, Archive, BookOpen, Brain, CalendarDays, Cpu, ExternalLink, FolderGit2, Gamepad2, ImageIcon, Inbox,
+  Activity, Archive, BookOpen, Brain, CalendarDays, Cpu, Film, ExternalLink, FolderGit2, Gamepad2, ImageIcon, Inbox,
   MessageCircle, Network, Rocket, Search, Send, Star, ThumbsDown, ThumbsUp, Trophy, Workflow, Wrench, X,
 } from "lucide-react";
 import { api, type AgentStatus, type MediaItem, type Mission } from "../lib/api";
@@ -10,7 +10,8 @@ import { ago, when } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { ApprovalCard } from "./ApprovalCard";
 import { AgentAvatar, BriefCard, EventIcon, STATE_LABEL, STATE_TONE, colorOf } from "./crew";
-import { GenerateForm, MediaView } from "./media";
+import { GenerateForm, MediaAlbum, MediaView } from "./media";
+import { PersonalityEditor } from "./Personality";
 import { Empty, Spinner, notifyChanged, useToast } from "./ui";
 
 type Chat = { role: "user" | "assistant"; content: string }[];
@@ -43,8 +44,11 @@ const Stars = ({ score }: { score: number | null }) => score == null ? null : (
 export function AgentPanel({ agent, onClose }: { agent: AgentStatus; onClose: () => void }) {
   const toast = useToast();
   const navigate = useNavigate();
-  const [tab, setTab] = useState<"now" | "chat" | "history">(agent.state === "idle" ? "chat" : "now");
-  const greeting: Chat = [{ role: "assistant", content: `Hi, I'm ${agent.name}, the ${agent.role.toLowerCase()}. ${agent.description}` }];
+  const [tab, setTab] = useState<"now" | "chat" | "history" | "profile">(agent.state === "idle" ? "chat" : "now");
+  // Chat mode is the default: talking never starts work. Task mode has to be picked on purpose.
+  const [mode, setMode] = useState<"chat" | "task">("chat");
+  const hello = agent.catchphrases?.[0] ? `${agent.catchphrases[0]} ` : "";
+  const greeting: Chat = [{ role: "assistant", content: `${hello}I'm ${agent.name}, the ${agent.role.toLowerCase()}. ${agent.description}` }];
   const [chat, setChat] = useState<Chat>(() => chats.get(agent.slug) ?? greeting);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -58,6 +62,7 @@ export function AgentPanel({ agent, onClose }: { agent: AgentStatus; onClose: ()
   useEffect(() => {
     setChat(chats.get(agent.slug) ?? greeting);
     setTab(agent.state === "idle" ? "chat" : "now");
+    setMode("chat");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agent.slug]);
   useEffect(() => { chats.set(agent.slug, chat); endRef.current?.scrollIntoView({ block: "end" }); }, [chat, agent.slug, tab]);
@@ -80,16 +85,18 @@ export function AgentPanel({ agent, onClose }: { agent: AgentStatus; onClose: ()
     }
   };
   const giveTask = async () => {
-    const goal = text.trim() || [...chat].reverse().find((m) => m.role === "user")?.content;
-    if (!goal) { toast("Type what you want done first", "error"); return; }
+    const goal = text.trim();
+    if (mode !== "task" || !goal || busy) return;
+    setBusy(true);
     try {
       const m = await api.startMission(goal, agent.slug);
-      setChat([...chat, ...(text.trim() ? [{ role: "user" as const, content: goal }] : []),
+      setChat([...chat, { role: "user", content: `Task: ${goal}` },
         { role: "assistant", content: `On it. Mission #${m.id} started; watch me head to my desk.` }]);
       setText("");
+      setMode("chat");
       setTab("now");
       notifyChanged();
-    } catch (e) { toast((e as Error).message, "error"); }
+    } catch (e) { toast((e as Error).message, "error"); } finally { setBusy(false); }
   };
 
   const a = act.data;
@@ -105,19 +112,40 @@ export function AgentPanel({ agent, onClose }: { agent: AgentStatus; onClose: ()
           {agent.model_missing && <span className="chip border-warn/40 px-1 py-0 text-[9px] text-warn" title={`${agent.wanted_model} isn't pulled yet`}>fallback</span>}
         </div>
         <div className="mt-2 flex gap-1">
-          {(["now", "chat", "history"] as const).map((t) => (
+          {(["now", "chat", "history", "profile"] as const).map((t) => (
             <button key={t} onClick={() => setTab(t)} className={`rounded-md px-2 py-0.5 text-xs ${tab === t ? "bg-accent text-white" : "text-muted hover:bg-panel-2"}`}>
-              {t === "now" ? "Now" : t === "chat" ? "Chat" : "History"}
+              {{ now: "Now", chat: "Chat", history: "History", profile: "Personality" }[t]}
             </button>
           ))}
         </div>
       </>}
       footer={<>
-        <textarea className="input min-h-16 text-sm" placeholder={`Say something to ${agent.name}, or describe a task…`} value={text}
-          onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); say(); } }} />
-        <div className="mt-2 flex gap-2">
-          <button className="btn-outline flex-1" onClick={say} disabled={busy || !text.trim()}><MessageCircle size={14} /> Talk</button>
-          <button className="btn-primary flex-1" onClick={giveTask} disabled={agent.state === "offline"}><Rocket size={14} /> Give task</button>
+        <div className="mb-2 flex items-center gap-1 rounded-lg border border-line p-0.5 text-xs" role="radiogroup" aria-label="Mode">
+          <button role="radio" aria-checked={mode === "chat"} onClick={() => setMode("chat")}
+            className={`flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 ${mode === "chat" ? "bg-accent text-white" : "text-muted hover:bg-panel-2"}`}>
+            <MessageCircle size={12} /> Chat only
+          </button>
+          <button role="radio" aria-checked={mode === "task"} onClick={() => setMode("task")} disabled={agent.state === "offline"}
+            className={`flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 ${mode === "task" ? "bg-warn text-black" : "text-muted hover:bg-panel-2"}`}>
+            <Rocket size={12} /> Give a task
+          </button>
+        </div>
+        {mode === "task" && (
+          <div className="mb-2 rounded-lg border border-warn/50 bg-warn/10 px-2 py-1 text-[11px] text-warn">
+            Task mode: {agent.name} will start working on what you type here, using its tools (changes still ask for approval).
+          </div>
+        )}
+        <textarea className={`input min-h-16 text-sm ${mode === "task" ? "border-warn/60" : ""}`}
+          placeholder={mode === "chat" ? `Chat with ${agent.name}. Nothing gets done in chat mode.` : `Describe the task for ${agent.name}…`} value={text}
+          onChange={(e) => setText(e.target.value)} onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (mode === "chat") say(); }
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && mode === "task") giveTask();
+          }} />
+        <div className="mt-2">
+          {mode === "chat"
+            ? <button className="btn-outline w-full" onClick={say} disabled={busy || !text.trim()}><MessageCircle size={14} /> Send</button>
+            : <button className="btn-primary w-full" onClick={giveTask} disabled={busy || !text.trim()}><Rocket size={14} /> Start task (Ctrl+Enter)</button>}
         </div>
       </>}>
       {briefs.map((b) => <BriefCard key={b.id} brief={b} agentName={agent.name} onAnswered={() => { mission.reload(); notifyChanged(); }} />)}
@@ -189,6 +217,8 @@ export function AgentPanel({ agent, onClose }: { agent: AgentStatus; onClose: ()
           <div ref={endRef} />
         </div>
       )}
+
+      {tab === "profile" && <PersonalityEditor agent={agent} />}
 
       {tab === "history" && (!a ? <Spinner /> : (
         <>
@@ -288,6 +318,7 @@ export function ObjectPanel({ use, agents, frames, onClose, onCompose }: {
         </Shell>
       );
     }
+    case "album": return <AlbumOverlay kind={use.endsWith("video") ? "video" : "image"} agents={agents} onClose={onClose} />;
     case "desk": onCompose(); return null;
     default: return null;
   }
@@ -439,8 +470,8 @@ function Easel({ onClose }: { onClose: () => void }) {
   const askMuse = async () => {
     if (!idea.trim()) return;
     try {
-      const m = await api.startMission(idea.trim(), "creative");
-      toast(`Muse is on it (mission #${m.id})`);
+      const m = await api.startMission(idea.trim(), null);
+      toast(`The studio is on it (mission #${m.id})`);
       setIdea("");
       notifyChanged();
     } catch (e) { toast((e as Error).message, "error"); }
@@ -451,7 +482,7 @@ function Easel({ onClose }: { onClose: () => void }) {
       footer={<button className="btn-outline w-full" onClick={() => navigate("/gallery")}><ExternalLink size={14} /> Open the Gallery</button>}>
       <GenerateForm compact videoOk={!status.data || status.data.video} onStarted={() => recent.reload()} />
       <div className="border-t border-line pt-3">
-        <div className="mb-1 text-xs text-muted">Or brief Muse, who writes a better prompt and can make a series:</div>
+        <div className="mb-1 text-xs text-muted">Or brief the studio: Atlas has Muse plan it and Lumen or Reel make it.</div>
         <div className="flex gap-2">
           <input className="input" placeholder="3 album covers for a lo-fi playlist" value={idea} onChange={(e) => setIdea(e.target.value)}
             onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") askMuse(); }} />
@@ -462,5 +493,22 @@ function Easel({ onClose }: { onClose: () => void }) {
         <div className="grid grid-cols-3 gap-1">{recent.data.map((m) => <MediaView key={m.id} m={m} className="aspect-square w-full rounded" />)}</div>
       )}
     </Shell>
+  );
+}
+
+function AlbumOverlay({ kind, agents, onClose }: { kind: "image" | "video"; agents: AgentStatus[]; onClose: () => void }) {
+  const creators = agents.filter((a) => a.tools.some((t) => t.startsWith("generate_")) || ["creative", "photo", "video"].includes(a.slug));
+  return (
+    <div className="absolute inset-0 z-10 flex flex-col bg-bg/95 p-4 backdrop-blur" onClick={(e) => e.stopPropagation()}>
+      <div className="mb-3 flex items-center gap-2">
+        {kind === "image" ? <ImageIcon size={18} className="text-accent" /> : <Film size={18} className="text-accent" />}
+        <div className="font-semibold">{kind === "image" ? "Photo album" : "Video album"}</div>
+        <div className="text-xs text-muted">{kind === "image" ? "Everything Lumen, Muse and you have made" : "Every clip Reel has rendered"}</div>
+        <button className="btn-ghost ml-auto" onClick={onClose} aria-label="Close"><X size={16} /></button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <MediaAlbum kind={kind} creators={creators} columns="grid-cols-2 sm:grid-cols-4 xl:grid-cols-6" />
+      </div>
+    </div>
   );
 }

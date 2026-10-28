@@ -11,7 +11,7 @@ export type Pt = { x: number; y: number };
 type Rect = { x: number; y: number; w: number; h: number };
 type Door = { side: "n" | "s" | "e" | "w"; at: number };
 type FurnKind = "desk" | "holo" | "board" | "plant" | "table" | "cabinet" | "rack" | "bench" | "printer" | "shelf" | "orb"
-  | "couch" | "coffee" | "arcade" | "radio" | "dish" | "mail" | "yourdesk" | "lab" | "scope" | "easel" | "frame" | "camera";
+  | "couch" | "coffee" | "arcade" | "radio" | "dish" | "mail" | "yourdesk" | "lab" | "scope" | "easel" | "frame" | "camera" | "album" | "reels";
 export type Furn = Rect & { kind: FurnKind; owner?: string; use?: string };
 
 export interface Room extends Rect {
@@ -59,11 +59,12 @@ export const FURNITURE: Furn[] = [
   // hub
   // studio
   f("desk", 52, 3, 2, 1, "creative"), u("easel", f("easel", 56, 3, 2, 2)), f("camera", 59, 7), f("table", 54, 8, 3, 2),
-  f("plant", 51, 12), f("plant", 60, 12), f("plant", 60, 2),
+  f("plant", 51, 12), f("plant", 60, 12), f("plant", 60, 2), f("desk", 52, 10, 2, 1, "photo"), f("desk", 57, 10, 2, 1, "video"),
   // gallery: the frames show the latest generated images
   ...[51, 54, 57].map((x, i) => u(`frame:${i}`, f("frame", x, 17, 3, 1))),
   ...[52, 56].map((x, i) => u(`frame:${i + 3}`, f("frame", x, 22, 3, 1))),
   f("couch", 54, 25, 3, 1), f("plant", 51, 27), f("plant", 60, 27),
+  u("album:image", f("album", 51, 24)), u("album:video", f("reels", 60, 24)),
   // hub
   u("desk", f("yourdesk", 22, 15, 4, 1)), f("desk", 18, 12, 2, 1, "hot-0"), f("desk", 28, 12, 2, 1, "hot-1"),
   f("desk", 18, 18, 2, 1, "hot-2"), f("desk", 28, 18, 2, 1, "hot-3"), f("plant", 15, 10), f("plant", 32, 10),
@@ -73,6 +74,7 @@ export const FURNITURE: Furn[] = [
 export const SEATS: Record<string, Pt> = {
   planner: { x: 3, y: 4 }, overseer: { x: 23, y: 5 }, research: { x: 36, y: 4 }, files: { x: 3, y: 14 },
   coder: { x: 36, y: 14 }, memory: { x: 3, y: 26 }, comms: { x: 36, y: 25 }, creative: { x: 52, y: 4 },
+  photo: { x: 52, y: 11 }, video: { x: 57, y: 11 },
   "hot-0": { x: 18, y: 13 }, "hot-1": { x: 28, y: 13 }, "hot-2": { x: 18, y: 19 }, "hot-3": { x: 28, y: 19 },
 };
 export const PLAYER_START: Pt = { x: 23.5, y: 14.5 };
@@ -87,8 +89,9 @@ export const OBJECTS: Record<string, string> = {
   activity: "read the activity printout", memory: "browse the memory library", lessons: "consult the lesson orb",
   arcade: "play the arcade: crew high scores", coffee: "call a coffee break", outbox: "check the outbox",
   automations: "tune the automation dish", easel: "paint something with Muse", frame: "look at this piece",
+  "album:image": "browse the photo album", "album:video": "browse the video album",
 };
-export const objectLabel = (use: string) => OBJECTS[use.split(":")[0]] ?? use;
+export const objectLabel = (use: string) => OBJECTS[use] ?? OBJECTS[use.split(":")[0]] ?? use;
 
 const distToRect = (p: Pt, r: Rect) => Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.w)), Math.max(r.y - p.y, 0, p.y - (r.y + r.h)));
 
@@ -210,11 +213,13 @@ export interface Actor {
   state: AgentState;
   bubble: { text: string; until: number } | null;
   phase: number;
+  idleLines: string[];
+  nextChatter: number;
 }
 
 export function makeActor(slug: string, name: string, color: string, icon: string, at: Pt): Actor {
   return { slug, name, color, icon, pos: { ...at }, path: [], facing: "down", moving: false, targetKey: "", nextWander: 0,
-    state: "idle", bubble: null, phase: Math.random() * 10 };
+    state: "idle", bubble: null, phase: Math.random() * 10, idleLines: [], nextChatter: performance.now() + 5000 + Math.random() * 20000 };
 }
 
 export function step(a: { pos: Pt; path: Pt[]; facing: Facing; moving: boolean }, dt: number, speed: number) {
@@ -403,6 +408,15 @@ function drawFurniture(g: CanvasRenderingContext2D, it: Furn, colors: Record<str
       px(0, -6, Wd, 20, "#b08d57"); px(1, -5, Wd - 2, 18, "#8a6a3d"); px(2, -4, Wd - 4, 16, "#1b1f2b");
       px(Wd / 2 - 3, 14, 6, 2, "#4b5563");
       break;
+    case "album":
+      px(6, 6, 4, 10, "#5a3f2e"); px(2, 2, 12, 6, "#6f4f3a");
+      px(3, 0, 5, 7, "#f5f0e6"); px(8, 0, 5, 7, "#ece4d4"); px(4, 1, 3, 3, "#38bdf8"); px(9, 2, 3, 2, "#f59e0b");
+      break;
+    case "reels":
+      px(1, -2, 14, 18, "#1f2937"); px(1, -2, 14, 2, "#374151");
+      for (let k = 0; k < 2; k++) { px(3 + k * 6, 1, 5, 5, "#9ca3af"); px(5 + k * 6, 3, 1, 1, "#1f2937"); }
+      px(3, 9, 10, 4, "#0f172a"); px(4, 10, 8, 2, "#14b8a6");
+      break;
     case "camera":
       px(7, 6, 2, 10, "#4b5563"); px(4, 14, 8, 2, "#374151"); px(2, 0, 11, 7, "#1f2937"); px(12, 2, 3, 3, "#64748b");
       px(4, 2, 3, 2, "#ef4444");
@@ -447,8 +461,8 @@ export function drawAmbient(g: CanvasRenderingContext2D, t: number, colors: Reco
     }
     if (it.kind === "radio")
       for (let k = 0; k < 6; k++) px(X + 4 + k * 7, Y + 7 + 4 - Math.round(2 + 2 * Math.sin(t * 5 + k)), 4, 1, "#f97316");
-    if (it.kind === "camera" && working.has("creative")) px(X + 4, Y + 2, 3, 2, Math.floor(t * 2) % 2 ? "#ef4444" : "#7f1d1d");
-    if (it.kind === "easel" && working.has("creative"))
+    if (it.kind === "camera" && working.has("video")) px(X + 4, Y + 2, 3, 2, Math.floor(t * 2) % 2 ? "#ef4444" : "#7f1d1d");
+    if (it.kind === "easel" && (working.has("creative") || working.has("photo")))
       for (let k = 0; k < 3; k++) px(X + 5 + ((Math.floor(t * 5) + k * 7) % 20), Y + 1 + k * 4, 3, 2, ["#f43f5e", "#a3e635", "#c084fc"][k]);
     if (it.kind === "arcade") px(X + 5, Y - 3 + (Math.floor(t * 3) % 4), 6, 2, ["#f43f5e", "#22d3ee", "#facc15", "#a3e635"][Math.floor(t) % 4]);
   }
@@ -516,6 +530,14 @@ export function drawCharacter(g: CanvasRenderingContext2D, x: number, y: number,
       break;
     case "mail":
       px(-3, -17 + bob, 6, 2, hat); px(2, -19 + bob, 1, 2, "#fde68a");
+      break;
+    case "camera": // cap, and a camera on a strap
+      px(-3, -17 + bob, 6, 2, hat); px(o.facing === "left" ? -5 : 2, -16 + bob, 3, 1, hat);
+      if (o.facing !== "up") { px(-2, -8 + bob, 4, 3, "#1f2937"); px(-1, -7 + bob, 2, 1, "#93c5fd"); }
+      break;
+    case "film": // backwards cap and headset
+      px(-3, -17 + bob, 6, 2, hat); px(o.facing === "right" ? -5 : 2, -16 + bob, 3, 1, hat);
+      px(-4, -14 + bob, 1, 3, "#111827"); px(3, -14 + bob, 1, 3, "#111827");
       break;
     case "image": // beret
       px(-4, -18 + bob, 8, 2, hat); px(-2, -19 + bob, 5, 1, hat); px(0, -20 + bob, 1, 1, shade(o.color, -0.5));

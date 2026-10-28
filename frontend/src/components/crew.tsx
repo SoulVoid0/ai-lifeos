@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight, Bot, Brain, CalendarDays, ChartColumn, Check, CircleCheck, CircleHelp, CircleStop, Code, Crown, Eye,
   BookOpen, Flag, Folder, Gauge, GraduationCap, Route, Info, ListTree, Mail, MessageSquare, Mic, MicOff, PenLine, Reply, Rocket, Search, Shield,
-  ShieldAlert, SkipForward, Sparkles, TriangleAlert, Wrench, Image, type LucideIcon,
+  ShieldAlert, SkipForward, Sparkles, TriangleAlert, Wrench, Image, Camera, Film, type LucideIcon,
 } from "lucide-react";
 import type { AgentState, Brief, MissionEvent } from "../lib/api";
 import { api } from "../lib/api";
@@ -10,12 +10,12 @@ import { useToast } from "./ui";
 
 export const AGENT_COLORS: Record<string, string> = {
   violet: "#8b5cf6", amber: "#f59e0b", cyan: "#06b6d4", emerald: "#10b981", rose: "#f43f5e", blue: "#3b82f6",
-  orange: "#f97316", pink: "#ec4899", lime: "#84cc16", slate: "#94a3b8",
+  orange: "#f97316", pink: "#ec4899", lime: "#84cc16", teal: "#14b8a6", slate: "#94a3b8",
 };
 
 export const AGENT_ICONS: Record<string, LucideIcon> = {
   crown: Crown, calendar: CalendarDays, folder: Folder, search: Search, code: Code, brain: Brain, mail: Mail, bot: Bot,
-  pen: PenLine, shield: Shield, chart: ChartColumn, sparkles: Sparkles, image: Image,
+  pen: PenLine, shield: Shield, chart: ChartColumn, sparkles: Sparkles, image: Image, camera: Camera, film: Film,
 };
 
 export const STATE_LABEL: Record<AgentState, string> = {

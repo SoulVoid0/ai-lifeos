@@ -108,12 +108,18 @@ def _row(r: Any) -> dict[str, Any]:
     return out
 
 
-def list_media(limit: int = 60, kind: str | None = None, agent: str | None = None) -> list[dict[str, Any]]:
+def list_media(limit: int = 60, kind: str | None = None, agent: str | None = None,
+               since: str | None = None) -> list[dict[str, Any]]:
     sql, params = "SELECT * FROM media WHERE 1=1", []
+    if since:
+        sql += " AND created_at >= ?"
+        params.append(since)
     if kind:
         sql += " AND kind = ?"
         params.append(kind)
-    if agent:
+    if agent == "you":  # made from the Gallery or Station, not by an agent
+        sql += " AND agent IS NULL"
+    elif agent:
         sql += " AND agent = ?"
         params.append(agent)
     with db.session() as conn:
@@ -228,7 +234,19 @@ def generate(kind: str, prompt: str, *, negative: str = "", size: str = "square"
     return get(media_id)
 
 
+# One local GPU job at a time: two diffusion models at once won't fit in VRAM (and would just be slower).
+_GPU = threading.Lock()
+
+
 def _run(media_id: int) -> None:
+    if cfg()["backend"] in ("comfyui", "a1111"):
+        with _GPU:
+            _run_job(media_id)
+    else:
+        _run_job(media_id)
+
+
+def _run_job(media_id: int) -> None:
     m = get(media_id)
     started = time.monotonic()
     _set(media_id, status="running")

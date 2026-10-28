@@ -140,5 +140,6 @@ def test_talk_to_an_agent(client, fake_models, monkeypatch):
 
     monkeypatch.setattr(llm, "model_available", lambda ref=None: False)
     r = client.post("/api/crew/agents/files/chat", json={"message": "tidy downloads"}).json()
-    assert r["model"] is None and "Archivist" in r["reply"] and "Give task" in r["reply"]
+    assert r["model"] is None and "Archivist" in r["reply"] and "Task mode" in r["reply"]
+    assert r["reply"].startswith("Everything in its folder.")  # personality shows even offline
     assert client.post("/api/crew/agents/ghost/chat", json={"message": "hi"}).status_code == 404

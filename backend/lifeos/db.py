@@ -366,6 +366,10 @@ MIGRATIONS = [
     "ALTER TABLE mission_tasks ADD COLUMN review TEXT",
     "ALTER TABLE mission_tasks ADD COLUMN user_rating INTEGER",
     "ALTER TABLE mission_tasks ADD COLUMN transcript TEXT",
+    "ALTER TABLE agents ADD COLUMN voice TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE agents ADD COLUMN quirks TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE agents ADD COLUMN catchphrases TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE agents ADD COLUMN idle_lines TEXT NOT NULL DEFAULT '[]'",
 ]
 
 # Writers wait this long for the lock instead of failing with "database is locked".

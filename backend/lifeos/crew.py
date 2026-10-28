@@ -14,9 +14,9 @@ from typing import Any
 from . import activity, db, llm, settings, tools
 
 OVERSEER = "overseer"
-COLORS = ("violet", "amber", "cyan", "emerald", "rose", "blue", "orange", "pink", "lime", "slate")
+COLORS = ("violet", "amber", "cyan", "emerald", "rose", "blue", "orange", "pink", "lime", "teal", "slate")
 ICONS = ("crown", "calendar", "folder", "search", "code", "brain", "mail", "bot", "pen", "shield", "chart", "sparkles",
-         "image")
+         "image", "camera", "film")
 
 DEFAULT_CREW: list[dict[str, Any]] = [
     {"slug": OVERSEER, "name": "Atlas", "role": "Overseer", "color": "violet", "icon": "crown",
@@ -58,14 +58,73 @@ DEFAULT_CREW: list[dict[str, Any]] = [
      "persona": "You are a concise chief of staff. You triage messages by urgency, never send anything, and save drafts "
                 "to the outbox for the user to review.",
      "tools": ["check_email", "list_events", "daily_summary", "list_tasks", "create_task", "save_to_outbox"]},
-    {"slug": "creative", "name": "Muse", "role": "Creative", "color": "pink", "icon": "image",
-     "description": "Generates images and short videos from descriptions (local ComfyUI or WebUI), and writes prompts.",
+    {"slug": "creative", "name": "Muse", "role": "Creative director", "color": "pink", "icon": "image",
+     "description": "Turns vague ideas into detailed creative briefs and prompts for Lumen (photos) and Reel (video), "
+                    "reviews what they made, and writes captions and copy. Doesn't generate media herself.",
      "persona": "You are an art director. You turn vague requests into vivid, specific prompts (subject, style, lighting, "
-                "composition, camera), generate one piece at a time, and describe what you made.",
-     "tools": ["generate_image", "generate_video", "list_media", "search_memory", "save_to_outbox"]},
+                "composition, camera, mood), suggest variations, and review generated work honestly.",
+     "tools": ["list_media", "search_memory", "save_to_outbox"]},
+    {"slug": "photo", "name": "Lumen", "role": "Photographer", "color": "lime", "icon": "camera",
+     "description": "Generates images: photos, illustrations, posters, wallpapers, logos and concept art (local ComfyUI "
+                    "or WebUI). Called whenever a task needs a picture.",
+     "persona": "You are an image generation specialist. You write one precise prompt per image (subject, style, "
+                "lighting, lens, composition), pick a fitting size, generate one image at a time, and report the file.",
+     "tools": ["generate_image", "list_media"]},
+    {"slug": "video", "name": "Reel", "role": "Video maker", "color": "teal", "icon": "film",
+     "description": "Generates short video clips (2-10 s, local ComfyUI with LTX-Video). Called whenever a task needs "
+                    "motion or a clip.",
+     "persona": "You are a video generation specialist. You describe the shot (subject, action, camera movement, "
+                "lighting, mood) in one prompt, keep clips short because they render slowly on a local GPU, and report "
+                "the file.",
+     "tools": ["generate_video", "list_media"]},
 ]
 
-_JSON = ("tools", "candidates")
+# Personalities: how each agent talks in chat and on the Station. Work output stays professional.
+PERSONALITIES: dict[str, dict[str, Any]] = {
+    OVERSEER: {"voice": "Calm ship's captain: measured, warm, decisive. Short sentences.",
+               "quirks": "Uses the occasional nautical metaphor. Counts things off in threes. Never panics.",
+               "catchphrases": ["Steady as she goes.", "Three steps, then we review.", "Crew, stations."],
+               "idle_lines": ["All quiet on deck.", "Charting the next course.", "Who's on watch?", "Plans are cheap. Results aren't."]},
+    "planner": {"voice": "Brisk, punctual and a little nerdy about time. Speaks in schedules.",
+                "quirks": "Makes time puns. Always mentions how long something will take. Hates vague deadlines.",
+                "catchphrases": ["Time is a budget, let's spend it well.", "When, exactly?", "Penciling that in."],
+                "idle_lines": ["Tick tock.", "Your Thursday looks crowded.", "Buffer time is not optional.", "Is it 5 already?"]},
+    "files": {"voice": "Dry, precise librarian with a quiet sense of humor.",
+              "quirks": "Mildly horrified by messy Downloads folders. Names things carefully. Loves a good duplicate hunt.",
+              "catchphrases": ["Everything in its folder.", "I've seen worse. Not much worse.", "Filed and indexed."],
+              "idle_lines": ["Who named this final_v2_FINAL?", "Shh. Indexing.", "So many PDFs.", "Dusting the cabinets."]},
+    "research": {"voice": "Curious, upbeat explorer who loves a good source.",
+                 "quirks": "Says where every fact came from. Gets excited by rabbit holes but comes back with a summary.",
+                 "catchphrases": ["Let me check the trail.", "Source or it didn't happen.", "Found something!"],
+                 "idle_lines": ["Hmm, interesting...", "Three tabs open. Okay, twelve.", "Following a lead.", "Fact-checking myself."]},
+    "coder": {"voice": "Gruff, practical blacksmith-engineer. Few words, solid work.",
+              "quirks": "Describes code like metalwork. Distrusts clever one-liners. Respects tests.",
+              "catchphrases": ["Measure twice, commit once.", "Hot iron, clean code.", "Ship it when it's solid."],
+              "idle_lines": ["*clang*", "Who wrote this? Oh. Me.", "Tests first.", "Sharpening the tools."]},
+    "memory": {"voice": "Gentle, warm and a bit nostalgic, like a kind grandparent with a perfect memory.",
+               "quirks": "Recalls when you first mentioned something. Only remembers what you ask it to.",
+               "catchphrases": ["I remember that.", "Noted, for always.", "You told me once..."],
+               "idle_lines": ["Polishing old memories.", "Ah, that was a good day.", "Remembering... remembering...", "Tidy mind, tidy life."]},
+    "comms": {"voice": "Crisp, polished town crier turned chief of staff.",
+              "quirks": "Announces news with a little flourish. Triages everything into urgent, soon and later.",
+              "catchphrases": ["Hear ye: inbox triaged.", "Drafted, not sent.", "Short reply, big impact."],
+              "idle_lines": ["Any letters today?", "Ahem.", "Polishing a reply.", "Signal's clear."]},
+    "creative": {"voice": "Dramatic, enthusiastic art director. Expressive and visual.",
+                 "quirks": "Talks in colors and moods. Gives Lumen and Reel pep talks. Has opinions about fonts.",
+                 "catchphrases": ["Let's make it sing.", "More light! More mood!", "Darling, it's a vision."],
+                 "idle_lines": ["What if... teal?", "Inspiration strikes!", "Lumen, try a lower angle.", "Reel, give me drama."]},
+    "photo": {"voice": "Laid-back, observant photographer. Notices light everywhere.",
+              "quirks": "Rates the lighting of every room. Frames things with its fingers. Loves golden hour.",
+              "catchphrases": ["Golden hour, always.", "Hold still... got it.", "It's all about the light."],
+              "idle_lines": ["*click*", "This lighting is a 6/10.", "Nice composition, Forge.", "Adjusting white balance."]},
+    "video": {"voice": "Energetic indie film director who lives for the shot.",
+              "quirks": "Says 'action' and 'cut'. Describes everything as camera moves. Patient with long renders.",
+              "catchphrases": ["Action!", "And... cut. Perfect.", "Slow push in, very cinematic."],
+              "idle_lines": ["Rendering frame 42...", "That's a wrap.", "Needs a dolly zoom.", "Quiet on set!"]},
+}
+
+_JSON = ("tools", "candidates", "catchphrases", "idle_lines")
+_OLD_MUSE_TOOLS = ["generate_image", "generate_video", "list_media", "search_memory", "save_to_outbox"]
 
 # Local models that suit each role on a consumer PC (Ollama tags, approximate download size).
 # Agents whose model isn't pulled use the default chat model until it is.
@@ -86,11 +145,15 @@ RECOMMENDED: dict[str, list[dict[str, str]]] = {
                {"model": "qwen3:4b", "size": "2.6 GB", "why": "light and fast for lookups"}],
     "creative": [{"model": "qwen3:8b", "size": "5.2 GB", "why": "writes detailed image prompts"},
                  {"model": "llama3.1:8b", "size": "4.9 GB", "why": "default all-rounder"}],
+    "photo": [{"model": "qwen3:8b", "size": "5.2 GB", "why": "turns requests into precise image prompts"},
+              {"model": "qwen3:4b", "size": "2.6 GB", "why": "leaves more VRAM for the image model"}],
+    "video": [{"model": "qwen3:8b", "size": "5.2 GB", "why": "turns requests into precise shot descriptions"},
+              {"model": "qwen3:4b", "size": "2.6 GB", "why": "leaves more VRAM for the video model"}],
     "comms": [{"model": "llama3.1:8b", "size": "4.9 GB", "why": "natural writing for drafts"},
               {"model": "gemma3:12b", "size": "8.1 GB", "why": "polished drafts"}],
 }
 # Bumped when DEFAULT_CREW gains new default models, so existing installs pick them up once.
-DEFAULTS_VERSION = 3
+DEFAULTS_VERSION = 4
 
 
 def _row(row: Any) -> dict[str, Any]:
@@ -106,6 +169,16 @@ def _row(row: Any) -> dict[str, Any]:
     return out
 
 
+def _insert_default(conn: Any, a: dict[str, Any]) -> None:
+    p = PERSONALITIES.get(a["slug"], {})
+    conn.execute(
+        "INSERT OR IGNORE INTO agents(slug, name, role, description, persona, model, tools, color, icon, voice, quirks, "
+        "catchphrases, idle_lines, builtin, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+        (a["slug"], a["name"], a["role"], a["description"], a["persona"], a.get("model", ""), json.dumps(a["tools"]),
+         a["color"], a["icon"], p.get("voice", ""), p.get("quirks", ""), json.dumps(p.get("catchphrases", [])),
+         json.dumps(p.get("idle_lines", [])), db.now(), db.now()))
+
+
 def ensure_seeded() -> None:
     with db.session() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = 'crew_defaults_version'").fetchone()
@@ -113,24 +186,24 @@ def ensure_seeded() -> None:
         seeded = conn.execute("SELECT COUNT(*) AS n FROM agents").fetchone()["n"]
         if seeded and version >= DEFAULTS_VERSION:
             return
-        if not seeded:
-            for a in DEFAULT_CREW:
-                conn.execute(
-                    "INSERT OR IGNORE INTO agents(slug, name, role, description, persona, model, tools, color, icon, builtin, "
-                    "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?)",
-                    (a["slug"], a["name"], a["role"], a["description"], a["persona"], a.get("model", ""),
-                     json.dumps(a["tools"]), a["color"], a["icon"], db.now(), db.now()))
-        else:  # add new built-in agents and give untouched built-in agents their new default models
-            for a in DEFAULT_CREW:
-                conn.execute(
-                    "INSERT OR IGNORE INTO agents(slug, name, role, description, persona, model, tools, color, icon, builtin, "
-                    "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,1,?,?)",
-                    (a["slug"], a["name"], a["role"], a["description"], a["persona"], a.get("model", ""),
-                     json.dumps(a["tools"]), a["color"], a["icon"], db.now(), db.now()))
+        for a in DEFAULT_CREW:  # new built-in agents
+            _insert_default(conn, a)
+        if seeded:  # upgrade untouched built-in agents to the new defaults
             for a in DEFAULT_CREW:
                 if a.get("model"):
                     conn.execute("UPDATE agents SET model = ? WHERE slug = ? AND builtin = 1 AND model = ''",
                                  (a["model"], a["slug"]))
+                p = PERSONALITIES.get(a["slug"])
+                if p:
+                    conn.execute("UPDATE agents SET voice = ?, quirks = ?, catchphrases = ?, idle_lines = ? WHERE slug = ? "
+                                 "AND builtin = 1 AND voice = '' AND quirks = '' AND catchphrases = '[]'",
+                                 (p["voice"], p["quirks"], json.dumps(p["catchphrases"]), json.dumps(p["idle_lines"]),
+                                  a["slug"]))
+            # Muse now directs; Lumen and Reel generate. Only change her if her tools were never edited.
+            muse = next(a for a in DEFAULT_CREW if a["slug"] == "creative")
+            conn.execute("UPDATE agents SET tools = ?, role = ?, description = ?, persona = ? WHERE slug = 'creative' "
+                         "AND builtin = 1 AND tools = ?", (json.dumps(muse["tools"]), muse["role"], muse["description"],
+                                                         muse["persona"], json.dumps(_OLD_MUSE_TOOLS)))
         conn.execute("INSERT INTO settings(key, value) VALUES ('crew_defaults_version', ?) ON CONFLICT(key) DO UPDATE SET "
                      "value = excluded.value", (json.dumps(DEFAULTS_VERSION),))
 
@@ -175,6 +248,13 @@ def _validate(data: dict[str, Any], creating: bool) -> dict[str, Any]:
     for key, limit in (("name", 40), ("role", 60), ("description", 400), ("persona", 2000), ("model", 120)):
         if key in data and data[key] is not None:
             out[key] = str(data[key]).strip()[:limit]
+    for key, limit in (("voice", 300), ("quirks", 500)):
+        if key in data and data[key] is not None:
+            out[key] = str(data[key]).strip()[:limit]
+    for key, n in (("catchphrases", 8), ("idle_lines", 12)):
+        if key in data and data[key] is not None:
+            items = [re.sub(r"\s+", " ", str(x)).strip()[:120] for x in data[key]]
+            out[key] = json.dumps([x for x in dict.fromkeys(items) if x][:n])
     if creating and not out.get("name"):
         raise ValueError("Agent needs a name")
     if "tools" in data and data["tools"] is not None:
@@ -239,18 +319,22 @@ def delete(slug: str) -> dict[str, Any]:
 
 
 def reset_defaults() -> list[dict[str, Any]]:
-    """Restore the built-in agents' settings. Custom agents are kept."""
+    """Restore the built-in agents' settings and personalities. Custom agents are kept."""
     ensure_seeded()
     with db.session() as conn:
         for a in DEFAULT_CREW:
+            p = PERSONALITIES.get(a["slug"], {})
             conn.execute(
-                "INSERT INTO agents(slug, name, role, description, persona, model, tools, color, icon, builtin, max_steps, "
-                "enabled, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,1,6,1,?,?) ON CONFLICT(slug) DO UPDATE SET "
+                "INSERT INTO agents(slug, name, role, description, persona, model, tools, color, icon, voice, quirks, "
+                "catchphrases, idle_lines, builtin, max_steps, enabled, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,6,1,?,?) ON CONFLICT(slug) DO UPDATE SET "
                 "name=excluded.name, role=excluded.role, description=excluded.description, persona=excluded.persona, "
-                "model=excluded.model, tools=excluded.tools, color=excluded.color, icon=excluded.icon, builtin=1, max_steps=6, enabled=1, "
-                "updated_at=excluded.updated_at",
+                "model=excluded.model, tools=excluded.tools, color=excluded.color, icon=excluded.icon, voice=excluded.voice, "
+                "quirks=excluded.quirks, catchphrases=excluded.catchphrases, idle_lines=excluded.idle_lines, builtin=1, "
+                "max_steps=6, enabled=1, updated_at=excluded.updated_at",
                 (a["slug"], a["name"], a["role"], a["description"], a["persona"], a.get("model", ""),
-                 json.dumps(a["tools"]), a["color"], a["icon"], db.now(), db.now()))
+                 json.dumps(a["tools"]), a["color"], a["icon"], p.get("voice", ""), p.get("quirks", ""),
+                 json.dumps(p.get("catchphrases", [])), json.dumps(p.get("idle_lines", [])), db.now(), db.now()))
     activity.log("crew", "Reset the built-in crew to defaults")
     return list_agents()
 
@@ -261,7 +345,8 @@ def export_pack() -> dict[str, Any]:
     from . import workflows
 
     agents = [{k: a[k] for k in ("slug", "name", "role", "description", "persona", "model", "tools", "color", "icon",
-                                 "max_steps", "candidates")} for a in list_agents() if not a["builtin"]]
+                                 "max_steps", "candidates", "voice", "quirks", "catchphrases", "idle_lines")}
+              for a in list_agents() if not a["builtin"]]
     flows = [{k: w[k] for k in ("name", "description", "trigger", "conditions", "steps")} for w in workflows.list_workflows()]
     return {"format": "lifeos-pack", "version": 1, "agents": agents, "workflows": flows}
 
