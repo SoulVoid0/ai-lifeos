@@ -1,6 +1,8 @@
 # Builds the Windows app (installer with the backend inside) and publishes it as a GitHub Release with the
 # signed latest.json manifest that the app's updater reads. Run it from Actions -> Release -> Run workflow,
-# or push a tag like v0.2.0. Manual runs are numbered <major>.<minor>.<run number> from tauri.conf.json.
+# push a tag like v0.2.0, or push a commit whose message contains [release] (this also works on branches other
+# than the default one, where Run workflow isn't offered). Untagged runs are numbered
+# <major>.<minor>.<run number> from tauri.conf.json.
 #
 # Needs three repository secrets (Settings -> Secrets and variables -> Actions):
 #   TAURI_SIGNING_PRIVATE_KEY           contents of the .key file from `tauri signer generate`
@@ -17,6 +19,7 @@ on:
         default: ""
   push:
     tags: ["v*"]
+    branches: ["**"]
 
 permissions:
   contents: write
@@ -27,6 +30,7 @@ concurrency:
 
 jobs:
   windows:
+    if: github.event_name != 'push' || github.ref_type == 'tag' || contains(github.event.head_commit.message, '[release]')
     runs-on: windows-latest
     timeout-minutes: 60
     env:
