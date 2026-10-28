@@ -507,6 +507,10 @@ def _execute(mid: int, cancel: threading.Event) -> None:
     threads: list[threading.Thread] = []
     wake = _wake_event(mid)
     while True:
+        if cancel.is_set():
+            # Let running tasks record their final state before the mission is marked cancelled.
+            for th in threads:
+                th.join(timeout=10)
         _check(mid)
         with db.session() as conn:
             items = _tasks(conn, mid)
@@ -561,8 +565,11 @@ def _run_task(mid: int, task_id: int, cancel: threading.Event) -> None:
     except Cancelled:
         _set_task(task_id, status="cancelled", finished_at=db.now())
     except Exception as exc:
-        _set_task(task_id, status="failed", result=f"Failed: {exc}"[:2000], finished_at=db.now())
-        event(mid, "error", f"Task failed: {exc}", agent=None, task_id=task_id)
+        if cancel.is_set():  # e.g. its approval was rejected by the stop request
+            _set_task(task_id, status="cancelled", finished_at=db.now())
+        else:
+            _set_task(task_id, status="failed", result=f"Failed: {exc}"[:2000], finished_at=db.now())
+            event(mid, "error", f"Task failed: {exc}", agent=None, task_id=task_id)
     finally:
         if acquired:
             _limiter.release()
