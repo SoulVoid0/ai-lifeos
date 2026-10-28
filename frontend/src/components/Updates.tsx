@@ -21,7 +21,10 @@ export async function runCheck() {
     const info = await checkUpdate();
     setState(info ? { s: "available", info } : { s: "none" });
   } catch (e) {
-    setState({ s: "error", msg: String(e) });
+    // The updater only says the request failed; the backend's answer says why (no token, bad token, ...).
+    let msg = String(e);
+    try { await api.updateManifest(); } catch (why) { msg = (why as Error).message; }
+    setState({ s: "error", msg });
   }
   return state;
 }
@@ -90,17 +93,28 @@ export function UpdateSettings() {
     try {
       await api.setUpdateConfig(patch);
       setToken("");
+      if (patch.repo !== undefined) setRepo(null);
       cfg.reload();
-      toast("Update source saved");
+      toast(patch.token === "" ? "Token removed" : "Saved");
+      return true;
     } catch (e) {
       toast((e as Error).message, "error");
+      return false;
     }
+  };
+  // Check now saves whatever was typed first, so a pasted token is never left unsaved.
+  const checkNow = async () => {
+    const patch: { repo?: string; token?: string } = {};
+    if (token.trim()) patch.token = token;
+    if (repo !== null && cfg.data && repo !== cfg.data.repo) patch.repo = repo;
+    if (Object.keys(patch).length && !(await save(patch))) return;
+    runCheck();
   };
   const c = cfg.data;
   return (
     <Section title="Updates" icon={<Download size={15} className="text-accent" />}
       actions={isDesktop ? (
-        <button className="btn-outline" onClick={runCheck} disabled={s.s === "checking" || s.s === "installing"}>
+        <button className="btn-outline" onClick={checkNow} disabled={s.s === "checking" || s.s === "installing"}>
           {s.s === "checking" ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} Check now
         </button>) : undefined}>
       <div className="mb-3 text-sm">
@@ -123,8 +137,9 @@ export function UpdateSettings() {
           <label className="block text-xs text-muted">Read token (only for a private repository) · {c.has_token ? <span className="text-ok">saved</span> : "none"}
             <div className="mt-1 flex gap-2">
               <input className="input" type="password" value={token} onChange={(e) => setToken(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && token.trim()) save({ token }); }}
                 placeholder={c.has_token ? "•••••••• (paste a new one to replace)" : "github_pat_…"} autoComplete="off" />
-              <button className="btn-outline" onClick={() => save({ token })} disabled={!token.trim()} title="Save token"><KeyRound size={14} /></button>
+              <button className="btn-outline" onClick={() => save({ token })} disabled={!token.trim()} title="Save token"><KeyRound size={14} /> Save</button>
               {c.has_token && <button className="btn-ghost text-danger" onClick={() => save({ token: "" })}>Remove</button>}
             </div>
           </label>
