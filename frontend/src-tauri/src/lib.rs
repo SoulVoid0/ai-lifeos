@@ -141,7 +141,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 show_main(tray.app_handle());
             }
         });
-    // The logo is 16x16 pixel art; a dedicated 2x PNG keeps it sharp in the tray instead of a downscaled .ico frame.
+    // A dedicated 32px PNG keeps the tray icon crisp instead of a downscaled .ico frame.
     if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png")) {
         tray = tray.icon(icon);
     } else if let Some(icon) = app.default_window_icon() {
