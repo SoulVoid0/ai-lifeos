@@ -257,6 +257,9 @@ export interface Agent {
   enabled: boolean;
   builtin: boolean;
   candidates: string[];
+  wanted_model: string;
+  model_missing: boolean;
+  recommended: { model: string; size: string; why: string }[];
 }
 
 export type AgentState = "idle" | "working" | "waiting" | "asking" | "offline";

@@ -9,7 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from types import UnionType
+from typing import Any, Callable, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -627,14 +628,109 @@ def describe() -> list[dict[str, Any]]:
     return out
 
 
+_NULLISH = {"null", "none", "undefined", "n/a", "na", "nil", ""}
+
+
+def _base_types(annotation: Any) -> set[Any]:
+    """The plain types a field accepts, e.g. {str} for `str | None`, {list} for `list[str]`, {"literal"} for Literal."""
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        out: set[Any] = set()
+        for a in get_args(annotation):
+            if a is not type(None):
+                out |= _base_types(a)
+        return out
+    if origin is Literal:
+        return {"literal"}
+    if origin in (list, tuple, set):
+        return {list}
+    return {annotation}
+
+
+def _coerce(value: Any, types: set[Any]) -> Any:
+    """Fix the usual small-model mistakes: numbers as strings, a string where a list goes, and the reverse."""
+    if isinstance(value, str) and value.strip().lower() in _NULLISH:
+        return None
+    if isinstance(value, dict) and not value:
+        return None
+    if list in types and isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    if str in types and isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    if str in types and isinstance(value, (int, float)) and not isinstance(value, bool) and int not in types:
+        return str(value)
+    if int in types and isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    if int in types and isinstance(value, float) and value.is_integer():
+        return int(value)
+    if float in types and isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    if bool in types and isinstance(value, str) and value.strip().lower() in ("true", "false", "yes", "no"):
+        return value.strip().lower() in ("true", "yes")
+    if "literal" in types and isinstance(value, str):
+        return value.strip().lower()
+    return value
+
+
+def _describe_args(model: type[BaseModel]) -> str:
+    parts = []
+    for key, f in model.model_fields.items():
+        kinds = "/".join(sorted(getattr(t, "__name__", str(t)) for t in _base_types(f.annotation)))
+        parts.append(f"{key} ({kinds}{', required' if f.is_required() else ''})")
+    return ", ".join(parts) or "none"
+
+
+def clean_args(model: type[BaseModel], args: Any) -> dict[str, Any]:
+    """Keep known arguments, drop empty/null ones, and coerce simple type mistakes."""
+    if isinstance(args, str):
+        try:
+            import json
+
+            args = json.loads(args)
+        except ValueError:
+            args = {}
+    if not isinstance(args, dict):
+        return {}
+    fields = model.model_fields
+    lower = {k.lower(): k for k in fields}
+    out: dict[str, Any] = {}
+    for key, value in args.items():
+        name = key if key in fields else lower.get(str(key).lower())
+        if name is None:
+            continue
+        value = _coerce(value, _base_types(fields[name].annotation))
+        if value is not None:
+            out[name] = value
+    return out
+
+
 def validate(name: str, args: dict[str, Any]) -> tuple[Tool, BaseModel]:
-    tool = TOOLS.get(name)
+    """Validate a call. Bad optional arguments are dropped (their defaults are used); bad required ones are errors."""
+    tool = TOOLS.get(str(name or ""))
     if tool is None:
         raise ToolError(f"Unknown tool '{name}'")
-    try:
-        return tool, tool.args.model_validate(args or {})
-    except ValidationError as exc:
-        raise ToolError(f"Invalid arguments for {name}: {exc.errors(include_url=False)}") from exc
+    fields = tool.args.model_fields
+    data = clean_args(tool.args, args)
+    for _ in range(2):
+        try:
+            return tool, tool.args.model_validate(data)
+        except ValidationError as exc:
+            # Wrong types or unknown choices in optional arguments fall back to defaults; out-of-range values stay errors.
+            range_errors = ("greater", "less", "too_", "string_too", "multiple_of")
+            if any(e["type"].startswith(range_errors) for e in exc.errors()):
+                bad: set[str] = set()
+            else:
+                bad = {str(e["loc"][0]) for e in exc.errors() if e.get("loc")}
+            optional = [k for k in bad if k in data and k in fields and not fields[k].is_required()]
+            if not optional:
+                problems = "; ".join(f"{'.'.join(map(str, e['loc'])) or 'arguments'}: {e['msg']}" for e in exc.errors())
+                raise ToolError(f"Invalid arguments for {name}: {problems}. Arguments: {_describe_args(tool.args)}") from exc
+            for k in optional:
+                data.pop(k)
+    raise ToolError(f"Invalid arguments for {name}. Arguments: {_describe_args(tool.args)}")
 
 
 def invoke(name: str, args: dict[str, Any], ctx: dict[str, Any], conversation_id: int | None = None) -> dict[str, Any]:

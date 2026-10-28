@@ -89,6 +89,28 @@ export function AgentEditor({ agent, tools, onClose }: { agent: Agent | null; to
             </datalist>
             {test && <div className={`mt-1 text-xs ${test.startsWith("OK") ? "text-ok" : test === "…" ? "text-muted" : "text-danger"}`}>{test}</div>}
             <div className="mt-1 text-[11px] text-muted">Cloud models need Settings → Cloud AI turned on and an API key. Local Ollama models are free.</div>
+            {agent?.model_missing && (
+              <div className="mt-1 text-[11px] text-warn">
+                {agent.wanted_model} isn't installed, so {agent.name} uses {agent.effective_model} for now. Install it with
+                <code className="ml-1 select-all rounded bg-panel-2 px-1">ollama pull {agent.wanted_model}</code>
+              </div>
+            )}
+            {(agent?.recommended?.length ?? 0) > 0 && (
+              <div className="mt-2 rounded-lg border border-line p-2">
+                <div className="mb-1 text-[11px] font-medium text-muted">Recommended local models for this role</div>
+                {agent!.recommended.map((r) => {
+                  const have = (models.data?.local ?? []).some((m) => m === r.model || m === `${r.model}:latest`);
+                  return (
+                    <div key={r.model} className="flex flex-wrap items-center gap-2 py-0.5 text-xs">
+                      <button className="chip font-mono hover:border-accent" onClick={() => set("model", r.model)} title="Use this model">{r.model}</button>
+                      <span className="text-muted">{r.size} · {r.why}</span>
+                      {have ? <span className="text-ok">installed</span>
+                        : <code className="select-all rounded bg-panel-2 px-1 text-[10px]">ollama pull {r.model}</code>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
           <div className="sm:col-span-2">
             <label className="label">Other models to try (auto-routing)</label>

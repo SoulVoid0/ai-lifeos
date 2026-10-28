@@ -33,13 +33,18 @@ export function Layout() {
   const crew = useAsync(api.crewStatus, [], 5000);
   const health = useAsync(api.health, [], 15000);
   const seen = useRef<Set<number>>(new Set());
+  const primed = useRef(false);
 
   // Surface new reminders, crew questions and workflow summaries as toasts and OS notifications.
   useEffect(() => {
+    if (!notes.data) return;
     const quiet = inQuietHours(settings.data?.quiet_hours);
+    const first = !primed.current;
+    primed.current = true;
     for (const n of notes.data ?? []) {
       if (seen.current.has(n.id)) continue;
       seen.current.add(n.id);
+      if (first) continue; // already waiting in the bell; only pop up what arrives while the app is open
       toast(n.title + (n.body ? `\n${n.body.slice(0, 300)}` : ""), "info");
       if (!quiet && "Notification" in window && Notification.permission === "granted") new Notification(n.title, { body: (n.body ?? "").slice(0, 300) });
     }

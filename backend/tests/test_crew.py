@@ -75,7 +75,7 @@ def fake_models(monkeypatch, client):
         with lock:
             seen.append({"messages": messages, "schema": schema, "model": kw.get("model")})
             if "tasks" in schema["properties"]:
-                return script["plan"].pop(0)
+                return llm.clean(script["plan"].pop(0))
             if "score" in schema["properties"]:
                 reply = script.setdefault("reviews", []).pop(0) if script.get("reviews") else {"score": 4, "feedback": "Fine."}
                 return reply
@@ -85,7 +85,7 @@ def fake_models(monkeypatch, client):
             for name, replies in script["steps"].items():
                 if system.startswith(f"You are {name},"):
                     reply = replies.pop(0)
-                    return reply() if callable(reply) else reply
+                    return llm.clean(reply() if callable(reply) else reply)  # like the real chat_json
         raise AssertionError("unexpected model call")
 
     monkeypatch.setattr(llm, "model_available", lambda ref=None: True)
@@ -249,3 +249,82 @@ def test_ledger_records_usage_and_cost(client):
     ledger = client.get("/api/ledger").json()
     assert ledger["today"]["cloud_cost_usd"] == pytest.approx(2.0)
     assert ledger["by_agent"][0]["agent"] == "research"
+
+
+def test_small_model_mistakes_do_not_stop_the_task(client, fake_models, monkeypatch):
+    """Nulls, "never" dates, tool names in the action field, unknown tools, unreadable JSON and a missing answer."""
+    from lifeos import llm
+
+    fake_models["script"]["plan"].append({"thinking": "null", "reply": "null", "question": "null", "tasks": [
+        {"id": "t1", "agent": "Chrono", "title": "Plan study", "instructions": "Create a study task", "depends_on": "null"}]})
+
+    def unreadable():
+        raise llm.BadOutput("Model returned invalid JSON: I think I should")
+
+    fake_models["script"]["steps"]["Chrono"] = [
+        unreadable,
+        {"thought": "null", "action": "create_task",
+         "args": {"title": "Study JS testing", "due": "never", "remind": "null", "priority": "Medium",
+                  "estimate_minutes": "90", "project": None, "invented": "x"}},
+        {"thought": "Use a tool that doesn't exist", "action": "tool", "tool": "send_email", "args": {}},
+        {"thought": "Bad args", "action": "tool", "tool": "complete_task", "args": "not json"},
+        {"thought": "null", "action": "finish", "answer": "null"},
+        {"thought": "Done", "action": "finish", "answer": "Created the study task with no due date."},
+    ]
+    m = client.post("/api/missions", json={"goal": "Plan my study time"}).json()
+    done = wait_for(lambda: (r := client.get(f"/api/missions/{m['id']}").json())["status"] in ("done", "failed") and r)
+    assert done["status"] == "done", done
+    task = done["tasks"][0]
+    assert task["agent"] == "planner" and task["status"] == "done"
+    assert task["result"] == "Created the study task with no due date."
+    created = next(t for t in client.get("/api/tasks").json() if t["title"] == "Study JS testing")
+    assert created["due_at"] is None and created["estimate_minutes"] == 90
+    assert not done["briefs"], "a null question must not become a brief"
+    assert "null" not in (done["result"] or "").lower().split()
+    # The model was told what went wrong each time.
+    chrono = [c for c in fake_models["seen"] if c["messages"][0]["content"].startswith("You are Chrono,")]
+    hints = " ".join(m["content"] for m in chrono[-1]["messages"] if m["role"] == "user")
+    assert "could not be read" in hints and "no tool called 'send_email'" in hints and "gave no answer" in hints
+
+
+def test_task_wraps_up_in_plain_text_when_the_model_keeps_failing(client, fake_models, monkeypatch):
+    from lifeos import llm
+
+    client.patch("/api/settings", json={"peer_review": False})
+    monkeypatch.setattr(llm, "chat_text", lambda messages, **kw: "I found js-testing-guide.pdf; nothing else to do.")
+    fake_models["script"]["plan"].append({"thinking": "", "tasks": [
+        {"id": "t1", "agent": "research", "title": "Find notes", "instructions": "Search", "depends_on": []}]})
+    fake_models["script"]["steps"]["Scout"] = [
+        {"thought": "search", "action": "tool", "tool": "search_files", "args": {"query": "javascript"}}] + \
+        [{"thought": "hmm", "action": "dance"}] * 6
+    m = client.post("/api/missions", json={"goal": "Find my notes"}).json()
+    done = wait_for(lambda: (r := client.get(f"/api/missions/{m['id']}").json())["status"] in ("done", "failed") and r)
+    assert done["status"] == "done"
+    assert done["tasks"][0]["result"] == "I found js-testing-guide.pdf; nothing else to do."
+    kinds = [e["kind"] for e in client.get("/api/missions/events", params={"mission_id": m["id"]}).json()]
+    assert "limit" in kinds
+
+
+def test_missing_local_model_falls_back_to_default(client, monkeypatch):
+    from lifeos import llm
+
+    monkeypatch.setattr(llm, "status", lambda force=False: {"ok": True, "models": ["llama3.1:8b"], "url": "x"})
+    forge = next(a for a in client.get("/api/crew/agents").json() if a["slug"] == "coder")
+    assert forge["model"] == "qwen3-coder:30b"
+    assert forge["effective_model"] == "llama3.1:8b" and forge["model_missing"] is True
+    assert any(r["model"] == "qwen3-coder:30b" for r in forge["recommended"])
+    monkeypatch.setattr(llm, "status", lambda force=False: {"ok": True, "models": ["llama3.1:8b", "qwen3-coder:30b"], "url": "x"})
+    forge = next(a for a in client.get("/api/crew/agents").json() if a["slug"] == "coder")
+    assert forge["effective_model"] == "qwen3-coder:30b" and not forge["model_missing"]
+    assert llm.installed("llama3.1", ["llama3.1:latest"]) and not llm.installed("qwen3:8b", ["qwen3:14b"])
+
+
+def test_existing_installs_get_new_default_models_once(client):
+    from lifeos import db
+
+    with db.session() as conn:
+        conn.execute("UPDATE agents SET model = '' WHERE slug = 'coder'")
+        conn.execute("UPDATE settings SET value = '1' WHERE key = 'crew_defaults_version'")
+    assert next(a for a in client.get("/api/crew/agents").json() if a["slug"] == "coder")["model"] == "qwen3-coder:30b"
+    client.patch("/api/crew/agents/coder", json={"model": ""})  # the user's later choice sticks
+    assert next(a for a in client.get("/api/crew/agents").json() if a["slug"] == "coder")["model"] == ""

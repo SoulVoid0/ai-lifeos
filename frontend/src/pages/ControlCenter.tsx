@@ -447,6 +447,7 @@ function CrewTab({ agents, onEdit, onNew, reload }: { agents: AgentStatus[]; onE
               <div className="mt-0.5 line-clamp-2 text-xs text-muted">{a.description}</div>
               <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
                 <span className="chip font-mono">{a.effective_model}</span>
+                {a.model_missing && <span className="chip border-warn/40 text-warn" title={`ollama pull ${a.wanted_model}`}>{a.wanted_model} not installed</span>}
                 <span className="text-muted">{a.tools.length} tools</span>
               </div>
             </div>
