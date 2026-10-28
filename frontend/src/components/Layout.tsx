@@ -81,7 +81,7 @@ export function Layout() {
     <div className="flex h-full">
       <aside className="flex w-56 shrink-0 flex-col border-r border-line bg-panel">
         <div className="flex items-center gap-2 px-4 py-4">
-          <img src={logo} alt="" className="h-8 w-8 [image-rendering:pixelated]" />
+          <img src={logo} alt="" className="h-8 w-8" />
           <div>
             <div className="text-sm font-semibold">AI LifeOS</div>
             <div className="flex items-center gap-1 text-[11px] text-muted">
