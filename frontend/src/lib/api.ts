@@ -757,6 +757,7 @@ export const api = {
   startService: (name: "ollama" | "comfyui") => post<Services & { ok: boolean }>(`/api/system/services/${name}/start`),
   oldData: () => get<OldData>("/api/system/old-data"),
   importOldData: () => post<OldData>("/api/system/old-data/import"),
+  updateManifest: () => get<unknown>("/api/system/update/manifest"),
   updateConfig: () => get<UpdateConfig>("/api/system/update/config"),
   setUpdateConfig: (c: { repo?: string; token?: string }) => patch<UpdateConfig>("/api/system/update/config", c),
   agentActivity: (slug: string) => get<AgentActivity>(`/api/crew/agents/${slug}/activity`),
