@@ -36,6 +36,12 @@ DEFAULTS: dict[str, Any] = {
     # Base URL for the OpenAI-compatible "custom" provider (LM Studio, vLLM, llama.cpp server, ...).
     "custom_provider_url": "",
     "web_access": False,
+    # Learning: a teammate reviews each result (and the agent revises once if it scores low), the Overseer
+    # turns finished missions into lessons, and auto-routing sends each agent's work to its best-scoring model.
+    "peer_review": True,
+    "reflection": True,
+    "auto_route": False,
+    "lessons_per_task": 5,
     "notification_prefs": {"reminders": True, "workflows": True, "missions": True, "suggestions": False},
     "quiet_hours": {"enabled": False, "start": "22:00", "end": "07:00"},
     "email": {"host": "", "port": 993, "username": "", "folder": "INBOX"},
@@ -74,6 +80,8 @@ def update(changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{key} must be between 1 and 12")
         if key in ("mission_token_budget",) and value < 1000:
             raise ValueError("mission_token_budget must be at least 1000")
+        if key == "lessons_per_task" and not 0 <= value <= 20:
+            raise ValueError("lessons_per_task must be between 0 and 20")
         if key == "cloud_daily_budget_usd" and value < 0:
             raise ValueError("cloud_daily_budget_usd can't be negative")
         if key == "tool_policies":

@@ -13,6 +13,7 @@ import ActivityLog from "./pages/ActivityLog";
 import Settings from "./pages/Settings";
 import SearchPage from "./pages/SearchPage";
 import ControlCenter from "./pages/ControlCenter";
+import World from "./pages/World";
 import Automations from "./pages/Automations";
 import Projects from "./pages/Projects";
 
@@ -24,6 +25,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="crew" element={<ControlCenter />} />
+            <Route path="station" element={<World />} />
             <Route path="assistant" element={<Assistant />} />
             <Route path="automations" element={<Automations />} />
             <Route path="projects" element={<Projects />} />

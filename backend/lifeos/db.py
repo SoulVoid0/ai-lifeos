@@ -215,6 +215,21 @@ CREATE TABLE IF NOT EXISTS mission_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_mtasks_mission ON mission_tasks(mission_id);
 
+-- What the crew has learned: short rules an agent (or every agent, agent = '*') reads before working.
+CREATE TABLE IF NOT EXISTS lessons (
+    id INTEGER PRIMARY KEY,
+    agent TEXT NOT NULL,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'review',
+    mission_id INTEGER,
+    task_id INTEGER,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    uses INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lessons_agent ON lessons(agent);
+
 CREATE TABLE IF NOT EXISTS mission_events (
     id INTEGER PRIMARY KEY,
     mission_id INTEGER NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -327,6 +342,12 @@ CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_at);
 MIGRATIONS = [
     "ALTER TABLE notifications ADD COLUMN kind TEXT NOT NULL DEFAULT 'reminder'",
     "ALTER TABLE actions ADD COLUMN mission_id INTEGER",
+    "ALTER TABLE agents ADD COLUMN candidates TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE mission_tasks ADD COLUMN model TEXT",
+    "ALTER TABLE mission_tasks ADD COLUMN score REAL",
+    "ALTER TABLE mission_tasks ADD COLUMN review TEXT",
+    "ALTER TABLE mission_tasks ADD COLUMN user_rating INTEGER",
+    "ALTER TABLE mission_tasks ADD COLUMN transcript TEXT",
 ]
 
 # Writers wait this long for the lock instead of failing with "database is locked".

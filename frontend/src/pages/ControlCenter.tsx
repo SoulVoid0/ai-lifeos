@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  Coins, Download, ExternalLink, FileText, Inbox, ListTree, Plus, RotateCcw, Rocket, Send, ShieldAlert, Trash2, Upload,
+  Coins, Download, GraduationCap, ExternalLink, FileText, Inbox, ListTree, Plus, RotateCcw, Rocket, Send, ShieldAlert, Trash2, Upload,
   Users, CircleStop, X,
 } from "lucide-react";
 import { api, type Agent, type AgentStatus, type Mission, type OutboxFile } from "../lib/api";
@@ -10,6 +10,7 @@ import { useAsync } from "../lib/hooks";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { AgentEditor } from "../components/AgentEditor";
 import { AgentAvatar, BriefCard, EventIcon, MicButton, STATE_LABEL, STATE_TONE, colorOf, useMissionEvents } from "../components/crew";
+import { LearningTab } from "../components/LearningTab";
 import { Markdown } from "../components/Markdown";
 import { MISSION_TONE, MissionPanel } from "../components/MissionPanel";
 import { Empty, ErrorBox, PageHeader, Section, Spinner, notifyChanged, useToast } from "../components/ui";
@@ -21,7 +22,7 @@ const EXAMPLES = [
   "Research the best way to structure a Python project and save a short guide to the outbox",
 ];
 
-type Tab = "missions" | "outbox" | "crew" | "ledger";
+type Tab = "missions" | "outbox" | "crew" | "learning" | "ledger";
 
 export default function ControlCenter() {
   const toast = useToast();
@@ -171,7 +172,7 @@ export default function ControlCenter() {
 
       {/* tabs */}
       <div className="mt-6 flex gap-1 border-b border-line">
-        {([["missions", "Missions", Rocket], ["outbox", "Outbox", Inbox], ["crew", "Crew", Users], ["ledger", "Ledger", Coins]] as const).map(([k, label, Icon]) => (
+        {([["missions", "Missions", Rocket], ["outbox", "Outbox", Inbox], ["crew", "Crew", Users], ["learning", "Learning", GraduationCap], ["ledger", "Ledger", Coins]] as const).map(([k, label, Icon]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm ${tab === k ? "border-accent text-text" : "border-transparent text-muted hover:text-text"}`}>
             <Icon size={14} /> {label}
@@ -182,6 +183,7 @@ export default function ControlCenter() {
         {tab === "missions" && <MissionList missions={missions.data ?? []} agents={byslug} onOpen={setOpenMission} />}
         {tab === "outbox" && <OutboxTab />}
         {tab === "crew" && <CrewTab agents={agents} onEdit={(a) => setEditing(a)} onNew={() => setEditing("new")} reload={status.reload} />}
+        {tab === "learning" && <LearningTab agents={byslug} />}
         {tab === "ledger" && <LedgerTab agents={byslug} />}
       </div>
 

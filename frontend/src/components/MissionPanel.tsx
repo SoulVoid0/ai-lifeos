@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from "react";
-import { CircleStop, ExternalLink, RotateCcw, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { CircleStop, ExternalLink, RotateCcw, ThumbsDown, ThumbsUp, X } from "lucide-react";
 import { api, type Agent, type Mission, type MissionTask } from "../lib/api";
 import { ago } from "../lib/format";
 import { useAsync } from "../lib/hooks";
@@ -110,6 +110,15 @@ export function MissionPanel({ id, agents, onClose }: { id: number; agents: Agen
                             </div>
                             <div className="mt-1.5 text-xs">{t.title}</div>
                             {t.depends_on.length > 0 && <div className="mt-1 text-[11px] text-muted">after {t.depends_on.join(", ")}</div>}
+                            {(t.score !== null || t.model) && (
+                              <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
+                                {t.score !== null && <span className={`chip ${t.score >= 4 ? "border-ok/40 text-ok" : t.score <= 2 ? "border-danger/40 text-danger" : ""}`}
+                                  title={t.review?.feedback ?? "Scored from tool outcomes"}>{t.review ? "review" : "score"} {t.score}/5</span>}
+                                {t.model && <span className="chip font-mono">{t.model}</span>}
+                              </div>
+                            )}
+                            {t.review?.feedback && <div className="mt-1 text-[11px] italic text-muted">“{t.review.feedback}”</div>}
+                            {t.status === "done" && <RateTask task={t} onRated={m.reload} />}
                             {t.result && (
                               <details className="mt-1.5">
                                 <summary className="cursor-pointer text-[11px] text-accent">Result</summary>
@@ -159,6 +168,37 @@ export function MissionPanel({ id, agents, onClose }: { id: number; agents: Agen
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function RateTask({ task, onRated }: { task: MissionTask; onRated: () => void }) {
+  const toast = useToast();
+  const [note, setNote] = useState("");
+  const [open, setOpen] = useState(false);
+  const rate = async (r: 1 | -1) => {
+    try {
+      const res = await api.rateTask(task.id, r, note);
+      toast(res.lesson ? "Thanks, the crew saved that as a lesson" : r > 0 ? "Marked as good" : "Marked as bad");
+      setOpen(false);
+      setNote("");
+      onRated();
+    } catch (e) { toast((e as Error).message, "error"); }
+  };
+  return (
+    <div className="mt-1.5">
+      <div className="flex items-center gap-1">
+        <button className={`btn-ghost px-1.5 py-0.5 ${task.user_rating === 1 ? "text-ok" : ""}`} title="Good result" onClick={() => rate(1)}><ThumbsUp size={12} /></button>
+        <button className={`btn-ghost px-1.5 py-0.5 ${task.user_rating === -1 ? "text-danger" : ""}`} title="Bad result: tell the agent why"
+          onClick={() => setOpen((v) => !v)}><ThumbsDown size={12} /></button>
+      </div>
+      {open && (
+        <div className="mt-1 flex gap-1">
+          <input className="input py-1 text-xs" placeholder="What should it do differently? (saved as a lesson)" value={note}
+            onChange={(e) => setNote(e.target.value)} onKeyDown={(e) => e.key === "Enter" && rate(-1)} />
+          <button className="btn-outline px-2 py-1 text-xs" onClick={() => rate(-1)}>Send</button>
+        </div>
+      )}
     </div>
   );
 }

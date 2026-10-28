@@ -59,7 +59,7 @@ DEFAULT_CREW: list[dict[str, Any]] = [
      "tools": ["check_email", "list_events", "daily_summary", "list_tasks", "create_task", "save_to_outbox"]},
 ]
 
-_JSON = ("tools",)
+_JSON = ("tools", "candidates")
 
 
 def _row(row: Any) -> dict[str, Any]:
@@ -138,10 +138,13 @@ def _validate(data: dict[str, Any], creating: bool) -> dict[str, Any]:
         out["max_steps"] = max(1, min(int(data["max_steps"]), 20))
     if data.get("enabled") is not None:
         out["enabled"] = int(bool(data["enabled"]))
-    if out.get("model"):
-        provider, _ = llm.parse_ref(out["model"])
+    if "candidates" in data and data["candidates"] is not None:
+        refs = list(dict.fromkeys(str(c).strip()[:120] for c in data["candidates"] if str(c).strip()))[:6]
+        out["candidates"] = json.dumps(refs)
+    for ref in ([out["model"]] if out.get("model") else []) + json.loads(out.get("candidates", "[]")):
+        provider, _ = llm.parse_ref(ref)
         if provider not in llm.PROVIDERS:
-            raise ValueError(f"Unknown provider in {out['model']}")
+            raise ValueError(f"Unknown provider in {ref}")
     return out
 
 
@@ -206,7 +209,7 @@ def export_pack() -> dict[str, Any]:
     from . import workflows
 
     agents = [{k: a[k] for k in ("slug", "name", "role", "description", "persona", "model", "tools", "color", "icon",
-                                 "max_steps")} for a in list_agents() if not a["builtin"]]
+                                 "max_steps", "candidates")} for a in list_agents() if not a["builtin"]]
     flows = [{k: w[k] for k in ("name", "description", "trigger", "conditions", "steps")} for w in workflows.list_workflows()]
     return {"format": "lifeos-pack", "version": 1, "agents": agents, "workflows": flows}
 
