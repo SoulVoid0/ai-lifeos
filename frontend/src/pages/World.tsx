@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ExternalLink, Gamepad2, MessageCircle, Rocket, Send, X } from "lucide-react";
-import { api, type AgentStatus, type Mission } from "../lib/api";
+import { Gamepad2, Rocket, Send } from "lucide-react";
+import { api, type AgentStatus, type MediaItem } from "../lib/api";
 import { useAsync } from "../lib/hooks";
 import {
-  type Actor, type Pt, H, PLAYER_START, QUEUE, ROOMS, SEATS, TILE, W, YOUR_DESK, drawAmbient, drawCharacter, findPath,
-  makeActor, randomFloor, renderStatic, roundRect, step, walk, wrap,
+  type Actor, type Pt, FRAMES, H, PLAYER_START, QUEUE, ROOMS, SEATS, TILE, W, YOUR_DESK, drawAmbient, drawCharacter, findPath,
+  makeActor, nearObject, objectAt, objectLabel, randomFloor, renderStatic, roundRect, step, walk, wrap,
 } from "../lib/station";
-import { ApprovalCard } from "../components/ApprovalCard";
-import { AgentAvatar, BriefCard, STATE_LABEL, STATE_TONE, colorOf, useMissionEvents } from "../components/crew";
+import { colorOf, useMissionEvents } from "../components/crew";
+import { mediaUrl } from "../components/media";
+import { AgentPanel, ObjectPanel } from "../components/StationPanels";
 import { notifyChanged, Spinner, useToast } from "../components/ui";
 
 const LOUNGE = ROOMS.find((r) => r.id === "lounge")!;
@@ -17,7 +17,6 @@ const PLAYER_SPEED = 5;
 const center = (p: Pt): Pt => ({ x: Math.floor(p.x) + 0.5, y: Math.floor(p.y) + 0.5 });
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 
-type Chat = { role: "user" | "assistant"; content: string }[];
 type Packet = { from: Pt; to: Pt; start: number; color: string };
 
 /** Seat for an agent: its own room's desk, or one of the hot desks for agents you added. */
@@ -37,6 +36,12 @@ export default function World() {
   const agents = useMemo(() => status.data?.agents ?? [], [status.data]);
   const [selected, setSelected] = useState<string | null>(null);
   const [composer, setComposer] = useState(false);
+  const [obj, setObj] = useState<string | null>(null);
+  const toast = useToast();
+  const gallery = useAsync(() => api.media(undefined, 24), [], 5000);
+  const frameItems = useMemo(() => (gallery.data ?? []).filter((m) => m.status === "done" && !/\.(mp4|webm)$/i.test(m.name ?? ""))
+    .slice(0, FRAMES.length), [gallery.data]);
+  const frameImgs = useRef<{ id: number; img: HTMLImageElement }[]>([]);
   const [hint, setHint] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -97,6 +102,43 @@ export default function World() {
     }
   }, [events]);
 
+  // The gallery wall shows the latest generated images.
+  useEffect(() => {
+    let live = true;
+    frameItems.forEach((m: MediaItem, i) => {
+      if (frameImgs.current[i]?.id === m.id) return;
+      mediaUrl(m.id).then((url) => {
+        const img = new Image();
+        img.onload = () => { if (live) frameImgs.current[i] = { id: m.id, img }; };
+        img.src = url;
+      }).catch(() => {});
+    });
+    frameImgs.current.length = Math.min(frameImgs.current.length, frameItems.length);
+    return () => { live = false; };
+  }, [frameItems]);
+
+  // Send idle crew to the lounge for a break.
+  const coffeeBreak = useCallback(() => {
+    const lounge = ROOMS.find((r) => r.id === "lounge")!;
+    let n = 0;
+    for (const a of actors.current.values()) {
+      if (a.state !== "idle") continue;
+      a.path = findPath(a.pos, randomFloor(lounge));
+      a.targetKey = `wander-coffee-${performance.now()}`;
+      a.nextWander = performance.now() + 20000;
+      a.bubble = { text: ["Coffee time!", "Don't mind if I do", "Finally, a break", "Extra shot, please"][n % 4], until: performance.now() + 5000 };
+      n++;
+    }
+    toast(n ? `Coffee break: ${n} idle crew member${n === 1 ? "" : "s"} heading to the lounge` : "Everyone's busy. No break right now.", "info");
+  }, [toast]);
+
+  const activate = useCallback((use: string) => {
+    setSelected(null);
+    if (use === "desk") { setComposer(true); return; }
+    if (use === "coffee") { coffeeBreak(); return; }
+    setObj(use);
+  }, [coffeeBreak]);
+
   useEffect(() => {
     staticLayer.current = renderStatic(Object.fromEntries(agents.map((a) => [a.slug, colorOf(a.color)])));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -129,7 +171,6 @@ export default function World() {
     }
     return best;
   }, []);
-  const nearDesk = (p: Pt) => p.x > YOUR_DESK.x - 1 && p.x < YOUR_DESK.x + YOUR_DESK.w + 1 && p.y > YOUR_DESK.y - 1.2 && p.y < YOUR_DESK.y + 2.2;
 
   // Keyboard: WASD / arrows to walk, E to talk to the nearest agent or use your desk.
   useEffect(() => {
@@ -147,16 +188,17 @@ export default function World() {
       }
       if (k === "e") {
         const a = nearest(player.current.pos, 2);
-        if (a) setSelected(a.slug);
-        else if (nearDesk(player.current.pos)) setComposer(true);
+        const it = a ? null : nearObject(player.current.pos);
+        if (a) { setObj(null); setSelected(a.slug); }
+        else if (it?.use) activate(it.use);
       }
-      if (k === "escape") { setSelected(null); setComposer(false); }
+      if (k === "escape") { setSelected(null); setComposer(false); setObj(null); }
     };
     const up = (e: KeyboardEvent) => keys.current.delete(e.key.toLowerCase());
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
-  }, [nearest]);
+  }, [nearest, activate]);
 
   // The game loop.
   useEffect(() => {
@@ -191,7 +233,8 @@ export default function World() {
         if (!a.path.length && a.targetKey.startsWith("queue")) a.facing = "up";
       }
       const nearA = nearest(p.pos, 2);
-      const h = nearA ? `Press E to talk to ${nearA.name}` : nearDesk(p.pos) ? "Press E to use your desk: start a crew mission" : null;
+      const nearO = nearA ? null : nearObject(p.pos);
+      const h = nearA ? `Press E to talk to ${nearA.name}` : nearO?.use ? `Press E to ${objectLabel(nearO.use)}` : null;
       setHint((prev) => (prev === h ? prev : h));
 
       // draw
@@ -207,6 +250,18 @@ export default function World() {
         if (a.state === "working") working.add(SEATS[a.slug] ? a.slug : `hot-${extras.indexOf(a.slug) % 4}`);
       }
       drawAmbient(g, t, colors, working);
+
+      // gallery frames: cover-fit the latest images
+      g.imageSmoothingEnabled = true;
+      FRAMES.forEach((fr, i) => {
+        const im = frameImgs.current[i]?.img;
+        if (!im || !im.naturalWidth) return;
+        const dx = fr.x * TILE + 2, dy = fr.y * TILE - 4, dw = fr.w * TILE - 4, dh = 16;
+        const s = Math.max(dw / im.naturalWidth, dh / im.naturalHeight);
+        const sw = dw / s, sh = dh / s;
+        g.drawImage(im, (im.naturalWidth - sw) / 2, (im.naturalHeight - sh) / 2, sw, sh, dx, dy, dw, dh);
+      });
+      g.imageSmoothingEnabled = false;
 
       // room labels
       g.font = "bold 6px ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -306,12 +361,15 @@ export default function World() {
     for (const a of actors.current.values())
       if (Math.abs(pt.x - a.pos.x) < 0.55 && pt.y > a.pos.y - 1.25 && pt.y < a.pos.y + 0.8) hit = a;
     if (hit) {
+      setObj(null);
       setSelected(hit.slug);
       player.current.path = findPath(player.current.pos, { x: hit.pos.x, y: hit.pos.y + 1 });
       return;
     }
-    if (pt.x >= YOUR_DESK.x && pt.x < YOUR_DESK.x + YOUR_DESK.w && pt.y >= YOUR_DESK.y - 0.5 && pt.y < YOUR_DESK.y + 1) {
-      setComposer(true);
+    const it = objectAt(pt);
+    if (it?.use) {
+      activate(it.use);
+      player.current.path = findPath(player.current.pos, { x: it.x + it.w / 2, y: it.y + it.h + 0.5 });
       return;
     }
     player.current.path = findPath(player.current.pos, pt);
@@ -326,116 +384,19 @@ export default function World() {
         <Gamepad2 size={18} className="text-accent" />
         <div className="text-base font-semibold">Station</div>
         <div className="text-xs text-muted">{counts.working} working · {counts.needs} need you · {agents.length} crew</div>
-        <div className="ml-auto text-xs text-muted">WASD / arrows or click to walk · E or click an agent to talk · your desk starts a mission</div>
+        <div className="ml-auto text-xs text-muted">WASD / arrows or click to walk · E or click agents and props · your desk starts a mission</div>
       </div>
       <div ref={wrapRef} className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-line bg-[#0b0e14]">
         <div className="grid h-full w-full place-items-center">
           <canvas ref={canvasRef} onClick={onClick} className="cursor-pointer" style={{ imageRendering: "pixelated" }} />
         </div>
         {!status.data && <div className="absolute inset-0 grid place-items-center"><Spinner /></div>}
-        {hint && !sel && !composer && (
+        {hint && !sel && !composer && !obj && (
           <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-lg bg-black/70 px-3 py-1.5 text-xs text-white">{hint}</div>
         )}
         {sel && <AgentPanel agent={sel} onClose={() => setSelected(null)} />}
+        {obj && !sel && <ObjectPanel use={obj} agents={agents} frames={frameItems} onClose={() => setObj(null)} onCompose={() => { setObj(null); setComposer(true); }} />}
         {composer && <DeskComposer agents={agents} onClose={() => setComposer(false)} />}
-      </div>
-    </div>
-  );
-}
-
-const chats = new Map<string, Chat>();
-
-function AgentPanel({ agent, onClose }: { agent: AgentStatus; onClose: () => void }) {
-  const toast = useToast();
-  const navigate = useNavigate();
-  const [chat, setChat] = useState<Chat>(() => chats.get(agent.slug) ?? [
-    { role: "assistant", content: `Hi, I'm ${agent.name}, the ${agent.role.toLowerCase()}. ${agent.description}` }]);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const missionId = agent.current?.mission_id;
-  const mission = useAsync<Mission | null>(() => (missionId ? api.mission(missionId) : Promise.resolve(null)), [missionId], 2000);
-  const briefs = (mission.data?.briefs ?? []).filter((b) => b.status === "open" && b.agent === agent.slug);
-  const approvals = agent.state === "waiting" ? mission.data?.pending_actions ?? [] : [];
-  const endRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setChat(chats.get(agent.slug) ?? [{ role: "assistant", content: `Hi, I'm ${agent.name}, the ${agent.role.toLowerCase()}. ${agent.description}` }]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agent.slug]);
-  useEffect(() => { chats.set(agent.slug, chat); endRef.current?.scrollIntoView({ block: "end" }); }, [chat, agent.slug]);
-
-  const say = async () => {
-    const msg = text.trim();
-    if (!msg || busy) return;
-    const next: Chat = [...chat, { role: "user", content: msg }];
-    setChat(next);
-    setText("");
-    setBusy(true);
-    try {
-      const r = await api.chatAgent(agent.slug, msg, chat.slice(-10));
-      setChat([...next, { role: "assistant", content: r.reply }]);
-    } catch (e) {
-      toast((e as Error).message, "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-  const giveTask = async () => {
-    const goal = text.trim() || [...chat].reverse().find((m) => m.role === "user")?.content;
-    if (!goal) { toast("Type what you want done first", "error"); return; }
-    try {
-      const m = await api.startMission(goal, agent.slug);
-      setChat([...chat, ...(text.trim() ? [{ role: "user" as const, content: goal }] : []),
-        { role: "assistant", content: `On it. Mission #${m.id} started; watch me head to my desk.` }]);
-      setText("");
-      notifyChanged();
-    } catch (e) { toast((e as Error).message, "error"); }
-  };
-
-  return (
-    <div className="absolute inset-y-0 right-0 flex w-full max-w-sm flex-col border-l border-line bg-bg/95 shadow-2xl backdrop-blur" onClick={(e) => e.stopPropagation()}>
-      <div className="flex items-start gap-3 border-b border-line p-3">
-        <AgentAvatar icon={agent.icon} color={agent.color} state={agent.state} size={40} />
-        <div className="min-w-0 flex-1">
-          <div className="font-semibold">{agent.name} <span className="text-xs font-normal text-muted">{agent.role}</span></div>
-          <div className={`text-xs ${STATE_TONE[agent.state]}`}>{STATE_LABEL[agent.state]}</div>
-          <div className="mt-0.5 truncate font-mono text-[10px] text-muted">{agent.effective_model}</div>
-        </div>
-        <button className="btn-ghost" onClick={onClose} aria-label="Close"><X size={16} /></button>
-      </div>
-      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3">
-        {agent.current && (
-          <div className="rounded-lg border border-line bg-panel p-2.5 text-xs">
-            <div className="text-muted">Working on</div>
-            <div className="font-medium">{agent.current.title}</div>
-            <div className="mt-0.5 text-muted">for “{agent.current.goal}”</div>
-            <button className="btn-ghost mt-1 px-0 text-xs text-accent" onClick={() => navigate(`/crew?mission=${agent.current!.mission_id}`)}>
-              <ExternalLink size={12} /> Open mission #{agent.current.mission_id}
-            </button>
-          </div>
-        )}
-        {briefs.map((b) => <BriefCard key={b.id} brief={b} agentName={agent.name} onAnswered={() => { mission.reload(); notifyChanged(); }} />)}
-        {approvals.map((a) => <ApprovalCard key={a.id} action={a} onChange={() => { mission.reload(); notifyChanged(); }} />)}
-        <div className="space-y-2">
-          {chat.map((m, i) => (
-            <div key={i} className={`flex ${m.role === "user" ? "justify-end" : ""}`}>
-              <div className={`max-w-[85%] whitespace-pre-wrap rounded-xl px-3 py-1.5 text-sm ${m.role === "user" ? "bg-accent text-white" : "border border-line bg-panel"}`}
-                style={m.role === "assistant" ? { borderColor: `color-mix(in oklab, ${colorOf(agent.color)} 40%, var(--color-line))` } : undefined}>
-                {m.content}
-              </div>
-            </div>
-          ))}
-          {busy && <div className="text-xs text-muted">{agent.name} is thinking…</div>}
-          <div ref={endRef} />
-        </div>
-      </div>
-      <div className="border-t border-line p-3">
-        <textarea className="input min-h-16 text-sm" placeholder={`Say something to ${agent.name}, or describe a task…`} value={text}
-          onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); say(); } }} />
-        <div className="mt-2 flex gap-2">
-          <button className="btn-outline flex-1" onClick={say} disabled={busy || !text.trim()}><MessageCircle size={14} /> Talk</button>
-          <button className="btn-primary flex-1" onClick={giveTask} disabled={agent.state === "offline"}><Rocket size={14} /> Give task</button>
-        </div>
       </div>
     </div>
   );

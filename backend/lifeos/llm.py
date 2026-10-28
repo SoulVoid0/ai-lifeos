@@ -185,6 +185,28 @@ def _record(provider: str, model: str, tokens_in: int, tokens_out: int) -> None:
                          "cost_usd = cost_usd + ? WHERE id = ?", (tokens_in, tokens_out, cost, mission_id))
 
 
+def record_cost(provider: str, model: str, cost_usd: float, mission_id: int | None = None, agent: str | None = None) -> None:
+    """Record a priced call that isn't token-based (for example an image)."""
+    attr = getattr(_local, "attr", None) or (None, None)
+    mission_id, agent = mission_id or attr[0], agent or attr[1]
+    with db.session() as conn:
+        conn.execute("INSERT INTO ledger(mission_id, agent, model, provider, tokens_in, tokens_out, cost_usd, created_at) "
+                     "VALUES (?,?,?,?,0,0,?,?)", (mission_id, agent, f"{provider}:{model}", provider, cost_usd, db.now()))
+        if mission_id:
+            conn.execute("UPDATE missions SET cost_usd = cost_usd + ? WHERE id = ?", (cost_usd, mission_id))
+
+
+def unload_local_models() -> int:
+    """Ask Ollama to free GPU memory (used before image/video generation on the same GPU)."""
+    try:
+        loaded = httpx.get(f"{_base()}/api/ps", timeout=3).json().get("models") or []
+        for m in loaded:
+            httpx.post(f"{_base()}/api/generate", json={"model": m["name"], "keep_alive": 0}, timeout=30)
+        return len(loaded)
+    except (httpx.HTTPError, ValueError, KeyError):
+        return 0
+
+
 def spend_today() -> dict[str, Any]:
     start = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     with db.session() as conn:

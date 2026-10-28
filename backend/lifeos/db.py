@@ -215,6 +215,24 @@ CREATE TABLE IF NOT EXISTS mission_tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_mtasks_mission ON mission_tasks(mission_id);
 
+-- Generated images and videos.
+CREATE TABLE IF NOT EXISTS media (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    backend TEXT NOT NULL,
+    model TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    path TEXT,
+    params TEXT NOT NULL DEFAULT '{}',
+    error TEXT,
+    seconds REAL,
+    mission_id INTEGER,
+    agent TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
+
 -- What the crew has learned: short rules an agent (or every agent, agent = '*') reads before working.
 CREATE TABLE IF NOT EXISTS lessons (
     id INTEGER PRIMARY KEY,

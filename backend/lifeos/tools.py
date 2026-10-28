@@ -151,6 +151,26 @@ class CreateEventArgs(BaseModel):
     location: str | None = None
 
 
+class ImageArgs(BaseModel):
+    prompt: str = Field(..., min_length=3, max_length=2000, description="Detailed visual description: subject, style, "
+                        "lighting, composition")
+    negative: str | None = Field(None, max_length=500, description="Things to avoid")
+    size: Literal["square", "portrait", "landscape", "wide"] = "square"
+    seed: int | None = None
+
+
+class VideoArgs(BaseModel):
+    prompt: str = Field(..., min_length=3, max_length=2000, description="What happens in the clip, camera motion, style")
+    negative: str | None = Field(None, max_length=500)
+    size: Literal["landscape", "portrait", "square", "wide"] = "landscape"
+    seconds: int = Field(4, ge=1, le=10, description="Clip length in seconds (24 fps)")
+
+
+class ListMediaArgs(BaseModel):
+    kind: Literal["image", "video"] | None = None
+    limit: int = Field(10, ge=1, le=50)
+
+
 # ---------------------------------------------------------------- registry
 
 @dataclass
@@ -365,6 +385,46 @@ def _undo_outbox(result: dict[str, Any]) -> dict[str, Any]:
     if p.is_file() and p.parent == outbox_dir():
         p.unlink()
     return {"summary": f"Removed {p.name} from the outbox."}
+
+
+def _generate(kind: str, a: ImageArgs | VideoArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import llm, media
+
+    _, agent = getattr(llm._local, "attr", None) or (None, None)
+    frames = (getattr(a, "seconds", 4) * 24) + 1
+    try:
+        m = media.generate(kind, a.prompt, negative=a.negative or "", size=a.size, seed=getattr(a, "seed", None),
+                           frames=frames, mission_id=ctx.get("mission_id"), agent=agent)
+    except media.MediaError as exc:
+        raise ToolError(str(exc)) from exc
+    if m["status"] != "done":
+        raise ToolError(f"{kind.capitalize()} generation failed: {m.get('error') or m['status']}")
+    ctx.setdefault("media", []).append(m["id"])
+    return {"summary": f"Generated {kind} #{m['id']} ({m['name']}, {m['seconds']}s with {m['model']}).",
+            "media_id": m["id"], "path": m["path"]}
+
+
+def _generate_image(a: ImageArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    return _generate("image", a, ctx)
+
+
+def _generate_video(a: VideoArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    return _generate("video", a, ctx)
+
+
+def _undo_media(result: dict[str, Any]) -> dict[str, Any]:
+    from . import media
+
+    media.delete(result["media_id"])
+    return {"summary": f"Deleted generated media #{result['media_id']}."}
+
+
+def _list_media(a: ListMediaArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import media
+
+    items = [{k: m[k] for k in ("id", "kind", "prompt", "status", "name", "created_at")}
+             for m in media.list_media(a.limit, a.kind)]
+    return {"summary": f"{len(items)} generated item(s).", "media": items}
 
 
 def _list_projects(a: NoArgs, ctx: dict[str, Any]) -> dict[str, Any]:
@@ -582,6 +642,11 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          undo=_undo_create_event),
     Tool("check_email", "Read recent email headers and snippets (read-only; needs an account in Settings).",
          EmailArgs, "read", "auto", run=_check_email),
+    Tool("generate_image", "Generate an image from a text prompt with the configured image backend (local ComfyUI or "
+         "WebUI by default). Saved to the gallery.", ImageArgs, "write", "auto", run=_generate_image, undo=_undo_media),
+    Tool("generate_video", "Generate a short video clip (a few seconds) from a text prompt with ComfyUI + LTX-Video. "
+         "Slow: minutes per clip.", VideoArgs, "write", "auto", run=_generate_video, undo=_undo_media),
+    Tool("list_media", "List recently generated images and videos.", ListMediaArgs, "read", "auto", run=_list_media),
 ]}
 
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
-  Activity, Bell, Bot, Brain, CalendarDays, FolderGit2, FolderOpen, Gamepad2, LayoutDashboard, Network, Pause, Play, Search,
+  Activity, Bell, Bot, Brain, CalendarDays, FolderGit2, FolderOpen, Gamepad2, Images, LayoutDashboard, Network, Pause, Play, Search,
   Settings as Cog, Workflow,
 } from "lucide-react";
 import { api, type Notification } from "../lib/api";
@@ -13,6 +13,7 @@ const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/crew", label: "Control Center", icon: Network },
   { to: "/station", label: "Station", icon: Gamepad2 },
+  { to: "/gallery", label: "Gallery", icon: Images },
   { to: "/assistant", label: "Assistant", icon: Bot },
   { to: "/automations", label: "Automations", icon: Workflow },
   { to: "/projects", label: "Projects", icon: FolderGit2 },

@@ -38,6 +38,8 @@ DEFAULTS: dict[str, Any] = {
     "web_access": False,
     # Learning: a teammate reviews each result (and the agent revises once if it scores low), the Overseer
     # turns finished missions into lessons, and auto-routing sends each agent's work to its best-scoring model.
+    # Image/video generation backend (see media.py for the keys).
+    "media": {},
     "peer_review": True,
     "reflection": True,
     "auto_route": False,
