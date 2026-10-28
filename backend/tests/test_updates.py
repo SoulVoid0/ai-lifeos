@@ -109,3 +109,17 @@ def test_keeps_real_data_when_it_has_more(tmp_path, monkeypatch):
     _db(store / "lifeos.db", models=10)
     assert config.import_store_python_data([store]) is None
     assert not list(real.glob("backup-*"))
+    # Asked for in Settings: imports on the next start anyway.
+    (real / config._REQUEST).write_text("x")
+    assert config.import_store_python_data([store]) == store
+    assert not (real / config._REQUEST).exists()
+
+
+def test_model_edits_in_the_app_dont_block_the_import(tmp_path, monkeypatch):
+    from lifeos import config
+
+    real, store = tmp_path / "real", tmp_path / "store"
+    monkeypatch.setenv("LIFEOS_DATA_DIR", str(real))
+    _db(real / "lifeos.db", models=10)
+    _db(store / "lifeos.db", models=10)
+    assert config.import_store_python_data([store]) == store

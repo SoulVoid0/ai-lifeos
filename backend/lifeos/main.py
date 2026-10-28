@@ -658,6 +658,16 @@ class UpdateCfgIn(BaseModel):
     token: str | None = Field(default=None, max_length=500)
 
 
+@app.get("/api/system/old-data")
+def old_data() -> dict[str, Any]:
+    return config.store_python_data()
+
+
+@app.post("/api/system/old-data/import")
+def import_old_data() -> dict[str, Any]:
+    return config.request_store_python_import()
+
+
 @app.get("/api/system/update/config")
 def update_config() -> dict[str, Any]:
     return updates.cfg()
