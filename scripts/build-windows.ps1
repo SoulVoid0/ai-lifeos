@@ -2,7 +2,8 @@
 # Run from anywhere:  powershell -ExecutionPolicy Bypass -File A:\ai-lifeos\scripts\build-windows.ps1 -Install
 # -Install runs the installer afterwards with the install folder set to -InstallDir (default A:\AI-LifeOS).
 # Needs: Python 3.11+, Node 18+, Rust (rustup, MSVC toolchain), VS Build Tools (C++) and the WebView2 runtime.
-param([switch]$Install, [string]$InstallDir = "A:\AI-LifeOS")
+# -TauriConfig is the extra Tauri config merged in (the release workflow passes one with the version and updater settings).
+param([switch]$Install, [string]$InstallDir = "A:\AI-LifeOS", [string]$TauriConfig = "src-tauri/tauri.release.conf.json")
 $ErrorActionPreference = "Stop"
 if (-not (Get-Command rustc -ErrorAction SilentlyContinue)) {
   throw "Rust isn't installed. Install it with:  winget install Rustlang.Rustup   then open a new PowerShell window."
@@ -34,9 +35,9 @@ Copy-Item (Join-Path $work "dist\lifeos-backend.exe") (Join-Path $bin "lifeos-ba
 
 Write-Host "==> Building the desktop app"
 Push-Location $frontend
-npm.cmd install
+if ($env:CI) { npm.cmd ci } else { npm.cmd install }
 if ($LASTEXITCODE -ne 0) { throw "npm install failed" }
-npm.cmd run tauri -- build --config src-tauri/tauri.release.conf.json
+npm.cmd run tauri -- build --config $TauriConfig
 if ($LASTEXITCODE -ne 0) { throw "tauri build failed" }
 Pop-Location
 

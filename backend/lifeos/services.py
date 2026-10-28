@@ -40,10 +40,36 @@ def _hidden() -> dict[str, Any]:
     return {"start_new_session": True}
 
 
+def user_env() -> dict[str, str]:
+    """This process's environment plus the user's saved variables (setx / System Properties) it doesn't have.
+
+    Programs started from a window that was open before a variable was saved don't see it, which would make
+    Ollama look for models in the wrong folder (OLLAMA_MODELS)."""
+    env = dict(os.environ)
+    if os.name != "nt":
+        return env
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            i = 0
+            while True:
+                try:
+                    name, value, kind = winreg.EnumValue(key, i)
+                except OSError:
+                    break
+                i += 1
+                if name.upper() != "PATH" and name not in env and isinstance(value, str):
+                    env[name] = os.path.expandvars(value) if kind == winreg.REG_EXPAND_SZ else value
+    except OSError:
+        pass
+    return env
+
+
 def _spawn(name: str, args: list[str], cwd: Path | None = None) -> subprocess.Popen:
     logfile = open(config.data_dir() / f"{name}.log", "ab")  # noqa: SIM115 (kept open for the child)
     proc = subprocess.Popen(args, cwd=str(cwd) if cwd else None, stdin=subprocess.DEVNULL, stdout=logfile,
-                            stderr=subprocess.STDOUT, **_hidden())
+                            stderr=subprocess.STDOUT, env=user_env(), **_hidden())
     _started[name] = proc
     return proc
 
@@ -71,9 +97,9 @@ def ollama_binary() -> str | None:
     if found:
         return found
     if os.name == "nt":
-        guess = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe"
-        if guess.is_file():
-            return str(guess)
+        guesses = [Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama.exe"]
+        guesses += [Path(rf"{d}:\Ollama\ollama.exe") for d in "ACDE"]
+        return next((str(g) for g in guesses if g.is_file()), None)
     return None
 
 

@@ -303,6 +303,21 @@ It freezes the backend into `lifeos-backend.exe` with PyInstaller, bundles it as
 NSIS installer and runs it with `A:\AI-LifeOS` as the install folder. Your data stays in `%APPDATA%\AI-LifeOS`, so the
 app, the shortcuts and `python -m lifeos` all share it.
 
+Python from the Microsoft Store keeps what it writes to `%APPDATA%` in a private folder
+(`%LOCALAPPDATA%\Packages\PythonSoftwareFoundation.Python.*\LocalCache\Roaming\AI-LifeOS`), so data made with
+`python -m lifeos` from Store Python isn't visible to the app. On its first start the app copies that data over once
+when it holds more than the app's own (the app's previous database is kept in `backup-before-import-*`).
+
+### Updates without building
+
+`.github/workflows/release.yml` builds the signed installer on GitHub (Actions → Release → Run workflow, or push a
+`v*` tag) and publishes a release with `latest.json`. The app checks for a new release 15 seconds after it starts and
+from the tray's *Check for updates*; *Install & restart* downloads it, verifies its signature against the key built
+into the app, installs it over the same folder and reopens. Data in `%APPDATA%\AI-LifeOS` isn't touched. The backend
+fetches the release for the app, so a private repository works with a fine-grained read token (Contents: read) saved
+in Settings → Updates; it's kept in Windows Credential Manager. One-time setup: create a key with
+`npm run tauri signer generate -- -w <file>` and add the repository secrets listed at the top of `release.yml`.
+
 ## Running it (any OS)
 
 Requirements: Python 3.10+, Node 18+, and optionally [Ollama](https://ollama.com) and Rust (for the desktop build).

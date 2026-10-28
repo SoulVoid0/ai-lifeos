@@ -26,6 +26,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+export interface UpdateConfig { repo: string; has_token: boolean }
+
 const get = <T>(p: string) => request<T>("GET", p);
 const post = <T>(p: string, b?: unknown) => request<T>("POST", p, b ?? {});
 const patch = <T>(p: string, b: unknown) => request<T>("PATCH", p, b);
@@ -752,6 +754,8 @@ export const api = {
   },
   services: () => get<Services>("/api/system/services"),
   startService: (name: "ollama" | "comfyui") => post<Services & { ok: boolean }>(`/api/system/services/${name}/start`),
+  updateConfig: () => get<UpdateConfig>("/api/system/update/config"),
+  setUpdateConfig: (c: { repo?: string; token?: string }) => patch<UpdateConfig>("/api/system/update/config", c),
   agentActivity: (slug: string) => get<AgentActivity>(`/api/crew/agents/${slug}/activity`),
 
   emailStatus: () => get<EmailStatus>("/api/email/status"),
