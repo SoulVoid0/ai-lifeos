@@ -99,3 +99,30 @@ def test_timeparse():
     assert parse("in 2 hours", now) == now + timedelta(hours=2)
     assert parse("nov 3", now).month == 11
     assert parse("nothing here", now) is None
+
+
+def test_index_survives_pre_1970_timestamps(approved):
+    from lifeos import files, permissions
+
+    f = approved["downloads"] / "ancient.txt"
+    f.write_text("old")
+    os.utime(f, (-86400, -86400))
+    fid, root = permissions.approved_roots()[0]
+    files.index_folder(fid, root)
+    assert any(x["name"] == "ancient.txt" and x["modified_at"].startswith("1969-12-31") for x in files.search("ancient"))
+
+
+def test_unexpected_errors_return_their_cause(client, monkeypatch):
+    from lifeos import proactive
+
+    def boom():
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(proactive, "dashboard", boom)
+    from fastapi.testclient import TestClient
+
+    from lifeos.main import app
+
+    with TestClient(app, headers={"X-LifeOS-Client": "1"}, raise_server_exceptions=False) as c:
+        r = c.get("/api/dashboard")
+    assert r.status_code == 500 and r.json()["detail"] == "RuntimeError: disk on fire"
