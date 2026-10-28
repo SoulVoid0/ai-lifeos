@@ -159,6 +159,9 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 """
 
+# Writers wait this long for the lock instead of failing with "database is locked".
+BUSY_TIMEOUT_S = 30
+
 _init_lock = threading.Lock()
 _initialized: set[str] = set()
 
@@ -169,9 +172,11 @@ def now() -> str:
 
 def connect() -> sqlite3.Connection:
     path = str(config.db_path())
-    conn = sqlite3.connect(path, timeout=10)
+    conn = sqlite3.connect(path, timeout=BUSY_TIMEOUT_S)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_S * 1000}")
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA synchronous = NORMAL")
     with _init_lock:
         if path not in _initialized:
             conn.execute("PRAGMA journal_mode = WAL")

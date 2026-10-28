@@ -5,6 +5,7 @@ import hashlib
 import os
 import re
 import shutil
+import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -112,43 +113,72 @@ def _walk(root: Path) -> Iterable[Path]:
                 yield Path(dirpath) / name
 
 
+_UPSERT = """INSERT INTO files(path, folder_id, name, ext, size, modified_at, accessed_at, category, excerpt, indexed_at)
+   VALUES (?,?,?,?,?,?,?,?,?,?)
+   ON CONFLICT(path) DO UPDATE SET size=excluded.size, modified_at=excluded.modified_at,
+     accessed_at=excluded.accessed_at, category=excluded.category, excerpt=excluded.excerpt,
+     sha256=NULL, indexed_at=excluded.indexed_at, folder_id=excluded.folder_id"""
+
+_index_locks: dict[int, threading.Lock] = {}
+_index_locks_guard = threading.Lock()
+
+
+def _folder_lock(folder_id: int) -> threading.Lock:
+    with _index_locks_guard:
+        return _index_locks.setdefault(folder_id, threading.Lock())
+
+
 def index_folder(folder_id: int, root: Path) -> dict[str, int]:
-    """(Re)index one approved folder. Unchanged files keep their extracted text."""
+    """(Re)index one approved folder. Unchanged files keep their extracted text.
+
+    Text extraction runs outside any transaction and rows are written in small batches, so
+    indexing a big folder never holds the database write lock for long.
+    """
+    with _folder_lock(folder_id):
+        return _index_folder(folder_id, root)
+
+
+def _index_folder(folder_id: int, root: Path) -> dict[str, int]:
     seen: set[str] = set()
     added = updated = 0
     with db.session() as conn:
         existing = {r["path"]: (r["size"], r["modified_at"]) for r in
                     conn.execute("SELECT path, size, modified_at FROM files WHERE folder_id = ?", (folder_id,))}
-        for count, path in enumerate(_walk(root)):
-            if count >= config.MAX_INDEX_FILES:
-                break
-            try:
-                if path.is_symlink():
-                    continue
-                st = path.stat()
-            except OSError:
+    batch: list[tuple[Any, ...]] = []
+
+    def flush() -> None:
+        if batch:
+            with db.session() as conn:
+                conn.executemany(_UPSERT, batch)
+            batch.clear()
+
+    for count, path in enumerate(_walk(root)):
+        if count >= config.MAX_INDEX_FILES:
+            break
+        try:
+            if path.is_symlink():
                 continue
-            key = str(path)
-            seen.add(key)
-            mtime = _iso(st.st_mtime)
-            if existing.get(key) == (st.st_size, mtime):
-                continue
-            ext = path.suffix.lower().lstrip(".")
-            excerpt = extract_text(path) if st.st_size <= 200 * 1024 * 1024 else ""
-            category = categorize(path.name, ext, excerpt)
-            conn.execute(
-                """INSERT INTO files(path, folder_id, name, ext, size, modified_at, accessed_at, category, excerpt, indexed_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)
-                   ON CONFLICT(path) DO UPDATE SET size=excluded.size, modified_at=excluded.modified_at,
-                     accessed_at=excluded.accessed_at, category=excluded.category, excerpt=excluded.excerpt,
-                     sha256=NULL, indexed_at=excluded.indexed_at, folder_id=excluded.folder_id""",
-                (key, folder_id, path.name, ext, st.st_size, mtime, _iso(st.st_atime), category, excerpt, db.now()),
-            )
-            if key in existing:
-                updated += 1
-            else:
-                added += 1
-        removed = [p for p in existing if p not in seen]
+            st = path.stat()
+        except OSError:
+            continue
+        key = str(path)
+        seen.add(key)
+        mtime = _iso(st.st_mtime)
+        if existing.get(key) == (st.st_size, mtime):
+            continue
+        ext = path.suffix.lower().lstrip(".")
+        excerpt = extract_text(path) if st.st_size <= 200 * 1024 * 1024 else ""
+        category = categorize(path.name, ext, excerpt)
+        batch.append((key, folder_id, path.name, ext, st.st_size, mtime, _iso(st.st_atime), category, excerpt, db.now()))
+        if key in existing:
+            updated += 1
+        else:
+            added += 1
+        if len(batch) >= 50:
+            flush()
+    flush()
+    removed = [p for p in existing if p not in seen]
+    with db.session() as conn:
         conn.executemany("DELETE FROM files WHERE path = ?", [(p,) for p in removed])
         conn.execute("UPDATE approved_folders SET last_indexed_at = ? WHERE id = ?", (db.now(), folder_id))
     return {"added": added, "updated": updated, "removed": len(removed), "total": len(seen)}
@@ -304,16 +334,21 @@ def duplicates(folder: str | None = None, limit: int = 50) -> list[dict[str, Any
             " AND size IN (SELECT size FROM files WHERE size > 0" + folder_clause + " GROUP BY size HAVING COUNT(*) > 1)",
             params * 2,
         ).fetchall()
-        groups: dict[str, list[dict[str, Any]]] = {}
-        for r in rows:
-            digest = r["sha256"]
-            if not digest:
-                try:
-                    digest = sha256(Path(r["path"]))
-                except OSError:
-                    continue
-                conn.execute("UPDATE files SET sha256 = ? WHERE id = ?", (digest, r["id"]))
-            groups.setdefault(digest, []).append(_file_out(r))
+    # Hash outside the transaction: hashing large files must not hold the write lock.
+    groups: dict[str, list[dict[str, Any]]] = {}
+    computed: list[tuple[str, int]] = []
+    for r in rows:
+        digest = r["sha256"]
+        if not digest:
+            try:
+                digest = sha256(Path(r["path"]))
+            except OSError:
+                continue
+            computed.append((digest, r["id"]))
+        groups.setdefault(digest, []).append(_file_out(r))
+    if computed:
+        with db.session() as conn:
+            conn.executemany("UPDATE files SET sha256 = ? WHERE id = ?", computed)
     out = [{"sha256": h, "size": g[0]["size"], "files": sorted(g, key=lambda f: f["modified_at"])}
            for h, g in groups.items() if len(g) > 1]
     out.sort(key=lambda g: g["size"] * (len(g["files"]) - 1), reverse=True)
