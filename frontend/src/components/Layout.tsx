@@ -8,6 +8,7 @@ import { api, type Notification } from "../lib/api";
 import { ago } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { notifyChanged, useToast } from "./ui";
+import logo from "../assets/logo.svg";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -80,7 +81,7 @@ export function Layout() {
     <div className="flex h-full">
       <aside className="flex w-56 shrink-0 flex-col border-r border-line bg-panel">
         <div className="flex items-center gap-2 px-4 py-4">
-          <div className="grid h-8 w-8 place-items-center rounded-lg bg-accent text-sm font-bold text-white">L</div>
+          <img src={logo} alt="" className="h-8 w-8 [image-rendering:pixelated]" />
           <div>
             <div className="text-sm font-semibold">AI LifeOS</div>
             <div className="flex items-center gap-1 text-[11px] text-muted">
