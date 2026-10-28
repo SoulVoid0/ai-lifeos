@@ -52,7 +52,12 @@ IMPORTANT_KEYWORDS = ["deadline", "due date", "due by", "urgent", "important", "
 
 
 def _iso(ts: float) -> str:
-    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds")
+    # fromtimestamp() raises OSError on Windows for pre-1970 timestamps, which some extracted
+    # or synced files carry; epoch arithmetic works everywhere.
+    try:
+        return (datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=ts)).isoformat(timespec="seconds")
+    except OverflowError:
+        return datetime(1970, 1, 1, tzinfo=timezone.utc).isoformat(timespec="seconds")
 
 
 # ---------------------------------------------------------------- extraction

@@ -1,6 +1,7 @@
 """HTTP API consumed by the desktop/web UI. Binds to localhost only."""
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 from . import (__version__, actions, activity, agent, config, conversations, files, llm, memory, permissions,
                proactive, scheduler, search, settings, tasks, tools)
 
+log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
 
 
@@ -58,6 +60,15 @@ async def forbidden(_: Request, exc: permissions.PermissionDenied):
 @app.exception_handler(FileNotFoundError)
 async def missing_file(_: Request, exc: FileNotFoundError):
     return JSONResponse({"detail": f"File not found: {exc}"}, status_code=404)
+
+
+@app.exception_handler(Exception)
+async def unexpected(request: Request, exc: Exception):
+    # Surface the real cause in the UI instead of a bare "Internal Server Error".
+    log.exception("Unhandled error on %s %s", request.method, request.url.path)
+    activity.log("error", f"{request.method} {request.url.path} failed: {type(exc).__name__}: {exc}"[:500],
+                 status="error")
+    return JSONResponse({"detail": f"{type(exc).__name__}: {exc}"}, status_code=500)
 
 
 # ---------------------------------------------------------------- schemas
