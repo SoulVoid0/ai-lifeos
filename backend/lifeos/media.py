@@ -248,6 +248,10 @@ def generate(kind: str, prompt: str, *, negative: str = "", size: str = "square"
 _GPU = threading.Lock()
 
 
+def gpu_busy() -> bool:
+    return _GPU.locked()
+
+
 def _run(media_id: int) -> None:
     if cfg()["backend"] in ("comfyui", "a1111"):
         with _GPU:

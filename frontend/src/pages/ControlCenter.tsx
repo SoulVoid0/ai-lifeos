@@ -252,7 +252,7 @@ function AgentNode({ agent, big, selected, onClick, onOpenMission }: {
   return (
     <button
       onClick={onClick}
-      className={`flex w-44 flex-col items-center rounded-xl border bg-panel/95 p-2.5 text-center shadow-lg backdrop-blur transition hover:border-accent ${
+      className={`flex w-44 flex-col items-center rounded-xl border bg-panel p-2.5 text-center shadow-lg transition hover:border-accent ${
         selected ? "border-accent ring-2 ring-accent/30" : "border-line"} ${big ? "w-52" : ""}`}
     >
       <AgentAvatar icon={agent.icon} color={agent.color} state={agent.state} size={big ? 52 : 40} />

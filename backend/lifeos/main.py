@@ -630,6 +630,13 @@ class MediaIn(BaseModel):
     seed: int | None = None
 
 
+@app.get("/api/system/gpu")
+def gpu_status() -> dict[str, Any]:
+    """What is using the GPU: models Ollama has loaded, and whether an image/video job is running."""
+    models = llm.loaded_models()
+    return {"models": models, "vram": sum(m["vram"] for m in models), "media_busy": media.gpu_busy()}
+
+
 @app.get("/api/system/services")
 def services_status() -> dict[str, Any]:
     return services.status()
