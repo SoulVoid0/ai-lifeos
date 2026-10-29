@@ -29,8 +29,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  windows:
+  # The same commit pushed to a second branch (a fast-forward merge) would otherwise be published twice.
+  check:
     if: github.event_name != 'push' || github.ref_type == 'tag' || contains(github.event.head_commit.message, '[release]')
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.dup.outputs.released }}
+    steps:
+      - id: dup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" != tag ] && gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" --jq '.[].target_commitish' | grep -qx "$GITHUB_SHA"; then
+            echo "Already released; nothing to do."
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  windows:
+    needs: check
+    if: needs.check.outputs.released != 'true'
     runs-on: windows-latest
     timeout-minutes: 60
     env:
