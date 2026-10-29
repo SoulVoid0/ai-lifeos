@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from . import activity, crew, db, llm, permissions, rules, settings, tasks, tools
+from . import activity, crew, db, llm, mailer, permissions, rules, settings, tasks, tools
 
 TRIGGERS = ("manual", "interval", "daily", "weekly", "monthly", "startup")
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -477,6 +477,8 @@ def _finish(w: dict[str, Any], status: str, summary: str, trigger: str) -> None:
                  status={"done": "ok", "skipped": "ok"}.get(status, "error"))
     if status != "skipped":
         _notify(f"Workflow {'finished' if status == 'done' else 'failed'}: {w['name']}", summary)
+        mailer.notify("workflow", f"Automation {'finished' if status == 'done' else 'failed'}: {w['name']}"[:120],
+                      f"Automation \"{w['name']}\" {'finished' if status == 'done' else 'failed'} ({trigger}).\n\n{summary}")
 
 
 def run_async(wid: int, trigger: str = "manual") -> None:

@@ -69,6 +69,10 @@ DEFAULTS: dict[str, Any] = {
     "notification_prefs": {"reminders": True, "workflows": True, "missions": True, "suggestions": False},
     "quiet_hours": {"enabled": False, "start": "22:00", "end": "07:00"},
     "email": {"host": "", "port": 993, "username": "", "folder": "INBOX"},
+    # Email alerts over SMTP (mailer.py); the password is in the vault.
+    "email_alerts": {"enabled": False, "to": "", "host": "smtp.gmail.com", "port": 465, "username": "",
+                     "security": "ssl", "events": {"mission_done": True, "mission_failed": True, "approval": True,
+                                                   "question": True, "workflow": False}},
 }
 
 

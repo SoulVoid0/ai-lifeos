@@ -597,6 +597,12 @@ export interface CalEvent {
 export interface CalSource { id: number; kind: string; location: string; label: string | null; enabled: number; last_synced_at: string | null; last_error: string | null; event_count: number }
 
 export interface EmailStatus { configured: boolean; host: string; port: number; username: string; folder: string }
+export type EmailAlertEvent = "mission_done" | "mission_failed" | "approval" | "question" | "workflow";
+export interface EmailAlerts {
+  enabled: boolean; to: string; host: string; port: number; username: string; security: "ssl" | "starttls";
+  events: Record<EmailAlertEvent, boolean>;
+  configured: boolean; password_stored: boolean; password_from_imap: boolean; last_sent_at: string | null; last_error: string | null;
+}
 export interface EmailMessage { id: string; from: string; subject: string; date: string | null; snippet: string }
 
 export interface DuplicateGroup {
@@ -790,5 +796,9 @@ export const api = {
   setEmail: (e: { host: string; port: number; username: string; folder: string; password?: string }) =>
     request<EmailStatus>("PUT", "/api/email", e),
   testEmail: () => post<{ ok: boolean; latest?: string | null; error?: string }>("/api/email/test"),
+  emailAlerts: () => get<EmailAlerts>("/api/email-alerts"),
+  setEmailAlerts: (e: Partial<Omit<EmailAlerts, "configured" | "password_stored" | "password_from_imap" | "last_sent_at" | "last_error">> & { password?: string }) =>
+    request<EmailAlerts>("PUT", "/api/email-alerts", e),
+  testEmailAlerts: () => post<{ ok: boolean; to?: string; error?: string }>("/api/email-alerts/test"),
   emailMessages: (limit = 15, unread = true) => get<EmailMessage[]>(`/api/email/messages${qs({ limit, unread })}`),
 };
