@@ -207,6 +207,12 @@ export interface Settings {
   ollama_one_model: boolean;
   ollama_keep_alive: string;
   ollama_num_ctx: number;
+  ollama_gpu_gb: number;
+  ollama_cpu_threads: number;
+  ollama_low_priority: boolean;
+  ollama_unload_on_switch: boolean;
+  ollama_hard_stop: boolean;
+  ollama_model_options: Record<string, { num_ctx?: number; num_gpu?: number; num_thread?: number }>;
   chat_model: string;
   embed_model: string;
   planner: "auto" | "llm" | "rules";

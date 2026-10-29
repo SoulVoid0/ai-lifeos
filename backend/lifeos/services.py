@@ -66,6 +66,123 @@ def user_env() -> dict[str, str]:
     return env
 
 
+BELOW_NORMAL_PRIORITY_CLASS = 0x4000
+
+
+def _win_pids(prefixes: tuple[str, ...]) -> list[int]:
+    """Windows: ids of the processes whose exe name starts with one of prefixes (lowercase)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class Entry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+    k32 = _kernel32()
+    snap = k32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+    if not snap or snap == wintypes.HANDLE(-1).value:
+        return []
+    pids = []
+    try:
+        e = Entry()
+        e.dwSize = ctypes.sizeof(Entry)
+        ok = k32.Process32FirstW(snap, ctypes.byref(e))
+        while ok:
+            if e.szExeFile.lower().startswith(prefixes):
+                pids.append(int(e.th32ProcessID))
+            ok = k32.Process32NextW(snap, ctypes.byref(e))
+    finally:
+        k32.CloseHandle(snap)
+    return pids
+
+
+_k32: Any = None
+
+
+def _kernel32() -> Any:
+    """kernel32 with argument types declared, so 64-bit handles aren't squeezed into C ints."""
+    global _k32
+    if _k32 is None:
+        import ctypes
+        from ctypes import wintypes
+
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        H, D, P = wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p
+        for name, args, res in (("CreateToolhelp32Snapshot", [D, D], H), ("Process32FirstW", [H, P], wintypes.BOOL),
+                                ("Process32NextW", [H, P], wintypes.BOOL), ("CloseHandle", [H], wintypes.BOOL),
+                                ("OpenProcess", [D, wintypes.BOOL, D], H), ("GetPriorityClass", [H], D),
+                                ("SetPriorityClass", [H, D], wintypes.BOOL),
+                                ("GetProcessTimes", [H, P, P, P, P], wintypes.BOOL)):
+            fn = getattr(k, name)
+            fn.argtypes, fn.restype = args, res
+        _k32 = k
+    return _k32
+
+
+def _win_open(pid: int, access: int) -> Any:
+    k32 = _kernel32()
+    return k32, k32.OpenProcess(access, False, pid)
+
+
+def lower_priority(prefixes: tuple[str, ...]) -> int:
+    """Windows: put every process whose exe name starts with one of prefixes at below-normal CPU priority, so a model
+    running on the CPU doesn't starve the desktop. Returns how many were changed; does nothing elsewhere."""
+    if os.name != "nt":
+        return 0
+    changed = 0
+    for pid in _win_pids(prefixes):
+        k32, h = _win_open(pid, 0x0200 | 0x1000)  # SET_INFORMATION | QUERY_LIMITED_INFORMATION
+        if h:
+            if k32.GetPriorityClass(h) != BELOW_NORMAL_PRIORITY_CLASS and k32.SetPriorityClass(h, BELOW_NORMAL_PRIORITY_CLASS):
+                changed += 1
+            k32.CloseHandle(h)
+    return changed
+
+
+def _cpu_seconds(prefixes: tuple[str, ...]) -> float:
+    import ctypes
+    from ctypes import wintypes
+
+    total = 0
+    for pid in _win_pids(prefixes):
+        k32, h = _win_open(pid, 0x1000)
+        if not h:
+            continue
+        c, x, kern, user = (wintypes.FILETIME() for _ in range(4))
+        if k32.GetProcessTimes(h, ctypes.byref(c), ctypes.byref(x), ctypes.byref(kern), ctypes.byref(user)):
+            for ft in (kern, user):
+                total += (ft.dwHighDateTime << 32) | ft.dwLowDateTime
+        k32.CloseHandle(h)
+    return total / 1e7  # 100 ns units
+
+
+def ollama_busy(seconds: float = 2.0) -> bool:
+    """Windows: whether Ollama is still crunching (over one core of CPU for a couple of seconds). False elsewhere."""
+    if os.name != "nt":
+        return False
+    before = _cpu_seconds(("ollama", "llama"))
+    time.sleep(seconds)
+    return _cpu_seconds(("ollama", "llama")) - before > seconds
+
+
+def restart_ollama() -> bool:
+    """Hard stop: end Ollama (server and model runners) and start it again. Used when Stop didn't make it let go."""
+    if os.name == "nt":
+        for image in ("ollama.exe", "ollama_llama_server.exe", "llama-server.exe"):
+            subprocess.run(["taskkill", "/F", "/T", "/IM", image], capture_output=True, timeout=20,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+    else:
+        proc = _started.get("ollama")
+        if not proc or proc.poll() is not None:
+            return False  # not ours to kill
+        proc.kill()
+    activity.log("system", "Restarted Ollama to stop work that kept running after Stop")
+    time.sleep(1)
+    return ensure_ollama(wait=30)
+
+
 def _spawn(name: str, args: list[str], cwd: Path | None = None) -> subprocess.Popen:
     logfile = open(config.data_dir() / f"{name}.log", "ab")  # noqa: SIM115 (kept open for the child)
     proc = subprocess.Popen(args, cwd=str(cwd) if cwd else None, stdin=subprocess.DEVNULL, stdout=logfile,

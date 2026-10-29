@@ -25,6 +25,19 @@ DEFAULTS: dict[str, Any] = {
     # Context window (tokens) for local models. Ollama's own default (2048-4096) silently cuts the start of a long
     # task, including the agent's instructions; 0 leaves it to Ollama.
     "ollama_num_ctx": 16384,
+    # Keeping the desktop usable while a model bigger than the GPU runs (it spills onto the CPU and RAM):
+    # GB of VRAM local models may use (0 = Ollama decides, which fills the GPU), CPU threads for the part that runs on
+    # the CPU (0 = all but two cores), and a lower CPU priority for Ollama so Windows comes first.
+    "ollama_gpu_gb": 0.0,
+    "ollama_cpu_threads": 0,
+    "ollama_low_priority": True,
+    # Per model, e.g. {"qwen3-coder:30b": {"num_ctx": 8192, "num_gpu": 30}}; overrides the settings above.
+    "ollama_model_options": {},
+    # When agents switch to a different local model, unload the previous one first so the new one gets all the VRAM.
+    "ollama_unload_on_switch": True,
+    # If Ollama keeps computing a few seconds after Stop (it can, while reading a long prompt with part of the model
+    # on the CPU), restart it. Only when no other mission is still running.
+    "ollama_hard_stop": True,
     # GitHub repository whose releases the desktop app updates from (owner/name). A read token for a private
     # repository is kept in the vault (see updates.py).
     "update_repo": "SoulVoid0/ai-lifeos",
@@ -108,6 +121,15 @@ def update(changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{key} must be between 1 and 12")
         if key == "agent_max_steps" and not 1 <= value <= MAX_STEPS:
             raise ValueError(f"{key} must be between 1 and {MAX_STEPS}")
+        if key == "ollama_gpu_gb" and not 0 <= value <= 256:
+            raise ValueError("ollama_gpu_gb must be between 0 and 256")
+        if key == "ollama_cpu_threads" and not 0 <= value <= 256:
+            raise ValueError("ollama_cpu_threads must be between 0 and 256")
+        if key == "ollama_model_options":
+            for name, opts in value.items():
+                if not isinstance(opts, dict) or set(opts) - {"num_ctx", "num_gpu", "num_thread"} or not all(
+                        isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 131072 for v in opts.values()):
+                    raise ValueError(f"Options for {name} must be num_ctx, num_gpu and num_thread as whole numbers")
         if key == "ollama_num_ctx" and value and not 2048 <= value <= 131072:
             raise ValueError("ollama_num_ctx must be 0 (Ollama's default) or between 2048 and 131072")
         if key in ("mission_token_budget",) and value < 1000:

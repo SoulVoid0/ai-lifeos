@@ -204,3 +204,44 @@ def test_mission_requests_stream_and_collect_the_answer(env, monkeypatch):
         assert llm.chat_text([{"role": "user", "content": "hi"}], model="m") == "Hello"
     assert seen["body"]["stream"] is True and seen["body"]["options"]["num_ctx"] == 16384
     server.shutdown()
+
+
+def test_model_options_for_big_models_and_gpu_budget(env, monkeypatch):
+    from lifeos import llm, settings
+
+    cfg = {**settings.get_all(), "ollama_cpu_threads": 6}
+    assert llm.model_options("qwen3:14b", cfg) == {"num_ctx": 16384, "num_thread": 6}
+    assert llm.model_options("qwen3-coder:30b", cfg)["num_ctx"] == 8192  # 30B+ gets a smaller cache by default
+    assert llm.model_options("qwen3-coder:30b", {**cfg, "ollama_model_options": {"qwen3-coder:30b": {"num_ctx": 12288, "num_gpu": 28}}}) \
+        == {"num_ctx": 12288, "num_gpu": 28, "num_thread": 6}
+    # qwen3-coder:30b: 18.6 GB, 48 layers, 4 KV heads of 128: about 31 layers fit in 13.5 GB with an 8k context
+    monkeypatch.setitem(llm._info_cache, "qwen3-coder:30b", (9e18, {"size": int(18.6 * 1024 ** 3), "layers": 48,
+                                                                    "kv_heads": 4, "key_len": 128}))
+    assert llm.model_options("qwen3-coder:30b", {**cfg, "ollama_gpu_gb": 13.5})["num_gpu"] == 31
+    monkeypatch.setitem(llm._info_cache, "qwen3:8b", (9e18, {"size": int(5.2 * 1024 ** 3), "layers": 36,
+                                                             "kv_heads": 8, "key_len": 128}))
+    assert "num_gpu" not in llm.model_options("qwen3:8b", {**cfg, "ollama_gpu_gb": 13.5})  # fits: Ollama decides
+    assert llm.default_threads() >= 1
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        settings.update({"ollama_model_options": {"x": {"num_gpu": "lots"}}})
+
+
+def test_stop_restarts_ollama_only_if_it_keeps_working(client, monkeypatch):
+    import time
+
+    from lifeos import llm, missions, services
+
+    restarted = []
+    monkeypatch.setattr(missions.time, "sleep", lambda s: None)
+    monkeypatch.setattr(services, "restart_ollama", lambda: restarted.append(1) or True)
+    monkeypatch.setattr(services, "ollama_busy", lambda seconds=2.0: True)
+    llm.last_abort["at"] = 0.0
+    missions._settle_ollama(1)
+    assert restarted == []  # nothing was cut off: leave Ollama alone
+    llm.last_abort["at"] = time.time()
+    missions._settle_ollama(1)
+    assert restarted == [1]
+    monkeypatch.setattr(services, "ollama_busy", lambda seconds=2.0: False)
+    missions._settle_ollama(1)
+    assert restarted == [1]

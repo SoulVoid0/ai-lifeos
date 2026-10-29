@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import socket
 import struct
@@ -40,6 +41,9 @@ class Aborted(Exception):
 
 # Set by missions: the stop event for a mission id. Requests made inside track(mission_id) end as soon as it's set.
 abort_for: Callable[[int], threading.Event] | None = None
+
+
+last_abort = {"at": 0.0}  # when a local request was last cut off by Stop
 
 
 def _abort_event() -> threading.Event | None:
@@ -309,7 +313,8 @@ def _schema_hint(schema: dict[str, Any]) -> str:
 
 
 class _ModelGate:
-    """Lets any number of requests for the loaded model run, but makes a different model wait until they finish."""
+    """Lets any number of requests for the loaded model run, but makes a different model wait until they finish.
+    On a switch the previous model can be unloaded first, so the next one isn't squeezed into what's left of VRAM."""
 
     def __init__(self) -> None:
         self._cond = threading.Condition()
@@ -317,7 +322,7 @@ class _ModelGate:
         self._users = 0
 
     @contextmanager
-    def __call__(self, model: str, enabled: bool) -> Iterator[None]:
+    def __call__(self, model: str, enabled: bool, unload_previous: bool = False) -> Iterator[None]:
         if not enabled:
             yield
             return
@@ -327,9 +332,12 @@ class _ModelGate:
                 if abort is not None and abort.is_set():
                     raise Aborted("Stopped")
                 self._cond.wait(0.5)
+            previous = self._model
             self._model = model
             self._users += 1
         try:
+            if unload_previous and previous and previous != model:
+                unload_model(previous)
             yield
         finally:
             with self._cond:
@@ -339,6 +347,117 @@ class _ModelGate:
 
 _gate = _ModelGate()
 
+BIG_MODEL = re.compile(r"(?<![\d.])(2[4-9]|[3-9]\d|\d{3})b\b", re.I)  # 24b and up: these don't fit next to a desktop
+BIG_MODEL_CTX = 8192
+_info_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def model_options(model: str, cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Ollama options for one request: context window, how many layers go on the GPU, and CPU threads."""
+    cfg = cfg or settings.get_all()
+    own = (cfg.get("ollama_model_options") or {}).get(model) or {}
+    out: dict[str, Any] = {}
+    ctx = own.get("num_ctx") or cfg["ollama_num_ctx"]
+    if ctx and not own.get("num_ctx") and BIG_MODEL.search(model):
+        ctx = min(ctx, BIG_MODEL_CTX)  # every 8k of context is VRAM the model's own layers can't use
+    if ctx:
+        out["num_ctx"] = int(ctx)
+    gpu = own.get("num_gpu")
+    if gpu is None and cfg.get("ollama_gpu_gb"):
+        gpu = gpu_layers(model, float(cfg["ollama_gpu_gb"]), int(ctx or 4096))
+    if gpu is not None:
+        out["num_gpu"] = int(gpu)
+    threads = own.get("num_thread") or cfg.get("ollama_cpu_threads") or default_threads()
+    if threads:
+        out["num_thread"] = int(threads)
+    return out
+
+
+def default_threads() -> int:
+    """All but two physical cores (assumes two threads per core), so Windows keeps some when a model spills over."""
+    logical = os.cpu_count() or 4
+    return max(1, logical // 2 - 2) if logical >= 8 else max(1, logical - 1)
+
+
+def _model_info(model: str) -> dict[str, Any]:
+    """Size on disk and layer shape of a pulled model, from Ollama (cached for an hour)."""
+    hit = _info_cache.get(model)
+    if hit and time.time() - hit[0] < 3600:
+        return hit[1]
+    info: dict[str, Any] = {}
+    try:
+        tags = httpx.get(f"{_base()}/api/tags", timeout=5).json().get("models") or []
+        size = next((m.get("size") for m in tags if m.get("name") == model or m.get("model") == model), None)
+        show = httpx.post(f"{_base()}/api/show", json={"model": model}, timeout=10).json().get("model_info") or {}
+        arch = show.get("general.architecture", "")
+        info = {"size": int(size or 0), "layers": int(show.get(f"{arch}.block_count") or 0),
+                "kv_heads": int(show.get(f"{arch}.attention.head_count_kv") or 0),
+                "key_len": int(show.get(f"{arch}.attention.key_length") or 0)
+                or (int(show.get(f"{arch}.embedding_length") or 0) // max(1, int(show.get(f"{arch}.attention.head_count") or 1)))}
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+        info = {}
+    _info_cache[model] = (time.time(), info)
+    return info
+
+
+def gpu_layers(model: str, gpu_gb: float, ctx: int) -> int | None:
+    """How many of the model's layers fit in gpu_gb of VRAM next to its context cache. None = all of them fit
+    (or the model's shape is unknown), so Ollama decides as usual."""
+    info = _model_info(model)
+    layers, size = info.get("layers") or 0, info.get("size") or 0
+    if not layers or not size:
+        return None
+    kv_heads, key_len = info.get("kv_heads") or 8, info.get("key_len") or 128
+    cache = 2 * layers * ctx * kv_heads * key_len * 2  # keys and values, f16
+    budget = gpu_gb * 1024 ** 3 - cache - 0.75 * 1024 ** 3  # and room for the compute buffers
+    per_layer = size / (layers + 1)  # the output layer is about one more
+    fit = int(budget // per_layer)
+    return None if fit > layers else max(0, fit)
+
+
+def unload_model(model: str) -> None:
+    try:
+        httpx.post(f"{_base()}/api/generate", json={"model": model, "keep_alive": 0}, timeout=30)
+    except Exception:  # noqa: BLE001 (best effort: Ollama evicts it anyway when it needs the room)
+        log.warning("Couldn't unload %s", model)
+
+
+_inflight = 0
+_inflight_lock = threading.Lock()
+_watcher: threading.Thread | None = None
+
+
+@contextmanager
+def _busy(cfg: dict[str, Any]) -> Iterator[None]:
+    """While a local request runs, keep Ollama's processes (the runner starts when a model loads) at low CPU priority."""
+    global _inflight, _watcher
+    if not (cfg.get("ollama_low_priority") and os.name == "nt"):
+        yield
+        return
+    with _inflight_lock:
+        _inflight += 1
+        if _watcher is None or not _watcher.is_alive():
+            _watcher = threading.Thread(target=_priority_watch, daemon=True, name="lifeos-ollama-priority")
+            _watcher.start()
+    try:
+        yield
+    finally:
+        with _inflight_lock:
+            _inflight -= 1
+
+
+def _priority_watch() -> None:
+    from . import services
+
+    global _watcher
+    while True:
+        with _inflight_lock:
+            if _inflight <= 0:
+                _watcher = None
+                return
+        services.lower_priority(("ollama", "llama"))
+        time.sleep(5)
+
 
 def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] | None, timeout: float,
             temperature: float) -> str:
@@ -346,13 +465,12 @@ def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] |
     abortable = _abort_event() is not None  # inside a mission: stream, so Stop can cut it off
     payload: dict[str, Any] = {"model": model, "messages": messages, "stream": abortable,
                                "options": {"temperature": temperature}, "keep_alive": cfg["ollama_keep_alive"]}
-    if cfg["ollama_num_ctx"]:
-        payload["options"]["num_ctx"] = cfg["ollama_num_ctx"]
+    payload["options"].update(model_options(model, cfg))
     if schema is not None:
         payload["format"] = schema
     # Loading a large model (or one that spills into RAM) can take minutes, so the configured limit wins.
     limit = httpx.Timeout(max(timeout, float(cfg["ollama_timeout_s"])), connect=10)
-    with _gate(model, bool(cfg["ollama_one_model"])):
+    with _gate(model, bool(cfg["ollama_one_model"]), bool(cfg["ollama_unload_on_switch"])), _busy(cfg):
         for attempt in (1, 2):
             try:
                 if abortable:
@@ -380,7 +498,7 @@ def _ollama_stream(url: str, payload: dict[str, Any], limit: httpx.Timeout) -> t
     connection is cut, and Ollama stops generating (a plain request keeps the GPU busy until the answer is done)."""
     abort = _abort_event()
     if abort is not None and abort.is_set():
-        raise Aborted("Stopped")
+        raise _aborted()
     parts: list[str] = []
     last: dict[str, Any] = {}
     done = threading.Event()
@@ -406,7 +524,7 @@ def _ollama_stream(url: str, payload: dict[str, Any], limit: httpx.Timeout) -> t
         try:
             for line in r.iter_lines():
                 if abort is not None and abort.is_set():
-                    raise Aborted("Stopped")
+                    raise _aborted()
                 if not line.strip():
                     continue
                 chunk = json.loads(line)
@@ -415,16 +533,21 @@ def _ollama_stream(url: str, payload: dict[str, Any], limit: httpx.Timeout) -> t
                 parts.append((chunk.get("message") or {}).get("content") or "")
                 last = chunk
             if abort is not None and abort.is_set():  # the cut connection can also read as a normal end
-                raise Aborted("Stopped")
+                raise _aborted()
         except (httpx.HTTPError, ValueError, OSError) as exc:
             if abort is not None and abort.is_set():
-                raise Aborted("Stopped") from None
+                raise _aborted() from None
             if isinstance(exc, httpx.HTTPError):
                 raise
             raise LLMUnavailable(f"Ollama sent a broken reply: {exc}") from exc
         finally:
             done.set()
     return last, "".join(parts)
+
+
+def _aborted() -> Aborted:
+    last_abort["at"] = time.time()
+    return Aborted("Stopped")
 
 
 def _openai_compat(provider: str, model: str, messages: list[dict[str, str]], schema: dict[str, Any] | None,
