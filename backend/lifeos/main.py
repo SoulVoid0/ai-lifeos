@@ -151,7 +151,7 @@ class AgentIn(BaseModel):
     tools: list[str] = []
     color: str = "slate"
     icon: str = "bot"
-    max_steps: int = 6
+    max_steps: int = 10
     candidates: list[str] = []
     voice: str = ""
     quirks: str = ""

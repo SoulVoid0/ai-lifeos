@@ -206,6 +206,7 @@ export interface Settings {
   ollama_timeout_s: number;
   ollama_one_model: boolean;
   ollama_keep_alive: string;
+  ollama_num_ctx: number;
   chat_model: string;
   embed_model: string;
   planner: "auto" | "llm" | "rules";
@@ -221,6 +222,7 @@ export interface Settings {
   max_parallel_agents: number;
   mission_token_budget: number;
   agent_max_steps: number;
+  agent_auto_extend: boolean;
   cloud_enabled: boolean;
   cloud_daily_budget_usd: number;
   model_prices: Record<string, { in: number; out: number }>;
