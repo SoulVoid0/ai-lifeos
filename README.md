@@ -58,6 +58,10 @@ Each agent can run its own model (edit an agent in **Control Center → Crew**; 
 shows the `ollama pull` command for any that aren't installed). Until a model is pulled the agent uses the default chat
 model, so nothing breaks.
 
+On one GPU, agents on different models take turns (Settings → Local AI → *One model at a time*) so models aren't
+swapped in and out of VRAM at once. Each answer may take up to 10 minutes by default (a 30B model spilling into RAM
+loads slowly), a timed-out request is retried once, and models stay loaded for 30 minutes between steps.
+
 | Agent | Default | Good upgrades (Ollama tag, download) |
 | --- | --- | --- |
 | Atlas (Overseer), Chrono, Archivist | `llama3.1:8b` | `qwen3:14b` (9.3 GB) on 12–16 GB VRAM: the most reliable JSON plans and tool arguments; `qwen3:8b` (5.2 GB) on 8 GB |

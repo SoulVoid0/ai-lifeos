@@ -123,3 +123,38 @@ def test_model_edits_in_the_app_dont_block_the_import(tmp_path, monkeypatch):
     _db(real / "lifeos.db", models=10)
     _db(store / "lifeos.db", models=10)
     assert config.import_store_python_data([store]) == store
+
+
+def test_ollama_one_model_at_a_time_and_retry(env, monkeypatch):
+    import threading
+    import time
+
+    from lifeos import llm, settings
+
+    settings.update({"ollama_url": "http://127.0.0.1:11434", "ollama_timeout_s": 900})
+    active: list[str] = []
+    overlap: list[tuple[str, str]] = []
+    calls = {"n": 0}
+
+    def fake_post(url, json, timeout):
+        assert timeout.read == 900 and json["keep_alive"] == "30m"
+        if json["model"] == "flaky" and calls["n"] == 0:
+            calls["n"] += 1
+            raise httpx.ReadTimeout("slow")
+        for other in active:
+            if other != json["model"]:
+                overlap.append((other, json["model"]))
+        active.append(json["model"])
+        time.sleep(0.05)
+        active.remove(json["model"])
+        return httpx.Response(200, json={"message": {"content": "ok"}}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(llm.httpx, "post", fake_post)
+    threads = [threading.Thread(target=llm.complete, args=([{"role": "user", "content": "hi"}],),
+                                kwargs={"model": m}) for m in ("a", "b", "a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert overlap == []
+    assert llm.complete([{"role": "user", "content": "hi"}], model="flaky") == "ok"

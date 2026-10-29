@@ -8,6 +8,7 @@ and today's spend is under the daily cap. Every call's token usage goes to the l
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 import struct
@@ -20,6 +21,8 @@ from typing import Any, Iterator
 import httpx
 
 from . import db, settings, vault
+
+log = logging.getLogger("lifeos.llm")
 
 
 class LLMUnavailable(Exception):
@@ -274,17 +277,58 @@ def _schema_hint(schema: dict[str, Any]) -> str:
             + json.dumps(schema, separators=(",", ":")))
 
 
+class _ModelGate:
+    """Lets any number of requests for the loaded model run, but makes a different model wait until they finish."""
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._model: str | None = None
+        self._users = 0
+
+    @contextmanager
+    def __call__(self, model: str, enabled: bool) -> Iterator[None]:
+        if not enabled:
+            yield
+            return
+        with self._cond:
+            while self._users and self._model != model:
+                self._cond.wait()
+            self._model = model
+            self._users += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._users -= 1
+                self._cond.notify_all()
+
+
+_gate = _ModelGate()
+
+
 def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] | None, timeout: float,
             temperature: float) -> str:
+    cfg = settings.get_all()
     payload: dict[str, Any] = {"model": model, "messages": messages, "stream": False,
-                               "options": {"temperature": temperature}}
+                               "options": {"temperature": temperature}, "keep_alive": cfg["ollama_keep_alive"]}
     if schema is not None:
         payload["format"] = schema
-    try:
-        r = httpx.post(f"{_base()}/api/chat", json=payload, timeout=timeout)
-        r.raise_for_status()
-    except httpx.HTTPError as exc:
-        raise LLMUnavailable(f"Ollama request failed: {exc}") from exc
+    # Loading a large model (or one that spills into RAM) can take minutes, so the configured limit wins.
+    limit = httpx.Timeout(max(timeout, float(cfg["ollama_timeout_s"])), connect=10)
+    with _gate(model, bool(cfg["ollama_one_model"])):
+        for attempt in (1, 2):
+            try:
+                r = httpx.post(f"{_base()}/api/chat", json=payload, timeout=limit)
+                r.raise_for_status()
+                break
+            except httpx.TimeoutException as exc:
+                if attempt == 2:
+                    raise LLMUnavailable(f"Ollama request failed: timed out after {int(limit.read or 0)}s twice "
+                                         f"(model {model}). Raise the time limit in Settings → Local AI, or use a "
+                                         "smaller model.") from exc
+                log.warning("Ollama timed out on %s; retrying once", model)
+            except httpx.HTTPError as exc:
+                raise LLMUnavailable(f"Ollama request failed: {exc}") from exc
     data = r.json()
     _record("ollama", model, int(data.get("prompt_eval_count") or 0), int(data.get("eval_count") or 0))
     return data.get("message", {}).get("content", "")
