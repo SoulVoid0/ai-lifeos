@@ -240,3 +240,20 @@ def test_personality_is_editable_and_used_in_chat(client, monkeypatch):
     system = seen["msgs"][0]["content"]
     assert out["reply"] == "Arr, a fine shot." and "Speaks like a pirate" in system and "Arr!" in system
     assert "chat mode" in system
+
+
+def test_stop_all_interrupts_comfyui_and_drops_queued_jobs(client, monkeypatch):
+    from lifeos import db, llm, media
+
+    with db.session() as conn:
+        for status in ("running", "queued"):
+            conn.execute("INSERT INTO media(kind, prompt, backend, status, params, created_at) VALUES (?,?,?,?,?,?)",
+                         ("image", "a cat", "comfyui", status, "{}", db.now()))
+    monkeypatch.setattr(media, "cfg", lambda: {**media.DEFAULTS, "backend": "comfyui"})
+    posts = []
+    monkeypatch.setattr(media.httpx, "post", lambda url, **kw: posts.append((url, kw.get("json"))))
+    monkeypatch.setattr(llm, "unload_local_models", lambda: 0)
+    assert client.post("/api/missions/stop-all").json() == {"stopped": 0}
+    assert ("http://127.0.0.1:8188/queue", {"clear": True}) in posts and ("http://127.0.0.1:8188/interrupt", None) in posts
+    statuses = [m["status"] for m in client.get("/api/media").json()]
+    assert statuses.count("failed") == 1 and statuses.count("running") == 1

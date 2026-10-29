@@ -33,8 +33,8 @@ MAX_BRIEFS = 2
 OBSERVATION_CHARS = 3500
 
 
-class Cancelled(Exception):
-    pass
+# A stopped mission ends its in-flight model request with llm.Aborted, so both mean the same thing here.
+Cancelled = llm.Aborted
 
 
 class BudgetExceeded(Exception):
@@ -77,6 +77,9 @@ _decisions: dict[int, list[dict[str, Any]]] = {}
 def _cancel_event(mid: int) -> threading.Event:
     with _state_lock:
         return _cancel.setdefault(mid, threading.Event())
+
+
+llm.abort_for = _cancel_event
 
 
 def _wake_event(mid: int) -> threading.Event:
@@ -230,6 +233,9 @@ def cancel(mid: int) -> dict[str, Any]:
             actions.reject(aid)
         except ValueError:
             pass
+    from . import media
+
+    media.stop(mid)  # its in-flight model request is cut by the cancel event (see llm.abort_for)
     alive = any(t.name == f"lifeos-mission-{mid}" and t.is_alive() for t in threading.enumerate())
     if not alive:  # e.g. left over from before a restart
         _finish_cancelled(mid)
@@ -238,10 +244,15 @@ def cancel(mid: int) -> dict[str, Any]:
 
 
 def stop_all() -> int:
+    """Stop every mission and free the GPU: image/video jobs are interrupted and local models unloaded."""
+    from . import media
+
     n = 0
     for m in list_missions(200, "active"):
         cancel(m["id"])
         n += 1
+    media.stop()
+    threading.Thread(target=llm.unload_local_models, daemon=True, name="lifeos-unload").start()
     activity.log("crew", f"Stopped all missions ({n})")
     return n
 

@@ -11,12 +11,13 @@ import json
 import logging
 import math
 import re
+import socket
 import struct
 import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import httpx
 
@@ -31,6 +32,19 @@ class LLMUnavailable(Exception):
 
 class BadOutput(LLMUnavailable):
     """The model answered, but not with usable JSON."""
+
+
+class Aborted(Exception):
+    """The mission this request belongs to was stopped. Not an LLMUnavailable, so nothing retries or works around it."""
+
+
+# Set by missions: the stop event for a mission id. Requests made inside track(mission_id) end as soon as it's set.
+abort_for: Callable[[int], threading.Event] | None = None
+
+
+def _abort_event() -> threading.Event | None:
+    mission_id = (getattr(_local, "attr", None) or (None, None))[0]
+    return abort_for(mission_id) if mission_id and abort_for else None
 
 
 # Small local models often write these instead of leaving a field out.
@@ -307,9 +321,12 @@ class _ModelGate:
         if not enabled:
             yield
             return
+        abort = _abort_event()
         with self._cond:
             while self._users and self._model != model:
-                self._cond.wait()
+                if abort is not None and abort.is_set():
+                    raise Aborted("Stopped")
+                self._cond.wait(0.5)
             self._model = model
             self._users += 1
         try:
@@ -326,7 +343,8 @@ _gate = _ModelGate()
 def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] | None, timeout: float,
             temperature: float) -> str:
     cfg = settings.get_all()
-    payload: dict[str, Any] = {"model": model, "messages": messages, "stream": False,
+    abortable = _abort_event() is not None  # inside a mission: stream, so Stop can cut it off
+    payload: dict[str, Any] = {"model": model, "messages": messages, "stream": abortable,
                                "options": {"temperature": temperature}, "keep_alive": cfg["ollama_keep_alive"]}
     if cfg["ollama_num_ctx"]:
         payload["options"]["num_ctx"] = cfg["ollama_num_ctx"]
@@ -337,8 +355,13 @@ def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] |
     with _gate(model, bool(cfg["ollama_one_model"])):
         for attempt in (1, 2):
             try:
-                r = httpx.post(f"{_base()}/api/chat", json=payload, timeout=limit)
-                r.raise_for_status()
+                if abortable:
+                    data, text = _ollama_stream(f"{_base()}/api/chat", payload, limit)
+                else:
+                    r = httpx.post(f"{_base()}/api/chat", json=payload, timeout=limit)
+                    r.raise_for_status()
+                    data = r.json()
+                    text = data.get("message", {}).get("content", "")
                 break
             except httpx.TimeoutException as exc:
                 if attempt == 2:
@@ -348,9 +371,60 @@ def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] |
                 log.warning("Ollama timed out on %s; retrying once", model)
             except httpx.HTTPError as exc:
                 raise LLMUnavailable(f"Ollama request failed: {exc}") from exc
-    data = r.json()
     _record("ollama", model, int(data.get("prompt_eval_count") or 0), int(data.get("eval_count") or 0))
-    return data.get("message", {}).get("content", "")
+    return text
+
+
+def _ollama_stream(url: str, payload: dict[str, Any], limit: httpx.Timeout) -> tuple[dict[str, Any], str]:
+    """POST a streaming chat and collect it. Streaming is what makes Stop work: when the mission is stopped the
+    connection is cut, and Ollama stops generating (a plain request keeps the GPU busy until the answer is done)."""
+    abort = _abort_event()
+    if abort is not None and abort.is_set():
+        raise Aborted("Stopped")
+    parts: list[str] = []
+    last: dict[str, Any] = {}
+    done = threading.Event()
+    with httpx.Client(timeout=limit) as client, client.stream("POST", url, json=payload) as r:
+        if r.status_code >= 400:
+            r.read()
+            r.raise_for_status()
+        if abort is not None:  # also cut it while Ollama is still loading the model or reading the prompt
+            sock = r.extensions.get("network_stream")
+            sock = sock.get_extra_info("socket") if sock is not None else None
+
+            def watch() -> None:
+                while not done.wait(0.25):
+                    if abort.is_set():
+                        try:
+                            if sock is not None:
+                                sock.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+                        return
+
+            threading.Thread(target=watch, daemon=True, name="lifeos-ollama-abort").start()
+        try:
+            for line in r.iter_lines():
+                if abort is not None and abort.is_set():
+                    raise Aborted("Stopped")
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if chunk.get("error"):
+                    raise LLMUnavailable(f"Ollama: {chunk['error']}")
+                parts.append((chunk.get("message") or {}).get("content") or "")
+                last = chunk
+            if abort is not None and abort.is_set():  # the cut connection can also read as a normal end
+                raise Aborted("Stopped")
+        except (httpx.HTTPError, ValueError, OSError) as exc:
+            if abort is not None and abort.is_set():
+                raise Aborted("Stopped") from None
+            if isinstance(exc, httpx.HTTPError):
+                raise
+            raise LLMUnavailable(f"Ollama sent a broken reply: {exc}") from exc
+        finally:
+            done.set()
+    return last, "".join(parts)
 
 
 def _openai_compat(provider: str, model: str, messages: list[dict[str, str]], schema: dict[str, Any] | None,

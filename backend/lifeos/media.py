@@ -260,8 +260,34 @@ def _run(media_id: int) -> None:
         _run_job(media_id)
 
 
+def stop(mission_id: int | None = None) -> int:
+    """Stop image/video work: drop queued jobs and interrupt the one the GPU is running (all of them, or one
+    mission's). Returns how many jobs were stopped."""
+    sql = "SELECT id, status, backend FROM media WHERE status IN ('queued','running')"
+    with db.session() as conn:
+        rows = conn.execute(sql + (" AND mission_id = ?" if mission_id else ""),
+                            (mission_id,) if mission_id else ()).fetchall()
+    c = cfg()
+    for r in rows:
+        if r["status"] == "queued":
+            _set(r["id"], status="failed", error="Stopped")
+    if any(r["status"] == "running" for r in rows):
+        try:
+            if c["backend"] == "comfyui":
+                base = c["comfy_url"].rstrip("/")
+                httpx.post(f"{base}/queue", json={"clear": True}, timeout=5)
+                httpx.post(f"{base}/interrupt", timeout=5)
+            elif c["backend"] == "a1111":
+                httpx.post(f"{c['a1111_url'].rstrip('/')}/sdapi/v1/interrupt", timeout=5)
+        except httpx.HTTPError:
+            pass  # not running any more: nothing to interrupt
+    return len(rows)
+
+
 def _run_job(media_id: int) -> None:
     m = get(media_id)
+    if m["status"] != "queued":  # stopped while it waited for the GPU
+        return
     started = time.monotonic()
     _set(media_id, status="running")
     try:
