@@ -114,6 +114,25 @@ export default function Settings() {
             onChange={(e) => save({ auto_start_ollama: e.target.checked })} />
           Start Ollama in the background when LifeOS starts (if it isn't already running)
         </label>
+        <label className="mt-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" className="accent-[var(--color-accent)]" checked={form.ollama_one_model ?? true}
+            onChange={(e) => save({ ollama_one_model: e.target.checked })} />
+          One model at a time: agents on different models take turns instead of fighting over the GPU (recommended with one GPU)
+        </label>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <div>
+            <label className="label">Time limit per answer (seconds)</label>
+            <input className="input" type="number" min={30} max={3600} value={form.ollama_timeout_s ?? 600}
+              onChange={(e) => setForm({ ...form, ollama_timeout_s: Number(e.target.value) })}
+              onBlur={() => save({ ollama_timeout_s: Math.min(3600, Math.max(30, Number(form.ollama_timeout_s) || 600)) })} />
+          </div>
+          <div>
+            <label className="label">Keep models loaded for</label>
+            <input className="input" value={form.ollama_keep_alive ?? "30m"} placeholder="30m"
+              onChange={(e) => setForm({ ...form, ollama_keep_alive: e.target.value })}
+              onBlur={() => save({ ollama_keep_alive: form.ollama_keep_alive || "30m" })} />
+          </div>
+        </div>
         <div className="mt-3">
           <label className="label">Planner</label>
           <select className="input sm:w-96" value={form.planner} onChange={(e) => save({ planner: e.target.value as S["planner"] })}>

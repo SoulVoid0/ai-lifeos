@@ -185,6 +185,9 @@ export interface Dashboard {
 export interface Settings {
   ollama_url: string;
   auto_start_ollama: boolean;
+  ollama_timeout_s: number;
+  ollama_one_model: boolean;
+  ollama_keep_alive: string;
   chat_model: string;
   embed_model: string;
   planner: "auto" | "llm" | "rules";

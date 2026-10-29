@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from typing import Any
 
 from . import db
@@ -12,6 +13,13 @@ DEFAULTS: dict[str, Any] = {
     "ollama_url": "http://127.0.0.1:11434",
     # Start `ollama serve` hidden when LifeOS starts and Ollama isn't running.
     "auto_start_ollama": True,
+    # Seconds a local model may take to answer, including loading it into VRAM (large models spill to RAM).
+    "ollama_timeout_s": 600,
+    # Run one local model at a time: agents on different models take turns instead of swapping them in and out
+    # of VRAM at the same time (which is what makes requests time out on a single GPU).
+    "ollama_one_model": True,
+    # How long Ollama keeps a model loaded after a request, so the next step doesn't reload it.
+    "ollama_keep_alive": "30m",
     # GitHub repository whose releases the desktop app updates from (owner/name). A read token for a private
     # repository is kept in the vault (see updates.py).
     "update_repo": "SoulVoid0/ai-lifeos",
@@ -87,6 +95,10 @@ def update(changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{key} must be between 1 and 12")
         if key in ("mission_token_budget",) and value < 1000:
             raise ValueError("mission_token_budget must be at least 1000")
+        if key == "ollama_timeout_s" and not 30 <= value <= 3600:
+            raise ValueError("ollama_timeout_s must be between 30 and 3600 seconds")
+        if key == "ollama_keep_alive" and not re.fullmatch(r"-?\d+[smh]?", value):
+            raise ValueError("ollama_keep_alive must look like 30m, 2h or 0")
         if key == "lessons_per_task" and not 0 <= value <= 20:
             raise ValueError("lessons_per_task must be between 0 and 20")
         if key == "cloud_daily_budget_usd" and value < 0:
