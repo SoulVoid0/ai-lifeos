@@ -82,6 +82,8 @@ export function useMissionEvents(missionId?: number, keep = 300, intervalMs = 10
     let stop = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
+      // Hidden windows don't need live events; the cursor picks up where it left off.
+      if (document.hidden) { timer = setTimeout(tick, intervalMs); return; }
       try {
         const batch = await api.missionEvents(cursor.current, missionId);
         if (!stop && batch.length) {

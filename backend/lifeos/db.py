@@ -214,6 +214,8 @@ CREATE TABLE IF NOT EXISTS mission_tasks (
     finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mtasks_mission ON mission_tasks(mission_id);
+CREATE INDEX IF NOT EXISTS idx_mtasks_status ON mission_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_mtasks_agent ON mission_tasks(agent, id);
 
 -- Generated images and videos.
 CREATE TABLE IF NOT EXISTS media (
@@ -259,6 +261,7 @@ CREATE TABLE IF NOT EXISTS mission_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mevents_mission ON mission_events(mission_id);
+CREATE INDEX IF NOT EXISTS idx_mevents_agent ON mission_events(agent, id);
 
 CREATE TABLE IF NOT EXISTS briefs (
     id INTEGER PRIMARY KEY,

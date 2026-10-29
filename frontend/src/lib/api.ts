@@ -26,10 +26,28 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+export interface GpuStatus {
+  models: { name: string; size: number; vram: number; until: string | null }[];
+  vram: number;
+  media_busy: boolean;
+}
 export interface OldData { found: string | null; imported: boolean; pending: boolean }
 export interface UpdateConfig { repo: string; has_token: boolean }
 
 const get = <T>(p: string) => request<T>("GET", p);
+
+/** Share one request between callers: in flight, or answered in the last `ttl` ms (several views poll the same thing). */
+function shared<T>(load: () => Promise<T>, ttl = 300): () => Promise<T> {
+  let p: Promise<T> | null = null, done = 0, pending = false;
+  return () => {
+    if (p && (pending || Date.now() - done < ttl)) return p;
+    pending = true;
+    const cur = load().finally(() => { pending = false; done = Date.now(); });
+    cur.catch(() => { if (p === cur) p = null; });
+    p = cur;
+    return cur;
+  };
+}
 const post = <T>(p: string, b?: unknown) => request<T>("POST", p, b ?? {});
 const patch = <T>(p: string, b: unknown) => request<T>("PATCH", p, b);
 const del = <T>(p: string) => request<T>("DELETE", p);
@@ -663,7 +681,8 @@ export const api = {
   updateAgent: (slug: string, a: Partial<Agent>) => patch<Agent>(`/api/crew/agents/${slug}`, a),
   deleteAgent: (slug: string) => del<Agent>(`/api/crew/agents/${slug}`),
   resetCrew: () => post<Agent[]>("/api/crew/reset"),
-  crewStatus: () => get<CrewStatus>("/api/crew/status"),
+  crewStatus: shared(() => get<CrewStatus>("/api/crew/status")),
+  gpu: shared(() => get<GpuStatus>("/api/system/gpu"), 2000),
   crewModels: () => get<{ local: string[]; ollama_ok: boolean; providers: Provider[]; cloud_enabled: boolean; default: string }>("/api/crew/models"),
   testModel: (model: string) => post<{ ok: boolean; reply?: string; seconds?: number; error?: string }>("/api/crew/test-model", { model }),
   exportPack: () => get<Record<string, unknown>>("/api/crew/pack"),

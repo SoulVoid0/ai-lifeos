@@ -21,7 +21,7 @@ function Shell({ title, icon, onClose, children, footer }: {
   title: ReactNode; icon?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode;
 }) {
   return (
-    <div className="absolute inset-y-0 right-0 flex w-full max-w-sm flex-col border-l border-line bg-bg/95 shadow-2xl backdrop-blur" onClick={(e) => e.stopPropagation()}>
+    <div className="absolute inset-y-0 right-0 flex w-full max-w-sm flex-col border-l border-line bg-bg/[0.97] shadow-2xl" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-start gap-3 border-b border-line p-3">
         {icon}
         <div className="min-w-0 flex-1">{title}</div>
@@ -499,7 +499,7 @@ function Easel({ onClose }: { onClose: () => void }) {
 function AlbumOverlay({ kind, agents, onClose }: { kind: "image" | "video"; agents: AgentStatus[]; onClose: () => void }) {
   const creators = agents.filter((a) => a.tools.some((t) => t.startsWith("generate_")) || ["creative", "photo", "video"].includes(a.slug));
   return (
-    <div className="absolute inset-0 z-10 flex flex-col bg-bg/95 p-4 backdrop-blur" onClick={(e) => e.stopPropagation()}>
+    <div className="absolute inset-0 z-10 flex flex-col bg-bg/[0.97] p-4" onClick={(e) => e.stopPropagation()}>
       <div className="mb-3 flex items-center gap-2">
         {kind === "image" ? <ImageIcon size={18} className="text-accent" /> : <Film size={18} className="text-accent" />}
         <div className="font-semibold">{kind === "image" ? "Photo album" : "Video album"}</div>

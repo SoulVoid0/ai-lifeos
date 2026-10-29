@@ -199,6 +199,23 @@ def record_cost(provider: str, model: str, cost_usd: float, mission_id: int | No
             conn.execute("UPDATE missions SET cost_usd = cost_usd + ? WHERE id = ?", (cost_usd, mission_id))
 
 
+_ps_cache: dict[str, Any] = {"checked": 0.0, "models": []}
+
+
+def loaded_models() -> list[dict[str, Any]]:
+    """Models Ollama has in memory right now and how much of each sits in VRAM, cached for 5 s."""
+    if time.time() - _ps_cache["checked"] < 5:
+        return _ps_cache["models"]
+    try:
+        raw = httpx.get(f"{_base()}/api/ps", timeout=2).json().get("models") or []
+        models = [{"name": m.get("name") or m.get("model", "?"), "size": int(m.get("size") or 0),
+                   "vram": int(m.get("size_vram") or 0), "until": m.get("expires_at")} for m in raw]
+    except (httpx.HTTPError, ValueError, AttributeError):
+        models = []
+    _ps_cache.update(checked=time.time(), models=models)
+    return models
+
+
 def unload_local_models() -> int:
     """Ask Ollama to free GPU memory (used before image/video generation on the same GPU)."""
     try:

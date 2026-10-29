@@ -328,3 +328,22 @@ def test_existing_installs_get_new_default_models_once(client):
     assert next(a for a in client.get("/api/crew/agents").json() if a["slug"] == "coder")["model"] == "qwen3-coder:30b"
     client.patch("/api/crew/agents/coder", json={"model": ""})  # the user's later choice sticks
     assert next(a for a in client.get("/api/crew/agents").json() if a["slug"] == "coder")["model"] == ""
+
+
+def test_agent_card_matches_scorecard_and_gpu_status(client, monkeypatch):
+    from lifeos import crew, learning, llm
+
+    for a in crew.list_agents():
+        full = next(c for c in learning.scorecard() if c["slug"] == a["slug"])
+        assert learning.agent_card(a) == full
+    assert client.get("/api/crew/agents/coder/activity").json()["stats"]["slug"] == "coder"
+
+    class Ps:
+        def json(self):
+            return {"models": [{"name": "qwen3:14b", "size": 10_000, "size_vram": 9_000, "expires_at": "x"}]}
+
+    monkeypatch.setattr(llm.httpx, "get", lambda *a, **k: Ps())
+    llm._ps_cache["checked"] = 0.0
+    gpu = client.get("/api/system/gpu").json()
+    assert gpu == {"models": [{"name": "qwen3:14b", "size": 10_000, "vram": 9_000, "until": "x"}], "vram": 9_000,
+                   "media_busy": False}

@@ -1068,7 +1068,7 @@ def agent_activity(slug: str) -> dict[str, Any]:
     """Everything the Station's agent panel shows: what it's doing now, its live log, recent work and what it learned."""
     from . import media
 
-    crew.get(slug)
+    agent = crew.get(slug)
     me = next(a for a in crew_status() if a["slug"] == slug)
     with db.session() as conn:
         log = db.rows_to_dicts(conn.execute(
@@ -1084,6 +1084,6 @@ def agent_activity(slug: str) -> dict[str, Any]:
     for r in recent:
         r["result"] = (r["result"] or "")[:600]
     last_tool = next((e for e in log if e["kind"] == "tool"), None)
-    card = next((c for c in learning.scorecard() if c["slug"] == slug), None)
+    card = learning.agent_card(agent)
     return {"agent": me, "task": task, "last_tool": last_tool, "log": log, "recent_tasks": recent,
             "lessons": learning.list_lessons(slug, limit=6), "media": media.list_media(8, agent=slug), "stats": card}

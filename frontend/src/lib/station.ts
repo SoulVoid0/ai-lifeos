@@ -211,7 +211,8 @@ export interface Actor {
   targetKey: string;
   nextWander: number;
   state: AgentState;
-  bubble: { text: string; until: number } | null;
+  /** lines and w are filled in the first time the bubble is drawn, so text isn't re-measured every frame. */
+  bubble: { text: string; until: number; lines?: string[]; w?: number } | null;
   phase: number;
   idleLines: string[];
   nextChatter: number;
@@ -424,10 +425,13 @@ function drawFurniture(g: CanvasRenderingContext2D, it: Furn, colors: Record<str
   }
 }
 
+const ANIMATED = new Set<FurnKind>(["desk", "yourdesk", "holo", "rack", "cabinet", "orb", "radio", "camera", "easel", "arcade"]);
+const ANIMATED_FURNITURE = FURNITURE.filter((it) => ANIMATED.has(it.kind));
+
 /** Animated bits drawn every frame on top of the static map (screens, LEDs, holo table, orb). */
 export function drawAmbient(g: CanvasRenderingContext2D, t: number, colors: Record<string, string>, working: Set<string>) {
   const px = (x: number, y: number, w: number, h: number, col: string) => { g.fillStyle = col; g.fillRect(x, y, w, h); };
-  for (const it of FURNITURE) {
+  for (const it of ANIMATED_FURNITURE) {
     const X = it.x * TILE, Y = it.y * TILE;
     const own = it.owner ? colors[it.owner] ?? "#94a3b8" : "#94a3b8";
     if (it.kind === "desk" && it.owner && working.has(it.owner)) {

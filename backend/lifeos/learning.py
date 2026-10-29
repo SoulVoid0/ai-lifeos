@@ -276,14 +276,22 @@ def scorecard() -> list[dict[str, Any]]:
     with db.session() as conn:
         lesson_counts = {r["agent"]: r["n"] for r in conn.execute(
             "SELECT agent, COUNT(*) AS n FROM lessons GROUP BY agent").fetchall()}
-    out = []
-    for a in crew.list_agents():
-        mine = [r for r in rows if r["agent"] == a["slug"]]
-        models = sorted({r["model"] for r in mine} | set(_candidates(a)))
-        out.append({"slug": a["slug"], "name": a["name"], "color": a["color"], "icon": a["icon"],
-                    **_stats(mine), "lessons": lesson_counts.get(a["slug"], 0),
-                    "models": [{"model": m, **_stats([r for r in mine if r["model"] == m])} for m in models]})
-    return out
+    return [_card(a, [r for r in rows if r["agent"] == a["slug"]], lesson_counts.get(a["slug"], 0))
+            for a in crew.list_agents()]
+
+
+def agent_card(agent: dict[str, Any]) -> dict[str, Any]:
+    """One agent's scorecard entry, without scoring the whole crew (the Station polls this)."""
+    with db.session() as conn:
+        lessons = conn.execute("SELECT COUNT(*) FROM lessons WHERE agent = ?", (agent["slug"],)).fetchone()[0]
+    return _card(agent, _scored_rows(agent["slug"]), lessons)
+
+
+def _card(a: dict[str, Any], mine: list[dict[str, Any]], lessons: int) -> dict[str, Any]:
+    models = sorted({r["model"] for r in mine} | set(_candidates(a)))
+    return {"slug": a["slug"], "name": a["name"], "color": a["color"], "icon": a["icon"],
+            **_stats(mine), "lessons": lessons,
+            "models": [{"model": m, **_stats([r for r in mine if r["model"] == m])} for m in models]}
 
 
 def _candidates(agent: dict[str, Any]) -> list[str]:
