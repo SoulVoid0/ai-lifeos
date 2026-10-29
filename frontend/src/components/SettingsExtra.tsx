@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Bell, Cloud, KeyRound, Mail, Plus, Trash2, Users, X, Zap } from "lucide-react";
-import { api, type Settings as S } from "../lib/api";
+import { api, type EmailAlertEvent, type EmailAlerts, type Settings as S } from "../lib/api";
 import { useAsync } from "../lib/hooks";
 import { Section, Spinner, useToast } from "./ui";
 
@@ -192,6 +192,85 @@ export function IntegrationSettings() {
   );
 }
 
+const ALERT_EVENTS: [EmailAlertEvent, string][] = [
+  ["mission_done", "A mission finishes"],
+  ["mission_failed", "A mission fails"],
+  ["approval", "An agent needs your approval"],
+  ["question", "An agent asks you something (including \"Keep going?\" at its step limit)"],
+  ["workflow", "An automation finishes or fails"],
+];
+
+function EmailAlertSettings() {
+  const toast = useToast();
+  const status = useAsync(api.emailAlerts, []);
+  const [f, setF] = useState<Pick<EmailAlerts, "to" | "host" | "port" | "username" | "security">>(
+    { to: "", host: "smtp.gmail.com", port: 465, username: "", security: "ssl" });
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const st = status.data;
+  useEffect(() => {
+    if (st) setF({ to: st.to, host: st.host, port: st.port, username: st.username, security: st.security });
+  }, [st]);
+  const put = async (patch: Parameters<typeof api.setEmailAlerts>[0], msg?: string) => {
+    try {
+      await api.setEmailAlerts(patch);
+      status.reload();
+      if (msg) toast(msg);
+      return true;
+    } catch (e) {
+      toast((e as Error).message, "error");
+      return false;
+    }
+  };
+  const saveAccount = async () => {
+    if (await put({ ...f, to: f.to || f.username, ...(password ? { password } : {}) }, "Email alerts saved")) setPassword("");
+  };
+  const setSecurity = (security: "ssl" | "starttls") => setF({ ...f, security, port: security === "ssl" ? 465 : 587 });
+  if (!st) return <Spinner />;
+  return (
+    <div className="mt-4 border-t border-line pt-3">
+      <div className="mb-1 flex items-center gap-2 text-sm font-medium"><Mail size={14} className="text-accent" /> Email alerts</div>
+      <p className="mb-2 text-xs text-muted">
+        Get an email when the crew finishes or needs you. Gmail: smtp.gmail.com, port 465 (SSL), your Gmail address and an app
+        password from myaccount.google.com/apppasswords. Outlook: smtp.office365.com, port 587 (STARTTLS). The password goes to the
+        OS credential store; if it's the same account as the read-only email above, that password is used.
+      </p>
+      <Toggle checked={st.enabled} onChange={(v) => put({ enabled: v }, v ? "Email alerts on" : "Email alerts off")} label="Send me email alerts" />
+      <div className="mt-2 grid gap-2 sm:grid-cols-4">
+        <input className="input sm:col-span-2" placeholder="smtp.gmail.com" value={f.host} onChange={(e) => setF({ ...f, host: e.target.value })} />
+        <select className="input" value={f.security} onChange={(e) => setSecurity(e.target.value as "ssl" | "starttls")}>
+          <option value="ssl">SSL</option>
+          <option value="starttls">STARTTLS</option>
+        </select>
+        <input className="input" type="number" value={f.port} onChange={(e) => setF({ ...f, port: Number(e.target.value) })} />
+        <input className="input sm:col-span-2" placeholder="Login: you@gmail.com" value={f.username} onChange={(e) => setF({ ...f, username: e.target.value })} />
+        <input className="input sm:col-span-2" type="password" autoComplete="off"
+          placeholder={st.password_stored ? "•••••••• (stored)" : st.password_from_imap ? "Using the IMAP password" : "App password"}
+          value={password} onChange={(e) => setPassword(e.target.value)} />
+        <input className="input sm:col-span-4" placeholder={`Send to: ${f.username || "you@gmail.com"}`} value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} />
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button className="btn-primary" onClick={saveAccount} disabled={!f.host || !f.username}>Save</button>
+        <button className="btn-outline" disabled={!st.configured || busy} onClick={async () => {
+          setBusy(true);
+          const r = await api.testEmailAlerts().catch((e: Error) => ({ ok: false, error: e.message, to: undefined }));
+          setBusy(false);
+          status.reload();
+          toast(r.ok ? `Test email sent to ${r.to}` : `Failed: ${r.error}`, r.ok ? "ok" : "error");
+        }}>{busy ? <Spinner /> : <Zap size={14} />} Send test email</button>
+        <span className={`text-xs ${st.configured ? "text-ok" : "text-muted"}`}>{st.configured ? "configured" : "not set up"}</span>
+      </div>
+      {st.last_error && <p className="mt-1 text-xs text-danger">Last error: {st.last_error}</p>}
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        {ALERT_EVENTS.map(([key, label]) => (
+          <Toggle key={key} checked={st.events[key]} onChange={(v) => put({ events: { ...st.events, [key]: v } })} label={label} />
+        ))}
+      </div>
+      <p className="mt-1 text-[11px] text-muted">Approvals and questions from the same mission send at most one email every 10 minutes.</p>
+    </div>
+  );
+}
+
 export function NotificationSettings({ form, setForm, save }: Props) {
   const prefs = form.notification_prefs;
   const q = form.quiet_hours;
@@ -211,6 +290,7 @@ export function NotificationSettings({ form, setForm, save }: Props) {
         <input type="time" className="input w-32" value={q.end} onChange={(e) => setForm({ ...form, quiet_hours: { ...q, end: e.target.value } })}
           onBlur={() => save({ quiet_hours: form.quiet_hours })} />
       </div>
+      <EmailAlertSettings />
     </Section>
   );
 }

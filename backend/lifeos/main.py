@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, learning, llm, media, memory,
+from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, learning, llm, mailer, media, memory,
                missions, permissions, proactive, projects, scheduler, search, services, settings, tasks, tools, vault,
                updates, workflows)
 
@@ -266,6 +266,17 @@ class EmailIn(BaseModel):
     port: int = 993
     username: str
     folder: str = "INBOX"
+    password: str | None = None
+
+
+class EmailAlertsIn(BaseModel):
+    enabled: bool | None = None
+    to: str | None = None
+    host: str | None = None
+    port: int | None = None
+    username: str | None = None
+    security: str | None = None
+    events: dict[str, bool] | None = None
     password: str | None = None
 
 
@@ -1040,6 +1051,23 @@ def set_email(body: EmailIn) -> dict[str, Any]:
 @app.post("/api/email/test")
 def test_email() -> dict[str, Any]:
     return integrations.test_email()
+
+
+@app.get("/api/email-alerts")
+def email_alerts() -> dict[str, Any]:
+    return mailer.status()
+
+
+@app.put("/api/email-alerts")
+def set_email_alerts(body: EmailAlertsIn) -> dict[str, Any]:
+    out = mailer.configure(body.model_dump(exclude={"password"}), body.password)
+    activity.log("settings", f"Email alerts {'on' if out['enabled'] else 'off'}" + (f", sent to {out['to']}" if out["to"] else ""))
+    return out
+
+
+@app.post("/api/email-alerts/test")
+def test_email_alerts() -> dict[str, Any]:
+    return mailer.test()
 
 
 @app.get("/api/email/messages")

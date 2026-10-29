@@ -23,7 +23,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from . import activity, actions, crew, db, learning, llm, memory, permissions, rules, settings, tools
+from . import activity, actions, crew, db, learning, llm, mailer, memory, permissions, rules, settings, tools
 
 ACTIVE = ("queued", "planning", "running", "waiting")
 FINAL = ("done", "failed", "cancelled")
@@ -132,6 +132,11 @@ def _notify(title: str, body: str | None = None) -> None:
     with db.session() as conn:
         conn.execute("INSERT INTO notifications(title, body, kind, created_at) VALUES (?,?,?,?)",
                      (title[:200], (body or "")[:1000] or None, "mission", db.now()))
+
+
+def _goal(mid: int) -> str:
+    with db.session() as conn:
+        return _mission(conn, mid)["goal"]
 
 
 def _refresh_status(mid: int) -> None:
@@ -379,6 +384,9 @@ def _run(mid: int) -> None:
         event(mid, "error", f"Mission failed: {exc}", agent=crew.OVERSEER)
         activity.log("crew", f"Mission {mid} failed: {exc}"[:300], status="error")
         _notify("Mission failed", str(exc))
+        goal = _goal(mid)
+        mailer.notify("mission_failed", f"Mission failed: {goal[:80]}",
+                      f"Mission {mid} failed.\n\nGoal: {goal}\n\nError: {exc}", mission_id=mid)
     finally:
         _ctx.pop(mid, None)
         _decisions.pop(mid, None)
@@ -636,6 +644,10 @@ def _wait_action(mid: int, task: dict[str, Any], agent: dict[str, Any], action: 
     event(mid, "approval", f"{agent['name']} is waiting for your approval: {action['summary']}", agent=agent["slug"],
           task_id=task["id"], data={"action_id": action["id"]})
     _notify(f"{agent['name']} needs your approval", action["summary"])
+    mailer.notify("approval", f"{agent['name']} needs your approval",
+                  f"{agent['name']} is waiting for your approval on mission {mid} (\"{_goal(mid)[:200]}\"):\n\n"
+                  f"{action['summary']}\n\nApprove or reject it in AI LifeOS. The task is paused until you do.",
+                  mission_id=mid)
     _limiter.release()
     try:
         cancel = _cancel_event(mid)
@@ -669,6 +681,9 @@ def _ask(mid: int, task_id: int | None, agent_slug: str, question: str, options:
     event(mid, "brief", f"{name} asks: {question[:300]}", agent=agent_slug, task_id=task_id,
           data={"brief_id": bid, "options": options})
     _notify(f"{name} has a question", question)
+    mailer.notify("question", f"{name} has a question", f"{name} asks, on mission {mid} (\"{_goal(mid)[:200]}\"):\n\n"
+                  f"{question}\n\n" + ("Options:\n" + "\n".join(f"- {o}" for o in options) + "\n\n" if options else "")
+                  + "Answer it in AI LifeOS. The task is paused until you do.", mission_id=mid)
     held = task_id is not None
     if held:
         _limiter.release()
@@ -1055,6 +1070,9 @@ def _complete(mid: int, m: dict[str, Any], direct: str | None, done: list[dict[s
     activity.log("crew", f"Mission {mid} {status}: {m['goal'][:120]}", details={"outbox": str(path)},
                  status="ok" if status == "done" else "error")
     _notify("Mission complete" if status == "done" else "Mission ended", m["goal"][:200])
+    mailer.notify("mission_done" if status == "done" else "mission_failed",
+                  f"{'Mission complete' if status == 'done' else 'Mission ended without results'}: {m['goal'][:80]}",
+                  f"{report[:12000]}\n\nFull report: {path}", mission_id=mid)
 
 
 def _reflect(mid: int, status: str) -> None:
