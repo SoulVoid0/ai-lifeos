@@ -7,7 +7,7 @@ import { PersonalityFields } from "./Personality";
 import { Spinner, notifyChanged, useToast } from "./ui";
 
 const BLANK: Partial<Agent> = {
-  name: "", role: "Specialist", description: "", persona: "", model: "", tools: [], color: "slate", icon: "bot", max_steps: 6, enabled: true, candidates: [],
+  name: "", role: "Specialist", description: "", persona: "", model: "", tools: [], color: "slate", icon: "bot", max_steps: 10, enabled: true, candidates: [],
   voice: "", quirks: "", catchphrases: [], idle_lines: [],
 };
 
@@ -143,7 +143,7 @@ export function AgentEditor({ agent, tools, onClose }: { agent: Agent | null; to
             </div>
           </div>
           <div><label className="label">Max steps per task</label>
-            <input type="number" min={1} max={20} className="input" value={form.max_steps ?? 6} onChange={(e) => set("max_steps", Number(e.target.value))} /></div>
+            <input type="number" min={1} max={60} className="input" value={form.max_steps ?? 10} onChange={(e) => set("max_steps", Number(e.target.value))} /></div>
           <label className="mt-5 flex items-center gap-2 text-sm">
             <input type="checkbox" className="accent-[var(--color-accent)]" checked={form.enabled ?? true}
               disabled={agent?.slug === "overseer"} onChange={(e) => set("enabled", e.target.checked)} /> Enabled

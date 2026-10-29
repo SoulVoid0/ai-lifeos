@@ -127,6 +127,12 @@ export default function Settings() {
               onBlur={() => save({ ollama_timeout_s: Math.min(3600, Math.max(30, Number(form.ollama_timeout_s) || 600)) })} />
           </div>
           <div>
+            <label className="label" title="Ollama's default (2048-4096) cuts the start of long tasks, including the agent's instructions. More context uses more VRAM.">Context window (tokens)</label>
+            <input className="input" type="number" min={0} max={131072} step={1024} value={form.ollama_num_ctx ?? 16384}
+              onChange={(e) => setForm({ ...form, ollama_num_ctx: Number(e.target.value) })}
+              onBlur={() => { const v = Number(form.ollama_num_ctx) || 0; save({ ollama_num_ctx: v === 0 ? 0 : Math.min(131072, Math.max(2048, v)) }); }} />
+          </div>
+          <div>
             <label className="label">Keep models loaded for</label>
             <input className="input" value={form.ollama_keep_alive ?? "30m"} placeholder="30m"
               onChange={(e) => setForm({ ...form, ollama_keep_alive: e.target.value })}

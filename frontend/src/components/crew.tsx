@@ -58,7 +58,7 @@ export function AgentAvatar({ icon, color, state, size = 40 }: { icon: string; c
 const EVENT_ICONS: Record<string, LucideIcon> = {
   mission: Rocket, plan: ListTree, delegate: ArrowRight, thought: MessageSquare, tool: Wrench, approval: ShieldAlert,
   decision: Check, brief: CircleHelp, answer: Reply, result: CircleCheck, error: TriangleAlert, skip: SkipForward,
-  fallback: Info, done: Flag, cancel: CircleStop, cancelled: CircleStop, review: Eye, limit: Gauge,
+  fallback: Info, done: Flag, cancel: CircleStop, cancelled: CircleStop, review: Eye, limit: Gauge, extend: Gauge,
   lessons: BookOpen, learn: GraduationCap, revise: PenLine, route: Route,
 };
 

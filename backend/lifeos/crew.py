@@ -152,8 +152,18 @@ RECOMMENDED: dict[str, list[dict[str, str]]] = {
     "comms": [{"model": "llama3.1:8b", "size": "4.9 GB", "why": "natural writing for drafts"},
               {"model": "gemma3:12b", "size": "8.1 GB", "why": "polished drafts"}],
 }
-# Bumped when DEFAULT_CREW gains new default models, so existing installs pick them up once.
-DEFAULTS_VERSION = 4
+# Steps per task for built-in agents. Writing code takes many small steps (read, write a file, check, fix), so Forge
+# gets the most; everyone else gets the crew-wide minimum (Settings -> agent_max_steps) or this, whichever is higher.
+DEFAULT_STEPS = {"coder": 30, "research": 15, "files": 12, "creative": 12}
+OLD_DEFAULT_STEPS = 6
+
+
+def default_steps(slug: str) -> int:
+    return DEFAULT_STEPS.get(slug, 10)
+
+
+# Bumped when DEFAULT_CREW gains new defaults (models, step limits), so existing installs pick them up once.
+DEFAULTS_VERSION = 5
 
 
 def _row(row: Any) -> dict[str, Any]:
@@ -173,10 +183,10 @@ def _insert_default(conn: Any, a: dict[str, Any]) -> None:
     p = PERSONALITIES.get(a["slug"], {})
     conn.execute(
         "INSERT OR IGNORE INTO agents(slug, name, role, description, persona, model, tools, color, icon, voice, quirks, "
-        "catchphrases, idle_lines, builtin, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+        "catchphrases, idle_lines, builtin, max_steps, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?)",
         (a["slug"], a["name"], a["role"], a["description"], a["persona"], a.get("model", ""), json.dumps(a["tools"]),
          a["color"], a["icon"], p.get("voice", ""), p.get("quirks", ""), json.dumps(p.get("catchphrases", [])),
-         json.dumps(p.get("idle_lines", [])), db.now(), db.now()))
+         json.dumps(p.get("idle_lines", [])), default_steps(a["slug"]), db.now(), db.now()))
 
 
 def ensure_seeded() -> None:
@@ -190,6 +200,8 @@ def ensure_seeded() -> None:
             _insert_default(conn, a)
         if seeded:  # upgrade untouched built-in agents to the new defaults
             for a in DEFAULT_CREW:
+                conn.execute("UPDATE agents SET max_steps = ? WHERE slug = ? AND builtin = 1 AND max_steps = ?",
+                             (default_steps(a["slug"]), a["slug"], OLD_DEFAULT_STEPS))
                 if a.get("model"):
                     conn.execute("UPDATE agents SET model = ? WHERE slug = ? AND builtin = 1 AND model = ''",
                                  (a["model"], a["slug"]))
@@ -267,7 +279,7 @@ def _validate(data: dict[str, Any], creating: bool) -> dict[str, Any]:
     if data.get("icon") is not None:
         out["icon"] = data["icon"] if data["icon"] in ICONS else "bot"
     if data.get("max_steps") is not None:
-        out["max_steps"] = max(1, min(int(data["max_steps"]), 20))
+        out["max_steps"] = max(1, min(int(data["max_steps"]), settings.MAX_STEPS))
     if data.get("enabled") is not None:
         out["enabled"] = int(bool(data["enabled"]))
     if "candidates" in data and data["candidates"] is not None:
@@ -327,14 +339,15 @@ def reset_defaults() -> list[dict[str, Any]]:
             conn.execute(
                 "INSERT INTO agents(slug, name, role, description, persona, model, tools, color, icon, voice, quirks, "
                 "catchphrases, idle_lines, builtin, max_steps, enabled, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,6,1,?,?) ON CONFLICT(slug) DO UPDATE SET "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,1,?,?) ON CONFLICT(slug) DO UPDATE SET "
                 "name=excluded.name, role=excluded.role, description=excluded.description, persona=excluded.persona, "
                 "model=excluded.model, tools=excluded.tools, color=excluded.color, icon=excluded.icon, voice=excluded.voice, "
                 "quirks=excluded.quirks, catchphrases=excluded.catchphrases, idle_lines=excluded.idle_lines, builtin=1, "
-                "max_steps=6, enabled=1, updated_at=excluded.updated_at",
+                "max_steps=excluded.max_steps, enabled=1, updated_at=excluded.updated_at",
                 (a["slug"], a["name"], a["role"], a["description"], a["persona"], a.get("model", ""),
                  json.dumps(a["tools"]), a["color"], a["icon"], p.get("voice", ""), p.get("quirks", ""),
-                 json.dumps(p.get("catchphrases", [])), json.dumps(p.get("idle_lines", [])), db.now(), db.now()))
+                 json.dumps(p.get("catchphrases", [])), json.dumps(p.get("idle_lines", [])), default_steps(a["slug"]),
+                 db.now(), db.now()))
     activity.log("crew", "Reset the built-in crew to defaults")
     return list_agents()
 

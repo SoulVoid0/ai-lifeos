@@ -328,6 +328,8 @@ def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] |
     cfg = settings.get_all()
     payload: dict[str, Any] = {"model": model, "messages": messages, "stream": False,
                                "options": {"temperature": temperature}, "keep_alive": cfg["ollama_keep_alive"]}
+    if cfg["ollama_num_ctx"]:
+        payload["options"]["num_ctx"] = cfg["ollama_num_ctx"]
     if schema is not None:
         payload["format"] = schema
     # Loading a large model (or one that spills into RAM) can take minutes, so the configured limit wins.

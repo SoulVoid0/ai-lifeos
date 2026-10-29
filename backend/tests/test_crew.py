@@ -347,3 +347,67 @@ def test_agent_card_matches_scorecard_and_gpu_status(client, monkeypatch):
     gpu = client.get("/api/system/gpu").json()
     assert gpu == {"models": [{"name": "qwen3:14b", "size": 10_000, "vram": 9_000, "until": "x"}], "vram": 9_000,
                    "media_busy": False}
+
+
+def test_step_limit_extends_then_asks_to_keep_going(client, fake_models):
+    client.patch("/api/settings", json={"agent_max_steps": 1})
+    client.patch("/api/crew/agents/research", json={"max_steps": 2})
+    fake_models["script"]["plan"].append({"thinking": "", "tasks": [
+        {"id": "t1", "agent": "research", "title": "Build it", "instructions": "Many steps", "depends_on": []}]})
+    tool = {"thought": "next", "action": "tool", "tool": "search_everything", "args": {"query": "x"}}
+    # 2 steps, then 4 automatic extra steps (still making progress), then it asks; 1 more step finishes.
+    fake_models["script"]["steps"]["Scout"] = [dict(tool) for _ in range(6)] + [
+        {"thought": "done", "action": "finish", "answer": "Built it all"}]
+    m = client.post("/api/missions", json={"goal": "Build a big thing"}).json()
+    briefs = wait_for(lambda: client.get("/api/briefs").json())
+    assert "step limit" in briefs[0]["question"] and briefs[0]["options"][0].startswith("Keep going")
+    kinds = [e["kind"] for e in client.get("/api/missions/events", params={"mission_id": m["id"]}).json()]
+    assert kinds.count("extend") == 1
+    client.post(f"/api/briefs/{briefs[0]['id']}/answer", json={"answer": briefs[0]["options"][0]})
+    done = wait_for(lambda: (r := client.get(f"/api/missions/{m['id']}").json())["status"] in ("done", "failed") and r)
+    assert done["tasks"][0]["status"] == "done" and done["tasks"][0]["result"] == "Built it all"
+    assert done["tasks"][0]["steps"] == 7
+    step_calls = [c for c in fake_models["seen"] if c["messages"][0]["content"].startswith("You are Scout,")]
+    assert any("more steps for this task" in x["content"] for x in step_calls[-1]["messages"])
+
+
+def test_step_limit_wrap_up_when_told_to(client, fake_models):
+    client.patch("/api/settings", json={"agent_max_steps": 1, "agent_auto_extend": False})
+    client.patch("/api/crew/agents/research", json={"max_steps": 1})
+    fake_models["script"]["plan"].append({"thinking": "", "tasks": [
+        {"id": "t1", "agent": "research", "title": "Dig", "instructions": "Search", "depends_on": []}]})
+    fake_models["script"]["steps"]["Scout"] = [{"thought": "s", "action": "tool", "tool": "search_everything",
+                                                "args": {"query": "x"}}]
+    m = client.post("/api/missions", json={"goal": "Research"}).json()
+    briefs = wait_for(lambda: client.get("/api/briefs").json())
+    client.post(f"/api/briefs/{briefs[0]['id']}/answer", json={"answer": "Wrap up with what I have"})
+    done = wait_for(lambda: (r := client.get(f"/api/missions/{m['id']}").json())["status"] in ("done", "failed") and r)
+    assert done["tasks"][0]["status"] == "done" and done["tasks"][0]["result"]  # written up from what it found
+    assert "limit" in {e["kind"] for e in client.get("/api/missions/events", params={"mission_id": m["id"]}).json()}
+
+
+def test_forge_gets_more_steps_and_old_defaults_upgrade(client):
+    from lifeos import crew, db
+
+    assert crew.get("coder")["max_steps"] == 30 and crew.get("planner")["max_steps"] == 10
+    with db.session() as conn:  # an install from before: every built-in agent on 6, one customised to 9
+        conn.execute("UPDATE agents SET max_steps = 6")
+        conn.execute("UPDATE agents SET max_steps = 9 WHERE slug = 'research'")
+        conn.execute("UPDATE settings SET value = '4' WHERE key = 'crew_defaults_version'")
+    assert crew.get("coder")["max_steps"] == 30 and crew.get("research")["max_steps"] == 9
+    assert client.patch("/api/crew/agents/coder", json={"max_steps": 99}).json()["max_steps"] == 60
+
+
+def test_long_tasks_keep_instructions_in_context(monkeypatch):
+    from lifeos import missions, settings
+
+    monkeypatch.setattr(settings, "get", lambda k: 4096 if k == "ollama_num_ctx" else None)
+    msgs = [{"role": "system", "content": "S" * 3000}, {"role": "user", "content": "T" * 1000}]
+    msgs += [{"role": "assistant" if i % 2 else "user", "content": "x" * 3000} for i in range(20)]
+    missions._compact(msgs)
+    assert msgs[0]["content"] == "S" * 3000 and msgs[1]["content"] == "T" * 1000
+    assert all(len(m["content"]) == 3000 for m in msgs[-missions.KEEP_RECENT:])
+    assert all(len(m["content"]) < 450 for m in msgs[2:-missions.KEEP_RECENT])
+    short = [{"role": "user", "content": "y" * 500} for _ in range(10)]
+    missions._compact(short)  # fits: left alone
+    assert all(len(m["content"]) == 500 for m in short)

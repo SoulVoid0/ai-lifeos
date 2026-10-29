@@ -24,10 +24,16 @@ export function CrewSettings({ form, setForm, save }: Props) {
     <Section title="Crew & web" icon={<Users size={15} className="text-accent" />}>
       <div className="grid gap-3 sm:grid-cols-3">
         <div><label className="label">Agents working at once</label>{num("max_parallel_agents")}</div>
-        <div><label className="label">Max steps per task</label>{num("agent_max_steps")}</div>
+        <div><label className="label">Steps per task (at least)</label>{num("agent_max_steps")}</div>
         <div><label className="label">Token budget per mission</label>{num("mission_token_budget")}</div>
       </div>
-      <p className="mt-2 text-xs text-muted">On a laptop with one local model, 1–2 parallel agents is usually fastest; Ollama queues the rest.</p>
+      <p className="mt-2 text-xs text-muted">On a laptop with one local model, 1–2 parallel agents is usually fastest; Ollama queues the rest.
+        Each agent can have more steps than this in its own settings (Forge has 30 for coding).</p>
+      <div className="mt-3">
+        <Toggle checked={form.agent_auto_extend ?? true} onChange={(v) => save({ agent_auto_extend: v })}
+          label="Give agents more steps when they run out mid-task"
+          hint="An agent still making progress gets one automatic extension, then asks you whether to keep going. Its work so far is kept either way." />
+      </div>
       <div className="mt-3">
         <Toggle checked={form.web_access} onChange={(v) => save({ web_access: v })} label="Allow web search and page reading"
           hint="Lets the research agent use web_search and fetch_url. Private and local addresses are always blocked; fetching a page asks you first unless you change its policy." />

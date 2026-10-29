@@ -9,6 +9,8 @@ from typing import Any
 from . import db
 
 # Tool policies: "auto" runs immediately, "confirm" queues an action for approval, "deny" blocks it.
+MAX_STEPS = 60  # per task, for one agent's setting and the crew-wide one
+
 DEFAULTS: dict[str, Any] = {
     "ollama_url": "http://127.0.0.1:11434",
     # Start `ollama serve` hidden when LifeOS starts and Ollama isn't running.
@@ -20,6 +22,9 @@ DEFAULTS: dict[str, Any] = {
     "ollama_one_model": True,
     # How long Ollama keeps a model loaded after a request, so the next step doesn't reload it.
     "ollama_keep_alive": "30m",
+    # Context window (tokens) for local models. Ollama's own default (2048-4096) silently cuts the start of a long
+    # task, including the agent's instructions; 0 leaves it to Ollama.
+    "ollama_num_ctx": 16384,
     # GitHub repository whose releases the desktop app updates from (owner/name). A read token for a private
     # repository is kept in the vault (see updates.py).
     "update_repo": "SoulVoid0/ai-lifeos",
@@ -39,8 +44,12 @@ DEFAULTS: dict[str, Any] = {
     "dismissed_suggestions": [],
     # Crew (multi-agent) runtime.
     "max_parallel_agents": 3,
-    "mission_token_budget": 60000,
-    "agent_max_steps": 6,
+    # Local models count too, so this is sized for long coding tasks (every step resends the conversation).
+    "mission_token_budget": 500000,
+    # Steps every agent gets per task at least; an agent's own setting can be higher (Forge's is).
+    "agent_max_steps": 10,
+    # An agent still making progress at its step limit gets one automatic extension, then asks you to continue.
+    "agent_auto_extend": True,
     # Cloud models are off until the user turns them on; spend is capped per day.
     "cloud_enabled": False,
     "cloud_daily_budget_usd": 5.0,
@@ -91,8 +100,12 @@ def update(changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("planner must be auto, llm or rules")
         if key == "proactive_level" and value not in ("off", "low", "normal"):
             raise ValueError("proactive_level must be off, low or normal")
-        if key in ("max_parallel_agents", "agent_max_steps") and not 1 <= value <= 12:
+        if key == "max_parallel_agents" and not 1 <= value <= 12:
             raise ValueError(f"{key} must be between 1 and 12")
+        if key == "agent_max_steps" and not 1 <= value <= MAX_STEPS:
+            raise ValueError(f"{key} must be between 1 and {MAX_STEPS}")
+        if key == "ollama_num_ctx" and value and not 2048 <= value <= 131072:
+            raise ValueError("ollama_num_ctx must be 0 (Ollama's default) or between 2048 and 131072")
         if key in ("mission_token_budget",) and value < 1000:
             raise ValueError("mission_token_budget must be at least 1000")
         if key == "ollama_timeout_s" and not 30 <= value <= 3600:
