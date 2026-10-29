@@ -100,6 +100,13 @@ jobs:
         shell: pwsh
         run: ./scripts/build-windows.ps1 -TauriConfig src-tauri/tauri.ci.conf.json
 
+      - name: Check the Windows process helpers
+        shell: pwsh
+        run: |
+          # lower_priority and ollama_busy call kernel32 directly; make sure they run on real Windows before shipping.
+          python -c "from lifeos import services; print('lowered', services.lower_priority(('python',)), 'busy', services.ollama_busy(0.5))"
+          if ($LASTEXITCODE -ne 0) { throw "Windows process helpers failed" }
+
       - name: Publish the release
         shell: pwsh
         env:

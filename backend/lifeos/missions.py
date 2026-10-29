@@ -241,11 +241,25 @@ def cancel(mid: int) -> dict[str, Any]:
     from . import media
 
     media.stop(mid)  # its in-flight model request is cut by the cancel event (see llm.abort_for)
+    threading.Thread(target=_settle_ollama, args=(mid,), daemon=True, name=f"lifeos-settle-{mid}").start()
     alive = any(t.name == f"lifeos-mission-{mid}" and t.is_alive() for t in threading.enumerate())
     if not alive:  # e.g. left over from before a restart
         _finish_cancelled(mid)
     event(mid, "cancel", "Stop requested by the user", agent=crew.OVERSEER)
     return get(mid)
+
+
+def _settle_ollama(mid: int) -> None:
+    """After a Stop: if Ollama is still busy with the request that was just cut off, restart it."""
+    from . import services
+
+    time.sleep(3)
+    if not settings.get("ollama_hard_stop") or time.time() - llm.last_abort["at"] > 15:
+        return
+    if any(m["id"] != mid for m in list_missions(200, "active")):
+        return  # someone else's work is using Ollama
+    if services.ollama_busy():
+        services.restart_ollama()
 
 
 def stop_all() -> int:

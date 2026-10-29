@@ -136,7 +136,13 @@ def test_ollama_one_model_at_a_time_and_retry(env, monkeypatch):
     overlap: list[tuple[str, str]] = []
     calls = {"n": 0}
 
+    unloaded: list[str] = []
+
     def fake_post(url, json, timeout):
+        if url.endswith("/api/generate"):  # switching models unloads the previous one first
+            assert json["keep_alive"] == 0
+            unloaded.append(json["model"])
+            return httpx.Response(200, json={}, request=httpx.Request("POST", url))
         assert timeout.read == 900 and json["keep_alive"] == "30m"
         if json["model"] == "flaky" and calls["n"] == 0:
             calls["n"] += 1
@@ -156,5 +162,5 @@ def test_ollama_one_model_at_a_time_and_retry(env, monkeypatch):
         t.start()
     for t in threads:
         t.join()
-    assert overlap == []
+    assert overlap == [] and {"a", "b"} & set(unloaded)
     assert llm.complete([{"role": "user", "content": "hi"}], model="flaky") == "ok"
