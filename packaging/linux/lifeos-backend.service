@@ -1,0 +1,11 @@
+[Unit]
+Description=AI LifeOS backend
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/lifeos
+Restart=on-failure
+Environment=LIFEOS_PORT=8765
+
+[Install]
+WantedBy=default.target

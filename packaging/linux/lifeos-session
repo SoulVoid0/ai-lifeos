@@ -1,0 +1,7 @@
+#!/bin/sh
+# AI LifeOS login session: a small stacking compositor (labwc) with LifeOS full screen as the home layer.
+# Other apps opened from LifeOS appear as normal windows above it.
+systemctl --user start lifeos-backend.service
+mkdir -p "$HOME/.config/labwc"
+[ -f "$HOME/.config/labwc/autostart" ] || echo 'ai-lifeos --fullscreen || xdg-open http://127.0.0.1:8765 &' > "$HOME/.config/labwc/autostart"
+exec labwc

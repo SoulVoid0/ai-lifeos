@@ -39,7 +39,7 @@ everything the user sees.
   "how's my PC".
 - Full-screen shell mode (F11), a live status bar and a command palette (Ctrl+K).
 
-### 2. LifeOS session on Linux
+### 2. LifeOS session on Linux (started: `packaging/linux/`)
 - A Wayland session called "AI LifeOS" that you pick on the login screen. It runs a small stacking compositor
   (labwc), with LifeOS as the full-screen home layer and the dock. Other apps open as normal windows above it.
 - The backend runs as a `systemd --user` service, with Ollama and ComfyUI as services.
