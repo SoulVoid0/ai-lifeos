@@ -182,7 +182,18 @@ def default_steps(slug: str) -> int:
 
 
 # Bumped when DEFAULT_CREW gains new defaults (models, step limits), so existing installs pick them up once.
-DEFAULTS_VERSION = 6
+# Tools added to built-in agents after their first release; appended on upgrade, keeping the user's own edits.
+ADDED_TOOLS: dict[str, list[str]] = {
+    "planner": ["break_down_task", "replan_task"],
+    "files": ["rename_by_content"],
+    "quick": ["open_workspace", "custom_prompt"],
+    "research": ["custom_prompt"],
+    "comms": ["custom_webhook"],
+}
+for _a in DEFAULT_CREW:
+    _a["tools"] = list(dict.fromkeys(_a["tools"] + ADDED_TOOLS.get(_a["slug"], [])))
+
+DEFAULTS_VERSION = 7
 
 
 def _row(row: Any) -> dict[str, Any]:
@@ -230,6 +241,12 @@ def ensure_seeded() -> None:
                                  "AND builtin = 1 AND voice = '' AND quirks = '' AND catchphrases = '[]'",
                                  (p["voice"], p["quirks"], json.dumps(p["catchphrases"]), json.dumps(p["idle_lines"]),
                                   a["slug"]))
+            for slug, added in ADDED_TOOLS.items():
+                row = conn.execute("SELECT tools FROM agents WHERE slug = ? AND builtin = 1", (slug,)).fetchone()
+                if row:
+                    have = json.loads(row["tools"])
+                    conn.execute("UPDATE agents SET tools = ? WHERE slug = ?",
+                                 (json.dumps(list(dict.fromkeys(have + added))), slug))
             # Muse now directs; Lumen and Reel generate. Only change her if her tools were never edited.
             muse = next(a for a in DEFAULT_CREW if a["slug"] == "creative")
             conn.execute("UPDATE agents SET tools = ?, role = ?, description = ?, persona = ? WHERE slug = 'creative' "

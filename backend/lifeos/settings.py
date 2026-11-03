@@ -15,6 +15,14 @@ DEFAULTS: dict[str, Any] = {
     "ollama_url": "http://127.0.0.1:11434",
     # Start `ollama serve` hidden when LifeOS starts and Ollama isn't running.
     "auto_start_ollama": True,
+    # Backups (backup.py): a zip of the data folder, e.g. into a OneDrive folder to move to another PC.
+    "backup_folder": "",
+    "backup_daily": False,
+    "backup_keep": 7,
+    "backup_include_media": False,
+    "backup_last_at": "",
+    # Read the assistant's replies aloud (browser speech, no extra model).
+    "speak_replies": False,
     # Seconds a local model may take to answer, including loading it into VRAM (large models spill to RAM).
     "ollama_timeout_s": 600,
     # Run one local model at a time: agents on different models take turns instead of swapping them in and out
@@ -154,6 +162,13 @@ def update(changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("ollama_keep_alive must look like 30m, 2h or 0")
         if key == "ollama_kv_cache" and value not in ("f16", "q8_0", "q4_0"):
             raise ValueError("ollama_kv_cache must be f16, q8_0 or q4_0")
+        if key == "backup_keep" and not 1 <= value <= 100:
+            raise ValueError("backup_keep must be between 1 and 100")
+        if key == "backup_folder" and value.strip():
+            from pathlib import Path
+
+            if not Path(value.strip()).expanduser().is_absolute():
+                raise ValueError("Backup folder must be a full path, like A:\\Backups or your OneDrive folder")
         if key == "fast_model" and len(value) > 120:
             raise ValueError("fast_model is too long")
         if key == "lessons_per_task" and not 0 <= value <= 20:

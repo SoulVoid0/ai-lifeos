@@ -26,6 +26,12 @@ def fire_reminders() -> int:
     return len(due)
 
 
+def _daily_backup() -> object:
+    from . import backup
+
+    return backup.create() if backup.due() else None
+
+
 class Scheduler:
     def __init__(self) -> None:
         self._stop = threading.Event()
@@ -37,6 +43,7 @@ class Scheduler:
             ("projects", 30 * 60, projects.detect),
             ("calendars", 30 * 60, integrations.sync_all),
             ("embed-memories", 10 * 60, memory.reembed_missing),
+            ("backup", 30 * 60, _daily_backup),
         ]
         self._last: dict[str, float] = {}
 
