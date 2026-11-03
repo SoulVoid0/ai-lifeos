@@ -4,7 +4,7 @@
 
 # ---- the web UI
 FROM docker.io/library/node:22 AS web
-WORKDIR /src/frontend
+WORKDIR /build/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend/ ./
@@ -32,7 +32,7 @@ COPY backend/ /usr/src/lifeos/backend/
 RUN python3 -m venv /usr/lib/lifeos \
     && /usr/lib/lifeos/bin/pip install --no-cache-dir /usr/src/lifeos/backend \
     && rm -rf /usr/src/lifeos
-COPY --from=web /src/frontend/dist/ /usr/share/lifeos/web/
+COPY --from=web /build/frontend/dist/ /usr/share/lifeos/web/
 
 COPY os/files/ /
 RUN systemd-sysusers \
