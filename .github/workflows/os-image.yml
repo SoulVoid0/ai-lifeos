@@ -77,7 +77,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          ISO=out/AI-LifeOS-${{ github.run_number }}.iso
+          ISO=$(ls out/*.iso | head -n 1)
           mkdir -p publish
           sha256sum "$ISO" | awk '{print $1}' > "publish/$(basename "$ISO").sha256"
           cp /repo/lifeos-*.pkg.tar.zst publish/

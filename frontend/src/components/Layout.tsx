@@ -13,6 +13,7 @@ import { UpdateBanner } from "./Updates";
 import { isDesktop } from "../lib/desktop";
 import { CommandPalette } from "./CommandPalette";
 import { StatusBar } from "./StatusBar";
+import { SetupScreen } from "./Devices";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -194,6 +195,7 @@ export function Layout() {
           <Outlet />
         </main>
         <CommandPalette nav={NAV} />
+        <SetupScreen />
       </div>
     </div>
   );

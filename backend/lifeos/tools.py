@@ -203,6 +203,21 @@ class PowerArgs(BaseModel):
     action: Literal["lock", "sleep", "restart", "shutdown", "sign_out"]
 
 
+class WifiArgs(BaseModel):
+    action: Literal["list", "status", "connect", "disconnect", "on", "off"] = "list"
+    ssid: str = Field("", description="Network name, for connect")
+    password: str = Field("", description="Wi-Fi password for a new network (leave empty for saved or open ones)")
+
+
+class BluetoothArgs(BaseModel):
+    action: Literal["list", "scan", "connect", "disconnect", "pair", "forget", "on", "off"] = "list"
+    device: str = Field("", description="Device name or address, for connect/disconnect/pair/forget")
+
+
+class BrightnessArgs(BaseModel):
+    level: int = Field(ge=1, le=100, description="Screen brightness 1-100")
+
+
 class WorkspaceArgs(BaseModel):
     name: str = Field(..., description="Workspace name, e.g. 'study'")
 
@@ -730,6 +745,55 @@ def _set_volume(a: VolumeArgs, ctx: dict[str, Any]) -> dict[str, Any]:
     return {"summary": what + ".", **out}
 
 
+def _wifi(a: WifiArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import devices
+
+    try:
+        if a.action == "status":
+            st = devices.wifi_status()
+            return {"summary": f"Wi-Fi is connected to {st['connected']}." if st["connected"] else
+                    "Wi-Fi is not connected." if st["available"] else "This computer has no Wi-Fi.", **st}
+        if a.action == "list":
+            nets = devices.wifi_networks()
+            shown = ", ".join(f"{n['ssid']} ({n['signal']}%{', connected' if n['connected'] else ''})" for n in nets[:10])
+            return {"summary": f"Wi-Fi networks: {shown}" if nets else "No Wi-Fi networks found.", "networks": nets}
+        if a.action == "connect":
+            out = devices.wifi_connect(a.ssid, a.password)
+            return {"summary": f"Connected to {out['connected']}.", **out}
+        if a.action == "disconnect":
+            out = devices.wifi_disconnect()
+            return {"summary": "Disconnected from Wi-Fi." if out["disconnected"] else "Wi-Fi wasn't connected.", **out}
+        out = devices.wifi_power(a.action == "on")
+        return {"summary": "Opened Wi-Fi settings." if out.get("opened_settings") else f"Wi-Fi turned {a.action}.", **out}
+    except devices.DeviceError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def _bluetooth(a: BluetoothArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import devices
+
+    try:
+        if a.action in ("list", "scan"):
+            rows = devices.bluetooth_devices(8 if a.action == "scan" else 0)
+            shown = ", ".join(d["name"] + (" (connected)" if d["connected"] else "" if d["paired"] else " (not paired)")
+                              for d in rows[:12])
+            return {"summary": f"Bluetooth devices: {shown}" if rows else "No Bluetooth devices found.", "devices": rows}
+        action = {"on": "power_on", "off": "power_off"}.get(a.action, a.action)
+        return devices.bluetooth_action(action, a.device)  # type: ignore[arg-type]
+    except devices.DeviceError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def _brightness(a: BrightnessArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import devices
+
+    try:
+        out = devices.set_brightness(a.level)
+    except devices.DeviceError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Set the screen brightness to {out['brightness']}%.", **out}
+
+
 def _power(a: PowerArgs, ctx: dict[str, Any]) -> dict[str, Any]:
     from . import system
 
@@ -900,6 +964,12 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          "auto", run=_set_volume),
     Tool("power_action", "Lock the screen, sleep, restart, shut down or sign out. Requires approval.", PowerArgs,
          "destructive", "confirm", run=_power),
+    Tool("wifi", "Wi-Fi: list nearby networks, show status, connect (with a password for a new network), disconnect, "
+         "or turn Wi-Fi on/off.", WifiArgs, "write", "auto", run=_wifi),
+    Tool("bluetooth", "Bluetooth: list or scan for devices, connect, disconnect, pair, forget a device, or turn "
+         "Bluetooth on/off.", BluetoothArgs, "write", "auto", run=_bluetooth),
+    Tool("set_brightness", "Set the screen brightness (laptops and supported monitors).", BrightnessArgs, "write",
+         "auto", run=_brightness),
     Tool("break_down_task", "Split a big task (assignment, project) into ordered steps with time estimates and "
          "due dates spread before its deadline.", BreakDownArgs, "write", "auto", run=_break_down,
          undo=_undo_break_down),

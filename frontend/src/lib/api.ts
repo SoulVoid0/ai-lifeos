@@ -204,6 +204,23 @@ export interface SystemStatus {
 }
 export interface Program { name: string; pids: number[]; count: number; memory_mb: number; cpu_percent: number; protected: boolean }
 export type PowerAction = "lock" | "sleep" | "restart" | "shutdown" | "sign_out";
+export interface WifiNetwork { ssid: string; signal: number; secure: boolean; security: string; connected: boolean }
+export interface BtDevice { address: string; name: string; paired: boolean; connected: boolean; kind: string; battery: number | null }
+export interface DisplayInfo {
+  name: string; label: string; enabled: boolean; scale: number | null; width: number | null; height: number | null;
+  refresh: number | null; modes: string[]; settings_only?: boolean;
+}
+type Maybe<T> = T | { error: string };
+export interface DevicesOverview {
+  platform: "windows" | "linux" | "macos";
+  wifi: Maybe<{ available: boolean; enabled: boolean; connected: string }>;
+  bluetooth: Maybe<{ available: boolean; powered: boolean | null; settings_only?: boolean }>;
+  displays: Maybe<DisplayInfo[]>;
+  brightness: number | null | { error: string };
+  notifications: { supported: boolean; running: boolean; error: string };
+}
+export type BtAction = "connect" | "disconnect" | "pair" | "forget" | "power_on" | "power_off";
+export interface SetupState { needed: boolean; done: boolean; user_name: string; suggested_folders: string[]; platform: string }
 export interface BackupFile { name: string; path: string; bytes: number; created_at: string }
 
 export interface Folder {
@@ -731,6 +748,18 @@ export const api = {
   setVolume: (v: { level?: number; change?: "up" | "down" | "mute" }) => post("/api/system/volume", v),
   power: (action: PowerAction) => post<{ summary: string }>("/api/system/power", { action }),
   cloudFolders: () => get<CloudFolder[]>("/api/folders/cloud"),
+  devices: () => get<DevicesOverview>("/api/devices"),
+  wifiNetworks: (rescan = false) => get<WifiNetwork[]>(`/api/devices/wifi${qs({ rescan: rescan || undefined })}`),
+  wifiConnect: (ssid: string, password = "") => post<{ connected: string }>("/api/devices/wifi/connect", { ssid, password }),
+  wifiDisconnect: () => post("/api/devices/wifi/disconnect"),
+  wifiPower: (on: boolean) => post<{ enabled: boolean; opened_settings?: boolean }>("/api/devices/wifi/power", { on }),
+  btDevices: (scan = 0) => get<BtDevice[]>(`/api/devices/bluetooth${qs({ scan: scan || undefined })}`),
+  btAction: (action: BtAction, device = "") => post<{ summary: string }>("/api/devices/bluetooth", { action, device }),
+  setDisplay: (d: { name: string; mode?: string; scale?: number; enabled?: boolean }) => post<{ summary: string }>("/api/devices/display", d),
+  setBrightness: (level: number) => post("/api/devices/brightness", { level }),
+  openOsSettings: (page: "wifi" | "bluetooth" | "display" | "sound") => post(`/api/devices/open-settings/${page}`),
+  setup: () => get<SetupState>("/api/setup"),
+  finishSetup: () => post("/api/setup/done"),
 
   suggestionAction: (a: NonNullable<Suggestion["action"]>) => request<unknown>(a.method, a.path, a.body ?? {}),
 

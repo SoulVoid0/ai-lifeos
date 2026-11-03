@@ -5,6 +5,7 @@ import {
 import { api, type AppEntry, type PowerAction } from "../lib/api";
 import { useAsync } from "../lib/hooks";
 import { Empty, PageHeader, Section, Spinner, useToast } from "../components/ui";
+import { DeviceSettings } from "../components/Devices";
 
 const TILE = ["#8b5cf6", "#3b82f6", "#10b981", "#06b6d4", "#f43f5e", "#f59e0b", "#ec4899", "#84cc16"];
 const tint = (name: string) => TILE[[...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % TILE.length];
@@ -132,6 +133,8 @@ export default function Computer() {
           <p className="mt-2 text-[11px] text-muted">Restart and shut down wait 10 seconds on Windows. The assistant can do these too, but always asks you first.</p>
         </Section>
       </div>
+
+      <DeviceSettings />
 
       <Section title="Apps" icon={<Search size={15} className="text-accent" />}
         actions={<div className="relative w-64"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />

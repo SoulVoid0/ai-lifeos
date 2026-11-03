@@ -15,8 +15,8 @@ everything the user sees.
 | Brain | Backend (`backend/lifeos`): assistant, crew, memory, files, tasks, automations, approvals and undo | Done, runs on Windows, Linux and macOS |
 | Platform layer | `apps.py` (installed apps), `system.py` (status, programs, volume, power), `files.launch`, `services.py`. One function each, with Windows, Linux and macOS versions | Done in 0.1.18 |
 | Shell UI | The Tauri app: Computer page (launcher, status, power), Ctrl+K command palette, status bar, full screen with F11 | Done in 0.1.18 |
-| Session | LifeOS starts at login instead of a normal desktop and stays full screen, while other apps open in normal windows | Next |
-| System image | A bootable, installable LifeOS image with drivers, Ollama, ComfyUI and LifeOS preinstalled | After the session |
+| Session | LifeOS starts at login instead of a normal desktop and stays full screen, while other apps open in normal windows | Done: labwc session, device settings, notifications, setup screen |
+| System image | A bootable, installable LifeOS image with drivers, Ollama, ComfyUI and LifeOS preinstalled | First Arch builds (live USB and installer) |
 | Own compositor | A window manager made for LifeOS: the crew can arrange windows, and the Station can be the home screen | Later |
 
 ## Why Linux underneath (and what it gives your PC)
@@ -44,9 +44,12 @@ everything the user sees.
   (labwc), with LifeOS as the full-screen home layer and the dock. Other apps open as normal windows above it.
 - The backend runs as a `systemd --user` service, with Ollama and ComfyUI as services.
   Data goes in `~/.local/share/ai-lifeos`, because `config.data_dir` already follows XDG on Linux.
-- Wi-Fi, Bluetooth, display and audio settings through NetworkManager, BlueZ, `wlr-randr` and PipeWire, added to
-  `system.py` as more tools.
-- Notifications through the freedesktop notification spec, so the bell receives other apps' notifications too.
+- Done: Wi-Fi, Bluetooth, display and brightness settings (`devices.py`: `nmcli`, `bluetoothctl`, `wlr-randr`,
+  `brightnessctl`; `netsh` and WMI on Windows) on the Computer page, and as the assistant tools `wifi`,
+  `bluetooth` and `set_brightness`. Audio volume was already in `system.py`.
+- Done: notifications through the freedesktop notification spec (`notify_bus.py`), so the bell receives other apps'
+  notifications too.
+- Done: a first-start setup screen (name, Wi-Fi, folders, the light model set).
 
 ### 3. LifeOS image (first build: `os/`)
 - An Arch Linux base built with archiso in GitHub Actions: a live USB that boots into LifeOS, plus `lifeos-install`
