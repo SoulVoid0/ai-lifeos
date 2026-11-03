@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 import threading
 import time
 from typing import Any
@@ -65,23 +66,34 @@ def pull(model: str, then: Any = None) -> dict[str, Any]:
     return dict(job)
 
 
+STALL_S = 90  # no new bytes for this long while downloading = stalled (Ollama's HF downloads sometimes freeze)
+QUIET_S = 900  # no message at all for this long (verifying a 13 GB file can take a while) = stalled
+RETRIES = 10
+
+
+def _backoff(attempt: int) -> float:
+    return min(30, 2 + 3 * attempt)
+
+
+class _Stalled(Exception):
+    pass
+
+
 def _pull(model: str, then: Any) -> None:
+    """Pull with a stall watchdog: a download that stops moving is cut and started again. Ollama keeps the parts it
+    already has, so each retry resumes where the last one stopped instead of starting over."""
     job = _pulls[model]
     try:
-        with httpx.Client(timeout=httpx.Timeout(None, connect=10)) as client, \
-                client.stream("POST", f"{_base()}/api/pull", json={"model": model, "stream": True}) as r:
-            if r.status_code >= 400:
-                r.read()
-                raise RuntimeError(r.text[:200] or f"HTTP {r.status_code}")
-            for line in r.iter_lines():
-                if not line.strip():
-                    continue
-                chunk = json.loads(line)
-                if chunk.get("error"):
-                    raise RuntimeError(chunk["error"])
-                job["status"] = chunk.get("status") or job["status"]
-                if chunk.get("total"):
-                    job["total"], job["completed"] = int(chunk["total"]), int(chunk.get("completed") or 0)
+        for attempt in range(RETRIES + 1):
+            try:
+                _pull_once(model, job)
+                break
+            except (_Stalled, httpx.TransportError) as exc:
+                if attempt == RETRIES:
+                    raise RuntimeError(f"the download kept stalling ({exc}); try again later") from exc
+                job.update(status=f"stalled, resuming (try {attempt + 2} of {RETRIES + 1})", retries=attempt + 1)
+                log.warning("Pull of %s stalled (%s); resuming", model, exc)
+                time.sleep(_backoff(attempt))
         llm.status(force=True)
         if then:
             then()
@@ -90,6 +102,68 @@ def _pull(model: str, then: Any) -> None:
     except Exception as exc:  # noqa: BLE001 (reported on the job)
         job.update(state="failed", error=str(exc)[:300])
         activity.log("system", f"Couldn't download {model}: {exc}"[:300], status="error")
+
+
+def _pull_once(model: str, job: dict[str, Any]) -> None:
+    seen = {"line": time.monotonic(), "bytes": time.monotonic(), "completed": -1}
+    stalled: list[str] = []
+    done = threading.Event()
+    with httpx.Client(timeout=httpx.Timeout(None, connect=10)) as client, \
+            client.stream("POST", f"{_base()}/api/pull", json={"model": model, "stream": True}) as r:
+        if r.status_code >= 400:
+            r.read()
+            raise RuntimeError(r.text[:200] or f"HTTP {r.status_code}")
+
+        sock = r.extensions.get("network_stream")
+        sock = sock.get_extra_info("socket") if sock is not None else None
+
+        def cut() -> None:
+            try:
+                if sock is not None:
+                    sock.shutdown(socket.SHUT_RDWR)  # unblocks the read; closing the response alone may not
+            except OSError:
+                pass
+            r.close()
+
+        def watch() -> None:
+            while not done.wait(2):
+                now = time.monotonic()
+                downloading = str(job.get("status", "")).startswith("pulling")
+                if (downloading and now - seen["bytes"] > STALL_S) or now - seen["line"] > QUIET_S:
+                    stalled.append(f"no progress for {int(now - min(seen['bytes'], seen['line']))} s")
+                    cut()
+                    return
+
+        threading.Thread(target=watch, daemon=True, name=f"lifeos-pull-watch-{model}").start()
+        try:
+            for line in r.iter_lines():
+                seen["line"] = time.monotonic()
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if chunk.get("error"):
+                    raise RuntimeError(chunk["error"])
+                status = chunk.get("status") or job["status"]
+                if status != job["status"]:
+                    seen["bytes"] = time.monotonic()  # a new file or step starts its own clock
+                job["status"] = status
+                if chunk.get("total"):
+                    completed = int(chunk.get("completed") or 0)
+                    if completed != seen["completed"]:
+                        seen["completed"], seen["bytes"] = completed, time.monotonic()
+                    job["total"], job["completed"] = int(chunk["total"]), completed
+        except (httpx.HTTPError, OSError, ValueError) as exc:
+            if stalled:
+                raise _Stalled(stalled[0]) from exc
+            if isinstance(exc, httpx.TransportError):
+                raise
+            raise RuntimeError(f"broken reply from Ollama: {exc}") from exc
+        finally:
+            done.set()
+        if stalled:
+            raise _Stalled(stalled[0])
+        if not str(job["status"]).lower().startswith("success"):
+            raise _Stalled(f"Ollama ended the download at \"{job['status']}\"")
 
 
 def pulls() -> list[dict[str, Any]]:
