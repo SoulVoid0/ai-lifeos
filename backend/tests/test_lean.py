@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.server
 import json
 import threading
+import time
 
 import pytest
 
@@ -20,6 +21,8 @@ class FakeOllama:
         self.loaded: list[str] = []
         self.chats: list[dict] = []
         self.replies: list[tuple[int, dict]] = []  # queued (status, body) for /api/chat
+        self.stall_pulls = 0
+        self.pull_calls = 0
         fake = self
 
         class H(http.server.BaseHTTPRequestHandler):
@@ -61,6 +64,22 @@ class FakeOllama:
                         fake.loaded.remove(body["model"])
                     self._send(200)
                 elif self.path == "/api/pull":
+                    fake.pull_calls += 1
+                    if fake.stall_pulls:
+                        fake.stall_pulls -= 1
+                        self.send_response(200)
+                        self.end_headers()
+                        try:
+                            self.wfile.write(json.dumps({"status": "pulling d6b8", "total": 10, "completed": 6}).encode() + b"\n")
+                            self.wfile.flush()
+                            for _ in range(100):  # frozen: same byte count, then nothing at all
+                                time.sleep(0.1)
+                                if _ < 3:
+                                    self.wfile.write(json.dumps({"status": "pulling d6b8", "total": 10, "completed": 6}).encode() + b"\n")
+                                    self.wfile.flush()
+                        except OSError:
+                            pass
+                        return
                     fake.models[body["model"]] = 1_000_000_000
                     self._send(200, lines=[{"status": "pulling", "total": 10, "completed": 5},
                                            {"status": "success"}])
@@ -255,3 +274,17 @@ def test_planner_is_told_about_the_micro_agent(ollama, monkeypatch):
     m = missions.start("what's on today?")
     missions.wait(m["id"], timeout=20)
     assert "Spark" in plans[0] and "micro agent" in plans[0]
+
+
+def test_a_stalled_download_resumes_by_itself(ollama, monkeypatch):
+    from lifeos import lean
+
+    monkeypatch.setattr(lean, "STALL_S", 0.5)
+    monkeypatch.setattr(lean, "_backoff", lambda attempt: 0)
+    ollama.stall_pulls = 2
+    lean.pull("hf.co/x/y:UD-IQ3_XXS")
+    deadline = time.monotonic() + 15
+    while lean._pulls["hf.co/x/y:UD-IQ3_XXS"]["state"] == "pulling" and time.monotonic() < deadline:
+        time.sleep(0.1)
+    job = lean._pulls["hf.co/x/y:UD-IQ3_XXS"]
+    assert job["state"] == "done" and job["retries"] == 2 and ollama.pull_calls == 3

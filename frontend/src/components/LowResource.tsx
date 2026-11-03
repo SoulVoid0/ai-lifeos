@@ -104,7 +104,10 @@ export function LowResource({ form, save, reload }: Props) {
         </div>
       ))}
       {(models.data?.pulls ?? []).filter((p) => p.state === "failed").map((p) => (
-        <div key={p.model} className="mt-2 text-xs text-danger">Download of {p.model} failed: {p.error}</div>
+        <div key={p.model} className="mt-2 flex items-center gap-2 text-xs text-danger">
+          <span className="flex-1">Download of {p.model} failed: {p.error}</span>
+          <button className="btn-ghost py-0.5 text-xs" onClick={() => pull(p.model)}><RotateCw size={12} /> Retry</button>
+        </div>
       ))}
 
       <div className="mt-3 space-y-1.5">
