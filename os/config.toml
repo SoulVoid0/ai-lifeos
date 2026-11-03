@@ -1,0 +1,4 @@
+# bootc-image-builder settings for the installer ISO.
+# Show the "Create user" screen in the installer (it's hidden by default for bootc images).
+[customizations.installer.modules]
+enable = ["org.fedoraproject.Anaconda.Modules.Users"]
