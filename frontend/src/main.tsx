@@ -10,6 +10,7 @@ import Memory from "./pages/Memory";
 import Files from "./pages/Files";
 import Calendar from "./pages/Calendar";
 import ActivityLog from "./pages/ActivityLog";
+import Computer from "./pages/Computer";
 import Settings from "./pages/Settings";
 import SearchPage from "./pages/SearchPage";
 import ControlCenter from "./pages/ControlCenter";
@@ -25,6 +26,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <Routes>
           <Route element={<Layout />}>
             <Route index element={<Dashboard />} />
+            <Route path="computer" element={<Computer />} />
             <Route path="crew" element={<ControlCenter />} />
             <Route path="station" element={<World />} />
             <Route path="assistant" element={<Assistant />} />

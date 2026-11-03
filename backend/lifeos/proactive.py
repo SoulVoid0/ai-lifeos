@@ -89,6 +89,23 @@ def suggestions() -> list[dict[str, Any]]:
                     "title": f"{len(clashes)} calendar conflict{'s' if len(clashes) > 1 else ''}",
                     "detail": f"\"{a['title']}\" overlaps \"{b['title']}\" on {a['start_at'][:10]}.", "link": "/calendar"})
     out.extend(workflows.suggestions())
+    from . import cloud, workspaces
+
+    out.extend(workspaces.suggestions())
+    behind = tasks.behind_schedule()
+    for parent_id in dict.fromkeys(t["parent_id"] for t in behind):
+        parent = tasks.get(parent_id)
+        late = [t for t in behind if t["parent_id"] == parent_id]
+        out.append({"id": f"behind-{parent_id}-{len(late)}", "kind": "deadline", "priority": 4,
+                    "title": f"Behind on \"{parent['title']}\"",
+                    "detail": f"{len(late)} step(s) are past their date. LifeOS can spread the rest over the time left.",
+                    "action": {"label": "Update the plan", "method": "POST", "path": f"/api/tasks/{parent_id}/replan",
+                               "body": {}}})
+    for c in cloud.folders():
+        if not c["approved"]:
+            out.append({"id": f"cloud-{c['path']}", "kind": "setup", "priority": 1, "title": f"Use your {c['provider']} files",
+                        "detail": f"Approve {c['path']} so LifeOS can search and organize it. Online-only files "
+                                  "aren't downloaded.", "link": "/settings"})
     projects = memory.list_all("project")
     for p in projects[:3]:
         open_in_project = [t for t in open_tasks if t.get("project") and t["project"].lower() in p["content"].lower()]

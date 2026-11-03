@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from pydantic import BaseModel, Field
 from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, lean, learning, llm, mailer, media, memory,
                missions, permissions, proactive, projects, scheduler, search, services, settings, tasks, tools, vault,
                updates, workflows)
+from . import apps, backup, cloud, custom_tools, renamer, system, workspaces
 
 log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
@@ -33,6 +35,7 @@ async def lifespan(app: FastAPI):
     scheduler.watch_parent()
     if not os.environ.get("LIFEOS_NO_SERVICES"):
         services.start_background()
+        threading.Thread(target=apps.list_apps, daemon=True, name="apps-preload").start()
     yield
     _scheduler.stop()
     services.stop_all()
@@ -506,6 +509,204 @@ def list_tools() -> list[dict[str, Any]]:
 @app.get("/api/llm/status")
 def llm_status() -> dict[str, Any]:
     return llm.status(force=True)
+
+
+# ---------------------------------------------------------------- cloud folders, workspaces, custom tools, backups
+
+@app.get("/api/folders/cloud")
+def cloud_folders() -> list[dict[str, Any]]:
+    return cloud.folders()
+
+
+# ---------------------------------------------------------------- the computer (launcher, status, power)
+
+class LaunchIn(BaseModel):
+    id: str = Field(max_length=2000)
+
+
+class VolumeIn(BaseModel):
+    level: int | None = Field(default=None, ge=0, le=100)
+    change: str | None = None
+
+
+class EndProgramIn(BaseModel):
+    name: str = Field(max_length=260)
+
+
+class PowerIn(BaseModel):
+    action: str
+
+
+@app.get("/api/apps")
+def list_apps(q: str = "", refresh: bool = False, limit: int = 500) -> list[dict[str, Any]]:
+    if refresh:
+        apps.list_apps(refresh=True)
+    return apps.search(q, limit) if q else apps.list_apps()[:limit]
+
+
+@app.post("/api/apps/launch")
+def launch_app(body: LaunchIn) -> dict[str, Any]:
+    return apps.launch(app_id=body.id)
+
+
+@app.get("/api/system/status")
+def system_status() -> dict[str, Any]:
+    return system.status()
+
+
+@app.get("/api/system/programs")
+def system_programs(sort: str = "memory", limit: int = 25) -> list[dict[str, Any]]:
+    return system.processes(min(limit, 100), "cpu" if sort == "cpu" else "memory")
+
+
+@app.post("/api/system/programs/end")
+def end_program(body: EndProgramIn) -> dict[str, Any]:
+    """The user pressed End in the app, which is the confirmation; the assistant's end_program tool asks first."""
+    return system.end_program(body.name)
+
+
+@app.post("/api/system/volume")
+def set_volume(body: VolumeIn) -> dict[str, Any]:
+    if body.change not in (None, "up", "down", "mute"):
+        raise ValueError("change must be up, down or mute")
+    return system.set_volume(body.level, body.change)  # type: ignore[arg-type]
+
+
+@app.post("/api/system/power")
+def power(body: PowerIn) -> dict[str, Any]:
+    return system.power(body.action)  # type: ignore[arg-type]
+
+
+class WorkspaceItemIn(BaseModel):
+    kind: str
+    target: str = Field(max_length=2000)
+    label: str = Field(default="", max_length=80)
+
+
+class WorkspaceIn(BaseModel):
+    name: str = Field(max_length=60)
+    items: list[WorkspaceItemIn] = Field(max_length=20)
+
+
+class AutomateIn(BaseModel):
+    time: str = "08:00"
+    days: list[str] = ["mon", "tue", "wed", "thu", "fri"]
+
+
+@app.get("/api/workspaces")
+def list_workspaces() -> list[dict[str, Any]]:
+    return workspaces.list_all()
+
+
+@app.post("/api/workspaces")
+def create_workspace(body: WorkspaceIn) -> dict[str, Any]:
+    return workspaces.save(body.model_dump())
+
+
+@app.put("/api/workspaces/{wid}")
+def update_workspace(wid: int, body: WorkspaceIn) -> dict[str, Any]:
+    workspaces.get(wid)
+    return workspaces.save(body.model_dump(), wid)
+
+
+@app.delete("/api/workspaces/{wid}")
+def delete_workspace(wid: int) -> dict[str, Any]:
+    return workspaces.delete(wid)
+
+
+@app.post("/api/workspaces/{wid}/open")
+def open_workspace(wid: int) -> dict[str, Any]:
+    return workspaces.open_workspace(wid)
+
+
+@app.post("/api/workspaces/{wid}/automate")
+def automate_workspace(wid: int, body: AutomateIn) -> dict[str, Any]:
+    return workspaces.automate(wid, body.time, body.days)
+
+
+class CustomToolIn(BaseModel):
+    name: str = Field(max_length=40)
+    kind: str
+    description: str = Field(default="", max_length=300)
+    config: dict[str, Any] = {}
+    enabled: bool = True
+    secret: str | None = Field(default=None, max_length=2000)
+
+
+class CustomToolTestIn(BaseModel):
+    input: str = Field(default="", max_length=4000)
+
+
+@app.get("/api/custom-tools")
+def list_custom_tools() -> list[dict[str, Any]]:
+    return custom_tools.list_all()
+
+
+@app.post("/api/custom-tools")
+def create_custom_tool(body: CustomToolIn) -> dict[str, Any]:
+    return custom_tools.save(body.model_dump())
+
+
+@app.put("/api/custom-tools/{tid}")
+def update_custom_tool(tid: int, body: CustomToolIn) -> dict[str, Any]:
+    return custom_tools.save(body.model_dump(), tid)
+
+
+@app.delete("/api/custom-tools/{tid}")
+def delete_custom_tool(tid: int) -> dict[str, Any]:
+    return custom_tools.delete(tid)
+
+
+@app.get("/api/custom-tools/{tid}/export")
+def export_custom_tool(tid: int) -> dict[str, Any]:
+    return custom_tools.export(tid)
+
+
+@app.post("/api/custom-tools/import")
+def import_custom_tool(body: dict[str, Any]) -> dict[str, Any]:
+    return custom_tools.import_tool(body)
+
+
+@app.post("/api/custom-tools/{tid}/test")
+def test_custom_tool(tid: int, body: CustomToolTestIn) -> dict[str, Any]:
+    """Run a tool once from Settings (the user is pressing the button, so no approval step)."""
+    t = custom_tools.get(tid)
+    if t["kind"] == "webhook":
+        return custom_tools.call_webhook(t, body.input)
+    return {"response": custom_tools.run_prompt(t, body.input)}
+
+
+class BackupIn(BaseModel):
+    include_media: bool | None = None
+
+
+class RestoreIn(BaseModel):
+    path: str = Field(max_length=2000)
+
+
+@app.get("/api/backups")
+def list_backups() -> dict[str, Any]:
+    return {"backups": backup.list_backups(), "pending_restore": backup.pending_restore()}
+
+
+@app.post("/api/backups")
+def create_backup(body: BackupIn) -> dict[str, Any]:
+    return backup.create(body.include_media)
+
+
+@app.post("/api/backups/restore")
+def restore_backup(body: RestoreIn) -> dict[str, Any]:
+    return backup.request_restore(body.path)
+
+
+@app.post("/api/tasks/{task_id}/breakdown")
+def break_down_task(task_id: int) -> dict[str, Any]:
+    return tasks.break_down(task_id)
+
+
+@app.post("/api/tasks/{task_id}/replan")
+def replan_task(task_id: int) -> dict[str, Any]:
+    return tasks.replan(task_id)
 
 
 @app.get("/api/suggestions")

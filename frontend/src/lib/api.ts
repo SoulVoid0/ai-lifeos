@@ -67,6 +67,7 @@ function shared<T>(load: () => Promise<T>, ttl = 300): () => Promise<T> {
 const post = <T>(p: string, b?: unknown) => request<T>("POST", p, b ?? {});
 const patch = <T>(p: string, b: unknown) => request<T>("PATCH", p, b);
 const del = <T>(p: string) => request<T>("DELETE", p);
+const put = <T>(p: string, b: unknown) => request<T>("PUT", p, b);
 const qs = (o: Record<string, string | number | boolean | undefined | null>) => {
   const p = new URLSearchParams();
   for (const [k, v] of Object.entries(o)) if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
@@ -125,6 +126,7 @@ export interface Task {
   created_at: string;
   completed_at: string | null;
   score?: number;
+  parent_id?: number | null;
 }
 
 export interface Memory {
@@ -183,7 +185,26 @@ export interface Suggestion {
   command?: string;
   link?: string;
   task_id?: number;
+  action?: { label: string; method: string; path: string; body?: unknown };
 }
+
+export interface WorkspaceItem { kind: "file" | "folder" | "url" | "app"; target: string; label?: string }
+export interface Workspace { id: number; name: string; items: WorkspaceItem[]; last_opened_at?: string | null; open_count?: number }
+export interface CloudFolder { provider: string; path: string; approved: boolean }
+export interface CustomTool {
+  id: number; name: string; kind: "webhook" | "prompt"; description: string; enabled: boolean; has_secret: boolean;
+  config: { url?: string; method?: string; body?: string; secret_header?: string; template?: string };
+}
+export interface AppEntry { id: string; name: string; source: string; launches: number; last_launched_at: string | null; comment?: string }
+export interface SystemStatus {
+  cpu_percent: number; cpu_count: number; uptime_hours: number; platform: string;
+  memory: { used_gb: number; total_gb: number; percent: number };
+  disk: { path: string; free_gb: number; total_gb: number; percent: number };
+  battery: { percent: number; plugged_in: boolean; minutes_left: number | null } | null;
+}
+export interface Program { name: string; pids: number[]; count: number; memory_mb: number; cpu_percent: number; protected: boolean }
+export type PowerAction = "lock" | "sleep" | "restart" | "shutdown" | "sign_out";
+export interface BackupFile { name: string; path: string; bytes: number; created_at: string }
 
 export interface Folder {
   id: number;
@@ -263,6 +284,12 @@ export interface Settings {
   notification_prefs: { reminders: boolean; workflows: boolean; missions: boolean; suggestions: boolean };
   quiet_hours: { enabled: boolean; start: string; end: string };
   email: { host: string; port: number; username: string; folder: string };
+  backup_folder: string;
+  backup_daily: boolean;
+  backup_keep: number;
+  backup_include_media: boolean;
+  backup_last_at: string;
+  speak_replies: boolean;
 }
 
 export interface ToolInfo {
@@ -696,6 +723,38 @@ export const api = {
   folders: () => get<Folder[]>("/api/folders"),
   addFolder: (path: string, label?: string) => post<Folder>("/api/folders", { path, label }),
   removeFolder: (id: number) => del(`/api/folders/${id}`),
+  apps: (q = "", refresh = false) => get<AppEntry[]>(`/api/apps${qs({ q, refresh: refresh || undefined })}`),
+  launchApp: (id: string) => post<{ opened: string }>("/api/apps/launch", { id }),
+  systemStatus: () => get<SystemStatus>("/api/system/status"),
+  programs: (sort: "memory" | "cpu" = "memory") => get<Program[]>(`/api/system/programs${qs({ sort })}`),
+  endProgram: (name: string) => post<{ ended: string; processes: number }>("/api/system/programs/end", { name }),
+  setVolume: (v: { level?: number; change?: "up" | "down" | "mute" }) => post("/api/system/volume", v),
+  power: (action: PowerAction) => post<{ summary: string }>("/api/system/power", { action }),
+  cloudFolders: () => get<CloudFolder[]>("/api/folders/cloud"),
+
+  suggestionAction: (a: NonNullable<Suggestion["action"]>) => request<unknown>(a.method, a.path, a.body ?? {}),
+
+  workspaces: () => get<Workspace[]>("/api/workspaces"),
+  saveWorkspace: (w: { name: string; items: WorkspaceItem[] }, id?: number) =>
+    id ? put<Workspace>(`/api/workspaces/${id}`, w) : post<Workspace>("/api/workspaces", w),
+  deleteWorkspace: (id: number) => del(`/api/workspaces/${id}`),
+  openWorkspace: (id: number) => post<{ workspace: string; opened: string[]; failed: { target: string; error: string }[] }>(`/api/workspaces/${id}/open`),
+  automateWorkspace: (id: number, time: string, days: string[]) => post(`/api/workspaces/${id}/automate`, { time, days }),
+
+  customTools: () => get<CustomTool[]>("/api/custom-tools"),
+  saveCustomTool: (t: Partial<CustomTool> & { secret?: string | null }, id?: number) =>
+    id ? put<CustomTool>(`/api/custom-tools/${id}`, t) : post<CustomTool>("/api/custom-tools", t),
+  deleteCustomTool: (id: number) => del(`/api/custom-tools/${id}`),
+  exportCustomTool: (id: number) => get<Record<string, unknown>>(`/api/custom-tools/${id}/export`),
+  importCustomTool: (data: unknown) => post<CustomTool>("/api/custom-tools/import", data),
+  testCustomTool: (id: number, input: string) => post<{ status?: number; response: string }>(`/api/custom-tools/${id}/test`, { input }),
+
+  backups: () => get<{ backups: BackupFile[]; pending_restore: string | null }>("/api/backups"),
+  backupNow: (include_media?: boolean) => post<{ path: string; bytes: number }>("/api/backups", { include_media }),
+  restoreBackup: (path: string) => post<{ pending: string }>("/api/backups/restore", { path }),
+
+  breakDownTask: (id: number) => post<{ subtasks: Task[] }>(`/api/tasks/${id}/breakdown`),
+  replanTask: (id: number) => post<{ task: Task; moved: unknown[] }>(`/api/tasks/${id}/replan`),
 
   search: (q: string) => get<SearchResults>(`/api/search${qs({ q })}`),
   activity: (kind?: string) => get<ActivityEntry[]>(`/api/activity${qs({ kind, limit: 300 })}`),

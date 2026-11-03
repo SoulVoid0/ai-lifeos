@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { AlertTriangle, Bell, CalendarPlus, CalendarRange, ChevronLeft, ChevronRight, Download, Link2, MapPin, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Bell, CalendarPlus, CalendarRange, ChevronLeft, ChevronRight, Download, ListTree, Link2, MapPin, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { api, type CalEvent, type Task } from "../lib/api";
 import { isOverdue, PRIORITY_LABEL, when } from "../lib/format";
 import { useAsync } from "../lib/hooks";
@@ -297,6 +297,30 @@ export default function Calendar() {
                   </div>
                   {t.notes && <div className="mt-1 whitespace-pre-line text-xs text-muted">{t.notes}</div>}
                 </div>
+                {t.status === "open" && !t.parent_id && (
+                  <button className="btn-ghost px-1.5 opacity-0 group-hover:opacity-100" title="Break into steps"
+                    onClick={async () => {
+                      try {
+                        const r = await api.breakDownTask(t.id);
+                        toast(`Split into ${r.subtasks.length} steps with their own due dates`);
+                        refresh();
+                      } catch (e) { toast((e as Error).message, "error"); }
+                    }}>
+                    <ListTree size={14} />
+                  </button>
+                )}
+                {t.status === "open" && !t.parent_id && (allOpen.data ?? []).some((x) => x.parent_id === t.id) && (
+                  <button className="btn-ghost px-1.5 opacity-0 group-hover:opacity-100" title="Replan the remaining steps"
+                    onClick={async () => {
+                      try {
+                        const r = await api.replanTask(t.id);
+                        toast(`Moved ${r.moved.length} step(s)`);
+                        refresh();
+                      } catch (e) { toast((e as Error).message, "error"); }
+                    }}>
+                    <RefreshCw size={14} />
+                  </button>
+                )}
                 <button className="btn-ghost px-1.5 opacity-0 hover:text-danger group-hover:opacity-100" title="Delete"
                   onClick={async () => { await api.deleteTask(t.id); refresh(); }}>
                   <Trash2 size={14} />

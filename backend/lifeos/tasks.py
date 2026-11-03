@@ -39,16 +39,17 @@ def get(task_id: int) -> dict[str, Any]:
 
 
 def create(title: str, *, notes: str | None = None, project: str | None = None, priority: Any = 2,
-           due: Any = None, remind: Any = None, estimate_minutes: int | None = None) -> dict[str, Any]:
+           due: Any = None, remind: Any = None, estimate_minutes: int | None = None,
+           parent_id: int | None = None) -> dict[str, Any]:
     title = title.strip()
     if not title:
         raise ValueError("Task title is required")
     due_at, remind_at = _norm_time(due), _norm_time(remind)
     with db.session() as conn:
         cur = conn.execute(
-            "INSERT INTO tasks(title, notes, project, priority, due_at, remind_at, estimate_minutes, created_at) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            (title, notes, project, _norm_priority(priority), due_at, remind_at, estimate_minutes, db.now()),
+            "INSERT INTO tasks(title, notes, project, priority, due_at, remind_at, estimate_minutes, created_at, parent_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (title, notes, project, _norm_priority(priority), due_at, remind_at, estimate_minutes, db.now(), parent_id),
         )
         task_id = int(cur.lastrowid)
     return get(task_id)
@@ -177,3 +178,85 @@ def due_reminders() -> list[dict[str, Any]]:
 def mark_reminded(task_id: int) -> None:
     with db.session() as conn:
         conn.execute("UPDATE tasks SET reminded_at = ? WHERE id = ?", (db.now(), task_id))
+
+
+# ---------------------------------------------------------------- breaking work down
+
+# Used when no model is available: steps that fit most assignments and projects.
+_GENERIC_STEPS = [("Gather material and outline", 0.2), ("First draft / main work", 0.45), ("Review and fix", 0.2),
+                  ("Finish and hand in", 0.15)]
+
+
+def _model_steps(task: dict[str, Any], parts: int | None) -> list[dict[str, Any]]:
+    from . import llm, settings
+
+    cfg = settings.get_all()
+    model = cfg.get("fast_model") or cfg["chat_model"]
+    if cfg["planner"] == "rules" or not llm.model_available(model):
+        return []
+    schema = {"type": "object", "properties": {"steps": {"type": "array", "items": {"type": "object", "properties": {
+        "title": {"type": "string"}, "minutes": {"type": "integer"}}, "required": ["title", "minutes"]}}},
+        "required": ["steps"]}
+    prompt = (f"Break this task into {parts or '3 to 7'} concrete steps someone can do one at a time, in order, each "
+              f"with a realistic time estimate in minutes.\nTask: {task['title']}\n"
+              + (f"Notes: {task['notes'][:800]}\n" if task.get("notes") else ""))
+    try:
+        data = llm.chat_json([{"role": "user", "content": prompt}], schema, model=model, timeout=300)
+    except Exception:  # noqa: BLE001 - fall back to the generic steps
+        return []
+    steps = [{"title": str(s.get("title") or "").strip()[:120], "minutes": max(5, min(int(s.get("minutes") or 30), 600))}
+             for s in data.get("steps") or [] if isinstance(s, dict) and str(s.get("title") or "").strip()]
+    return steps[:10]
+
+
+def break_down(task_id: int, parts: int | None = None) -> dict[str, Any]:
+    """Split a task into ordered subtasks with estimates, their due dates spread out before the task's own."""
+    task = get(task_id)
+    steps = _model_steps(task, parts)
+    if not steps:
+        total = task.get("estimate_minutes") or 240
+        steps = [{"title": f"{name}: {task['title']}", "minutes": max(15, round(total * share / 15) * 15)}
+                 for name, share in _GENERIC_STEPS]
+    now = datetime.now(timezone.utc)
+    due = datetime.fromisoformat(task["due_at"]) if task.get("due_at") else None
+    created = []
+    for i, step in enumerate(steps, 1):
+        step_due = None
+        if due and due > now:
+            step_due = timeparse.iso(now + (due - now) * i / len(steps))
+        created.append(create(step["title"], project=task.get("project"), priority=task["priority"],
+                              due=step_due, estimate_minutes=step["minutes"], parent_id=task_id,
+                              notes=f"Step {i} of {len(steps)} for: {task['title']}"))
+    total = sum(s["minutes"] for s in steps)
+    if not task.get("estimate_minutes"):
+        update(task_id, {"estimate_minutes": total})
+    return {"task": get(task_id), "subtasks": created, "total_minutes": total}
+
+
+def behind_schedule() -> list[dict[str, Any]]:
+    """Open subtasks whose own due date passed while their parent is still due later: the plan needs updating."""
+    now = timeparse.iso(datetime.now(timezone.utc))
+    with db.session() as conn:
+        rows = conn.execute(
+            "SELECT s.* FROM tasks s JOIN tasks p ON p.id = s.parent_id WHERE s.status = 'open' AND p.status = 'open' "
+            "AND s.due_at IS NOT NULL AND s.due_at < ? AND (p.due_at IS NULL OR p.due_at > ?)", (now, now)).fetchall()
+    return db.rows_to_dicts(rows)
+
+
+def replan(parent_id: int) -> dict[str, Any]:
+    """Spread the open steps of a task over the time left before its due date (or the next days)."""
+    parent = get(parent_id)
+    with db.session() as conn:
+        rows = db.rows_to_dicts(conn.execute("SELECT * FROM tasks WHERE parent_id = ? AND status = 'open' ORDER BY id",
+                                             (parent_id,)).fetchall())
+    if not rows:
+        return {"task": parent, "moved": []}
+    now = datetime.now(timezone.utc)
+    end = datetime.fromisoformat(parent["due_at"]) if parent.get("due_at") else now + timedelta(days=len(rows))
+    if end <= now:
+        end = now + timedelta(days=len(rows))
+    moved = []
+    for i, t in enumerate(rows, 1):
+        new_due = timeparse.iso(now + (end - now) * i / len(rows))
+        moved.append(update(t["id"], {"due_at": new_due}))
+    return {"task": parent, "moved": moved}
