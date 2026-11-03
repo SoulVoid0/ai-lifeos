@@ -374,6 +374,15 @@ CREATE TABLE IF NOT EXISTS workspace_opens (
 );
 
 -- Tools the user defines without code: a web request (webhook) or a set of things to open.
+CREATE TABLE IF NOT EXISTS app_launches (
+    id INTEGER PRIMARY KEY,
+    app_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    launched_at TEXT NOT NULL,
+    by TEXT NOT NULL DEFAULT 'user'
+);
+CREATE INDEX IF NOT EXISTS idx_app_launches_app ON app_launches(app_id);
+
 CREATE TABLE IF NOT EXISTS custom_tools (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL UNIQUE COLLATE NOCASE,

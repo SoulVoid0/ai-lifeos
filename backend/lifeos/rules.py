@@ -127,6 +127,75 @@ def _title(text: str) -> str:
     return (title[:1].upper() + title[1:])[:200] if title else "Reminder"
 
 
+_DEVICE = r"(?:my\s+|the\s+|this\s+)?(?:pc|computer|laptop|machine|system|device)"
+_NOT_APPS = {"it", "that", "this", "them", "file", "files", "folder", "folders", "the file", "my files", "a file", "up"}
+
+
+def _system_clause(c: str, low: str, plan: Plan) -> bool:
+    power = None
+    if re.search(rf"\block\s+(?:{_DEVICE}|(?:my\s+|the\s+)?screen)\b", low):
+        power = "lock"
+    elif re.search(rf"\b(?:restart|reboot)\s+{_DEVICE}\b", low) or low.strip(" .!") in ("restart", "reboot"):
+        power = "restart"
+    elif re.search(rf"\b(?:shut\s*down|turn\s+off|power\s+off)\s+{_DEVICE}\b", low) or low.strip(" .!") in ("shut down", "shutdown"):
+        power = "shutdown"
+    elif re.search(rf"\b(?:put\s+{_DEVICE}\s+to\s+sleep|sleep\s+{_DEVICE})\b", low):
+        power = "sleep"
+    elif re.search(r"\b(?:sign|log)\s+(?:me\s+)?out\b", low) and not re.search(r"\b(?:of|from)\b", low):
+        power = "sign_out"
+    if power:
+        plan.steps.append({"tool": "power_action", "args": {"action": power}})
+        return True
+
+    if re.search(r"\b(?:volume|sound|speakers?)\b", low) or re.fullmatch(r"(?:un)?mute(?: the sound| it| audio)?[.!]?", low.strip()):
+        m = re.search(r"\b(\d{1,3})\s*%?", low)
+        if re.search(r"\b(?:un)?mute\b", low):
+            plan.steps.append({"tool": "set_volume", "args": {"change": "mute"}})
+        elif m:
+            plan.steps.append({"tool": "set_volume", "args": {"level": min(100, int(m.group(1)))}})
+        elif re.search(r"\b(?:up|louder|increase|raise|higher)\b", low):
+            plan.steps.append({"tool": "set_volume", "args": {"change": "up"}})
+        elif re.search(r"\b(?:down|quieter|lower|decrease|reduce)\b", low):
+            plan.steps.append({"tool": "set_volume", "args": {"change": "down"}})
+        else:
+            return False
+        return True
+
+    if re.search(r"\b(?:what'?s|what is|which (?:apps?|programs?) (?:are|is))\s+(?:using|eating|hogging|slowing)\b", low) \
+            or re.search(r"\b(?:running programs|task manager|running apps|what'?s running)\b", low):
+        plan.steps.append({"tool": "list_programs", "args": {"sort": "cpu" if re.search(r"\bcpu|slow", low) else "memory"}})
+        return True
+    if re.search(r"\b(?:system status|pc status|computer status)\b", low) \
+            or re.search(rf"\bhow'?s\s+{_DEVICE}|\bhow is\s+{_DEVICE}", low) \
+            or (re.search(r"\b(?:battery|cpu|ram|disk space|free space|storage)\b", low)
+                and re.search(r"\b(?:how|what'?s|what is|check|show|status|usage|level|left|much)\b", low)
+                and not re.search(r"\b(?:find|search|files?|documents?|pdfs?)\b", low)):
+        plan.steps.append({"tool": "system_status", "args": {}})
+        return True
+
+    m = re.match(r"^(?:please\s+)?(?:kill|force[- ]?(?:close|quit)|end task(?: for)?|close|quit)\s+(?:the\s+)?(.+?)(?:\s+(?:app|program))?[.!]?$", c, re.I)
+    if m:
+        from . import system
+
+        name = m.group(1).strip()
+        if name.lower() not in _NOT_APPS and system._matching(name):
+            plan.steps.append({"tool": "end_program", "args": {"name": name}})
+            return True
+        return False
+
+    m = re.match(r"^(?:please\s+)?(?:open|launch|start|run)\s+(?:up\s+)?(?:the\s+)?(.+?)(?:\s+(?:app|application|program))?[.!]?$", c, re.I)
+    if m and not re.search(r"[\\/]|\b(?:file|files|folder|pdf|document|downloads|workspace|mission|task)\b", m.group(1), re.I):
+        from . import apps
+
+        name = m.group(1).strip()
+        if len(name) >= 3 and name.lower() not in _NOT_APPS:
+            app = apps.find(name)
+            if app:
+                plan.steps.append({"tool": "launch_app", "args": {"name": app["name"]}})
+                return True
+    return False
+
+
 def _clause(clause: str, plan: Plan, ctx: dict[str, Any]) -> bool:
     c = clause.strip()
     low = c.lower()
@@ -226,6 +295,10 @@ def _clause(clause: str, plan: Plan, ctx: dict[str, Any]) -> bool:
         if m:
             plan.steps.append({"tool": "replan_task", "args": {"title": m.group(1).strip(" .")}})
             return True
+
+    # the computer: power, volume, status, programs, apps
+    if _system_clause(c, low, plan):
+        return True
 
     # summaries and planning
     if re.search(r"\b(summari[sz]e|summary|recap|brief)\b", low) and re.search(r"\b(today|day|important|everything|daily|tasks|completed|done)\b", low):
