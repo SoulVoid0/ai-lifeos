@@ -60,7 +60,7 @@ jobs:
         run: |
           P=/tmp/profile
           cp -r /usr/share/archiso/configs/releng $P
-          cat os/arch/packages.extra >> $P/packages.x86_64 && sort -u -o $P/packages.x86_64 $P/packages.x86_64
+          cat os/arch/packages.extra >> $P/packages.x86_64 && sort -u -o $P/packages.x86_64 $P/packages.x86_64 && sed -i "/^virtualbox-guest-utils-nox$/d" $P/packages.x86_64
           printf '\n[lifeos]\nSigLevel = Optional TrustAll\nServer = file:///repo\n' >> $P/pacman.conf
           cp -a os/arch/airootfs/. $P/airootfs/
           mkdir -p $P/airootfs/opt/lifeos-repo && cp /repo/* $P/airootfs/opt/lifeos-repo/
