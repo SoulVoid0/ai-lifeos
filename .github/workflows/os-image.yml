@@ -10,7 +10,7 @@ on:
     branches: ["**"]
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
@@ -64,3 +64,21 @@ jobs:
           path: output/AI-LifeOS-*.iso
           compression-level: 0
           retention-days: 30
+
+      - name: Publish as a pre-release (one file when it fits under 2 GB, otherwise parts)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ISO=output/AI-LifeOS-${{ github.run_number }}.iso
+          TAG=os-${{ github.run_number }}
+          mkdir -p publish
+          sha256sum "$ISO" | awk '{print $1}' > "publish/$(basename "$ISO").sha256"
+          if [ "$(stat -c %s "$ISO")" -lt 2000000000 ]; then
+            cp "$ISO" publish/
+          else
+            split -b 1900M -d -a 1 "$ISO" "publish/$(basename "$ISO").part"
+          fi
+          ls -lh publish
+          gh release create "$TAG" publish/* --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" \
+            --title "AI LifeOS OS image ${{ github.run_number }} (test build)" \
+            --notes "Bootable installer for the LifeOS operating system (Fedora bootc). Write the .iso to a USB stick with Rufus (DD mode). The installer erases the disk you choose."

@@ -11,6 +11,7 @@ Environment=OLLAMA_HOST=127.0.0.1:11434
 Environment=OLLAMA_MODELS=/var/lib/ollama/models
 Environment=OLLAMA_MAX_LOADED_MODELS=1
 Environment=OLLAMA_KEEP_ALIVE=30m
+Environment=OLLAMA_VULKAN=1
 SupplementaryGroups=video render
 
 [Install]
