@@ -6,7 +6,7 @@ pkgrel=1
 pkgdesc="AI LifeOS: local AI assistant and crew as your desktop"
 arch=(x86_64)
 license=(custom)
-depends=(python labwc sddm weston firefox foot swaybg xdg-desktop-portal-wlr wlr-randr
+depends=(python labwc sddm xorg-server firefox foot swaybg xdg-desktop-portal-wlr wlr-randr
          pipewire pipewire-pulse wireplumber networkmanager bluez bluez-utils
          mesa vulkan-radeon vulkan-icd-loader curl git noto-fonts noto-fonts-emoji polkit)
 install=lifeos.install
