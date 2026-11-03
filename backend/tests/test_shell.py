@@ -4,6 +4,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import psutil
 import pytest
 
 
@@ -86,6 +87,6 @@ def test_power_and_end_program_need_approval(client, monkeypatch):
     assert rules.plan("mute").steps[0]["args"] == {"change": "mute"}
 
     with pytest.raises(ValueError, match="can't be ended"):
-        system.end_program(Path(sys.executable).name)  # this test process's own program is protected (it's LifeOS)
+        system.end_program(psutil.Process().name())  # this test process's own program is protected (it's LifeOS)
     out = tools.invoke("end_program", {"name": "definitely-not-running-xyz"}, {})
     assert out["status"] == "pending"
