@@ -24,8 +24,11 @@ RUN dnf -y install \
     && rm -f /usr/share/wayland-sessions/labwc.desktop
 
 # Ollama with its bundled ROCm libraries (RX 6800 XT = gfx1030, supported natively)
-RUN curl -fsSL https://ollama.com/download/ollama-linux-amd64.tgz | tar -xz -C /usr \
-    && curl -fsSL https://ollama.com/download/ollama-linux-amd64-rocm.tgz | tar -xz -C /usr
+RUN set -e; base=https://github.com/ollama/ollama/releases/latest/download; \
+    for part in ollama-linux-amd64 ollama-linux-amd64-rocm; do \
+      if curl -fsSL -o /tmp/o.tar.zst "$base/$part.tar.zst"; then zstd -dc /tmp/o.tar.zst | tar -x -C /usr; \
+      else curl -fsSL "$base/$part.tgz" | tar -xz -C /usr; fi; \
+    done; rm -f /tmp/o.tar.zst; /usr/bin/ollama --version || true
 
 # LifeOS backend in its own virtual environment, serving the built UI
 COPY backend/ /usr/src/lifeos/backend/
