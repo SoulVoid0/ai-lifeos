@@ -48,7 +48,7 @@ everything the user sees.
   `system.py` as more tools.
 - Notifications through the freedesktop notification spec, so the bell receives other apps' notifications too.
 
-### 3. LifeOS image
+### 3. LifeOS image (first build: `os/`)
 - A Fedora bootc (image-mode) base. The image is a container image built in GitHub Actions like the Windows
   installer. `bootc-image-builder` turns it into an installer ISO, and updates are `bootc upgrade` with rollback.
 - Preinstalled:
@@ -76,3 +76,18 @@ everything the user sees.
   logged, and file changes can be undone.
 - Local first: models run on your GPU, and cloud use stays opt-in under a budget.
 - The app keeps working on Windows. The OS is an extra way to run the same LifeOS, not a fork.
+
+## Trying the LifeOS image
+
+The image is built by `.github/workflows/os-image.yml` from `os/Containerfile` whenever a commit message contains
+`[os-image]`. Get it from GitHub → Actions → OS image → the latest run → Artifacts → `AI-LifeOS-iso-N`.
+
+1. Write the `.iso` to a USB stick (8 GB or more) with Fedora Media Writer or Rufus (choose DD mode in Rufus).
+2. Boot from the stick (F12/F8 boot menu). The installer asks for a disk and a user. **The disk you pick is erased**,
+   so use a spare disk, or a free partition if you want to dual boot. Never pick your Windows disk.
+3. After restarting, log in, and LifeOS opens full screen. Ollama runs with ROCm on the RX 6800 XT. Download the
+   models in Settings → Local AI. For images and video, open a terminal (Super+Enter) and run `lifeos-install-comfyui`.
+
+What's in it: Fedora 42 bootc, labwc, SDDM, PipeWire, NetworkManager, Firefox as the LifeOS window, Ollama
+with ROCm, the LifeOS backend as a user service and Flatpak for other apps. Updates (`bootc upgrade`) come from
+`ghcr.io/soulvoid0/ai-lifeos-os`.

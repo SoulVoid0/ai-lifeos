@@ -1,0 +1,43 @@
+# AI LifeOS operating system image (stage 3 of docs/OS-ROADMAP.md).
+# A Fedora bootc (image-mode) system: the whole OS is this container image, updated atomically with rollback.
+# Built by .github/workflows/os-image.yml into an installer ISO with bootc-image-builder.
+
+# ---- the web UI
+FROM docker.io/library/node:22 AS web
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
+# ---- the system
+FROM quay.io/fedora/fedora-bootc:42
+
+# Desktop session (labwc on Wayland), login screen, audio, network, AMD graphics, and the LifeOS window (Firefox kiosk)
+RUN dnf -y install \
+        labwc sddm sddm-wayland-generic xdg-desktop-portal-wlr wlr-randr swaybg foot \
+        firefox NetworkManager NetworkManager-wifi bluez pipewire pipewire-pulseaudio wireplumber \
+        mesa-dri-drivers mesa-vulkan-drivers vulkan-tools linux-firmware amd-gpu-firmware \
+        python3 python3-pip git curl tar zstd flatpak polkit \
+        google-noto-sans-fonts google-noto-color-emoji-fonts \
+    && dnf clean all \
+    && rm -f /usr/share/wayland-sessions/labwc.desktop
+
+# Ollama with its bundled ROCm libraries (RX 6800 XT = gfx1030, supported natively)
+RUN curl -fsSL https://ollama.com/download/ollama-linux-amd64.tgz | tar -xz -C /usr \
+    && curl -fsSL https://ollama.com/download/ollama-linux-amd64-rocm.tgz | tar -xz -C /usr
+
+# LifeOS backend in its own virtual environment, serving the built UI
+COPY backend/ /usr/src/lifeos/backend/
+RUN python3 -m venv /usr/lib/lifeos \
+    && /usr/lib/lifeos/bin/pip install --no-cache-dir /usr/src/lifeos/backend \
+    && rm -rf /usr/src/lifeos
+COPY --from=web /src/frontend/dist/ /usr/share/lifeos/web/
+
+COPY os/files/ /
+RUN systemd-sysusers \
+    && chmod +x /usr/bin/lifeos-session /usr/bin/lifeos-ui /usr/bin/lifeos-install-comfyui \
+    && systemctl enable sddm.service NetworkManager.service bluetooth.service ollama.service \
+    && systemctl --global enable lifeos-backend.service \
+    && systemctl set-default graphical.target \
+    && bootc container lint

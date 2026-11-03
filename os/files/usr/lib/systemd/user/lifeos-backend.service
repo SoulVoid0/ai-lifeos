@@ -1,0 +1,11 @@
+[Unit]
+Description=AI LifeOS backend
+After=graphical-session-pre.target
+
+[Service]
+ExecStart=/usr/lib/lifeos/bin/lifeos
+Environment=LIFEOS_WEB_DIST=/usr/share/lifeos/web
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,8 @@
+#!/bin/sh
+# The AI LifeOS login session: labwc (a small stacking Wayland compositor) with LifeOS full screen underneath
+# every other window. Config comes from /etc/xdg/labwc unless the user has their own ~/.config/labwc.
+export XDG_CURRENT_DESKTOP=LifeOS:wlroots
+export MOZ_ENABLE_WAYLAND=1
+systemctl --user import-environment XDG_CURRENT_DESKTOP 2>/dev/null
+systemctl --user start lifeos-backend.service
+exec labwc
