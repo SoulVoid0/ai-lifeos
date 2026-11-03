@@ -357,6 +357,42 @@ CREATE TABLE IF NOT EXISTS events (
     UNIQUE(source_id, uid, start_at)
 );
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_at);
+
+-- A named set of files, folders, web pages and apps opened together ("my study workspace").
+CREATE TABLE IF NOT EXISTS workspaces (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    items TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workspace_opens (
+    id INTEGER PRIMARY KEY,
+    workspace_id INTEGER NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    opened_at TEXT NOT NULL,
+    by TEXT NOT NULL DEFAULT 'user'
+);
+
+-- Tools the user defines without code: a web request (webhook) or a set of things to open.
+CREATE TABLE IF NOT EXISTS app_launches (
+    id INTEGER PRIMARY KEY,
+    app_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    launched_at TEXT NOT NULL,
+    by TEXT NOT NULL DEFAULT 'user'
+);
+CREATE INDEX IF NOT EXISTS idx_app_launches_app ON app_launches(app_id);
+
+CREATE TABLE IF NOT EXISTS custom_tools (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    description TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL,
+    config TEXT NOT NULL DEFAULT '{}',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 # Columns added after the first release. SQLite has no ADD COLUMN IF NOT EXISTS.
@@ -373,6 +409,7 @@ MIGRATIONS = [
     "ALTER TABLE agents ADD COLUMN quirks TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE agents ADD COLUMN catchphrases TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE agents ADD COLUMN idle_lines TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE tasks ADD COLUMN parent_id INTEGER",
 ]
 
 # Writers wait this long for the lock instead of failing with "database is locked".

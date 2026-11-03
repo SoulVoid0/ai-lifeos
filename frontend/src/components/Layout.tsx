@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
-  Activity, Bell, Bot, Brain, CalendarDays, FolderGit2, FolderOpen, Gamepad2, Images, LayoutDashboard, Network, Pause, Play, Search,
+  Activity, Bell, Bot, Brain, CalendarDays, FolderGit2, FolderOpen, Gamepad2, Images, LayoutDashboard, Monitor, Network, Pause, Play, Search,
   Settings as Cog, Workflow,
 } from "lucide-react";
 import { api, type Notification } from "../lib/api";
@@ -11,9 +11,12 @@ import { notifyChanged, useToast } from "./ui";
 import logo from "../assets/logo.svg";
 import { UpdateBanner } from "./Updates";
 import { isDesktop } from "../lib/desktop";
+import { CommandPalette } from "./CommandPalette";
+import { StatusBar } from "./StatusBar";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/computer", label: "Computer", icon: Monitor },
   { to: "/crew", label: "Control Center", icon: Network },
   { to: "/station", label: "Station", icon: Gamepad2 },
   { to: "/gallery", label: "Gallery", icon: Images },
@@ -137,13 +140,14 @@ export function Layout() {
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
             <input
               className="input pl-9"
-              placeholder="Search files, memories, tasks and conversations…"
+              placeholder="Search files, memories, tasks and conversations… (Ctrl+K: apps and commands)"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
           </form>
           {paused && <span className="chip border-warn/40 text-warn">Automation paused</span>}
-          <div className="relative ml-auto">
+          <div className="ml-auto"><StatusBar /></div>
+          <div className="relative">
             <button className="btn-ghost relative" onClick={() => setBellOpen((o) => !o)} aria-label="Notifications">
               <Bell size={17} />
               {unread.length > 0 && (
@@ -189,6 +193,7 @@ export function Layout() {
           )}
           <Outlet />
         </main>
+        <CommandPalette nav={NAV} />
       </div>
     </div>
   );

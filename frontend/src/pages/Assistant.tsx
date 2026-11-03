@@ -7,6 +7,7 @@ import { useAsync } from "../lib/hooks";
 import { StepView } from "../components/StepView";
 import { ErrorBox, Spinner, notifyChanged } from "../components/ui";
 import { MicButton } from "../components/crew";
+import { speak } from "../components/SpecExtras";
 
 const EXAMPLES = [
   "Find all PDFs in my Downloads folder, organize them by category, and remind me to review the important ones tomorrow.",
@@ -26,6 +27,7 @@ export default function Assistant() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
   const convs = useAsync(api.conversations, []);
+  const voice = useAsync(api.settings, []);
   const bottom = useRef<HTMLDivElement>(null);
   const started = useRef(false);
 
@@ -54,6 +56,7 @@ export default function Assistant() {
       const res = await api.chat(message, conversationId);
       setConversationId(res.conversation_id);
       setMessages(await api.messages(res.conversation_id));
+      if (voice.data?.speak_replies && res.message?.content) speak(res.message.content);
       convs.reload();
       notifyChanged();
     } catch (e) {

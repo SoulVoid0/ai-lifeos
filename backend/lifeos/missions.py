@@ -758,7 +758,7 @@ def _tool_catalog(allowed: list[str]) -> str:
             f"{k}: {v.get('type') or '/'.join(x.get('type', '?') for x in v.get('anyOf', []))}"
             + (f" ({v['description']})" if v.get("description") else "") for k, v in props.items())
         approval = " [the user must approve]" if tools.policy_for(t) == "confirm" else ""
-        lines.append(f"- {name}({params}): {t.description}{approval}")
+        lines.append(f"- {name}({params}): {t.text()}{approval}")
     return "\n".join(lines) or "- (no tools: answer from the information you are given)"
 
 

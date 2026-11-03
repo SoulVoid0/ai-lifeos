@@ -173,7 +173,14 @@ Workflows are *trigger → conditions → steps → summary*:
 - **Calendar**: subscribe to ICS URLs or files (Google/Outlook/iCloud "secret address"), recurring events and time zones, overlap warnings, local events, export as `.ics`.
 - **Email**: read-only IMAP (app password stored in the OS keychain); Herald can summarize and triage.
 - **Web**: `web_search` and `fetch_url` for Scout, off by default; private/local addresses are always blocked.
-- **Voice**: dictation in the composer (Web Speech API, where the webview supports it).
+- **Voice**: dictation in the composer (Web Speech API, where the webview supports it), and optional spoken replies with the voice built into the OS (Settings → Personalization), so no GPU is used.
+- **Cloud storage**: OneDrive, Google Drive, Dropbox and iCloud folders on the PC are detected (Settings → Approved folders) and approved in one click. Online-only files are indexed by name without downloading them.
+- **Workspaces**: save the files, folders, web pages and apps you use together (Dashboard → Workspaces) and open them in one click, or say "prepare my study workspace". After you open one on three mornings, LifeOS offers to open it automatically at your usual time.
+- **Custom tools (plugins)**: a web request (Home Assistant, Todoist or Notion automations, Zapier, n8n, IFTTT, your own server) or a saved instruction for the local model, defined in Settings → Custom tools without code. The AI fills in only `{{input}}`; it can't change the address or headers. Web calls ask for approval by default, keys go to the OS credential store, and a tool can be exported and imported as a `.json` file.
+- **Rename by content**: "rename the scans in Downloads by what's in them" turns `scan001.pdf` into `2026-03-02 Invoice 2291.pdf`, shown as a preview first and undoable.
+- **Big tasks**: "break down history essay into steps" (or the button on the Calendar page) creates steps with their own due dates. If a step slips, a suggestion offers to spread the rest over the remaining time ("I'm behind on history essay").
+- **Computer (shell)**: the Computer page lists installed apps (Start menu on Windows, `.desktop` entries on Linux, `/Applications` on macOS), live CPU/memory/disk/battery, running programs with End, volume, and lock/sleep/restart/shut down. Ctrl+K opens a command palette for apps, pages and questions; F11 makes LifeOS full screen. The assistant can do the same ("open Spotify", "volume 30", "what's using my RAM", "lock my PC"); ending programs and power actions always ask first. This is the first step toward LifeOS as an operating system: see [docs/OS-ROADMAP.md](docs/OS-ROADMAP.md).
+- **Backup & sync**: a daily or manual zip of the crew, memories, tasks, workflows, lessons and settings. Point it at a cloud folder and restore on another PC (Settings → Backup & sync); passwords stay in each PC's credential store.
 
 ## What works
 
@@ -377,7 +384,11 @@ CI runs both on every push (`.github/workflows/ci.yml`).
 - Summarize everything important from today
 - Remember that my thesis project lives in ~/code/thesis
 - What was the solution I found for my pytest error?
-- Anything else, such as "Prepare my workspace for studying", goes to the local model
+- Open Spotify / Set the volume to 30 / Mute / Lock my PC / What's using my RAM? / How's my PC?
+- Prepare my workspace for studying (opens a saved workspace)
+- Rename the scans in Downloads by what's in them
+- Break down history essay into steps / I'm behind on history essay
+- Anything else goes to the local model
 
 ## Roadmap status
 
@@ -388,8 +399,8 @@ CI runs both on every push (`.github/workflows/ci.yml`).
 | 3 Memory and context | Done: memories, semantic + keyword search, universal search, project tracking and context |
 | 4 Automation engine | Done: workflows with triggers, conditions, steps, approvals, summaries, scheduler, editor, natural-language drafting, templates |
 | 5 Proactive intelligence | Done: deadline, clutter, duplicate, large-file, project-resume, calendar-overlap and workflow suggestions; daily summary; notification preferences and quiet hours |
-| 6 Integrations | Done: ICS calendars, read-only IMAP email, web search/fetch, cloud models per agent with budget, OS keychain |
-| 7 Advanced | Started: multi-agent crew with Control Center and pixel Station, learning loop (reviews, lessons, routing, training export), local image and video generation (ComfyUI, LTX-Video) with Muse, Lumen and Reel, albums, agent personalities, chat-only mode, voice dictation, crew packs. Next: cloud storage connectors, signed auto-updates |
+| 6 Integrations | Done: ICS calendars, read-only IMAP email, web search/fetch, cloud models per agent with budget, OS keychain, cloud storage folders, custom web-request and instruction tools (export/import as plugins) |
+| 7 Advanced | Started: multi-agent crew with Control Center and pixel Station, learning loop (reviews, lessons, routing, training export), local image and video generation (ComfyUI, LTX-Video) with Muse, Lumen and Reel, albums, agent personalities, chat-only mode, voice dictation and spoken replies, crew packs, signed auto-updates, workspaces with routine learning, rename by content, task breakdown and replanning, backup and sync between PCs, LifeOS as the computer's shell (launcher, status, programs, volume, power, Ctrl+K, full screen). Next: a LifeOS session and bootable image on Linux ([docs/OS-ROADMAP.md](docs/OS-ROADMAP.md)). Not planned: browser automation (too heavy for one 16 GB GPU next to the models; web_search and fetch_url cover reading pages) |
 
 Packaging: `scripts/build-windows.ps1` (above). On other OSes run the same PyInstaller command and copy the
 binary to `frontend/src-tauri/binaries/lifeos-backend-<target-triple>`, then
