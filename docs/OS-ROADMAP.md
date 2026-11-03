@@ -84,7 +84,7 @@ The image is built by `.github/workflows/os-image.yml` from `os/Containerfile` w
 
 0. Get it from the newest `os-N` pre-release on the Releases page (faster than the artifact). Download every `.part` file into one folder, then join them in PowerShell in that folder: `cmd /c copy /b AI-LifeOS-N.iso.part0+AI-LifeOS-N.iso.part1+AI-LifeOS-N.iso.part2+AI-LifeOS-N.iso.part3 AI-LifeOS-N.iso` (use the real number and part count).
 1. Write the `.iso` to a USB stick (8 GB or more) with Fedora Media Writer or Rufus (choose DD mode in Rufus).
-2. Boot from the stick (F12/F8 boot menu). The installer asks for a disk and a user (if you skip the user, log in as `lifeos` with password `lifeos` and choose a new password). **The disk you pick is erased**,
+2. Boot from the stick (F12/F8 boot menu). The installer asks for a disk and a user (if you skip the user, log in as `lifeos` with password `lifeos`, then run `passwd` in a terminal to change it). **The disk you pick is erased**,
    so use a spare disk, or a free partition if you want to dual boot. Never pick your Windows disk.
 3. After restarting, log in, and LifeOS opens full screen. Ollama runs with ROCm on the RX 6800 XT. Download the
    models in Settings → Local AI. For images and video, open a terminal (Super+Enter) and run `lifeos-install-comfyui`.

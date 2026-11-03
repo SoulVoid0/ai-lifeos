@@ -1,11 +1,10 @@
 #!/bin/sh
 # If nobody can log in (no account with a UID of 1000 or more), create "lifeos" with the password "lifeos".
-# The password must be changed at the first login.
+# Change it after logging in: open a terminal (Super+Enter) and run passwd.
 set -e
 mkdir -p /var/lib/lifeos
 if ! awk -F: '$3 >= 1000 && $3 < 60000 { found = 1 } END { exit !found }' /etc/passwd; then
   useradd -m -G wheel -c "LifeOS" lifeos
   echo "lifeos:lifeos" | chpasswd
-  passwd -e lifeos
 fi
 touch /var/lib/lifeos/firstuser-done
