@@ -1,7 +1,6 @@
-# Builds the AI LifeOS operating system (os/Containerfile) and turns it into an installer ISO.
-# Runs when a pushed commit's message contains [os-image], or from Actions -> OS image -> Run workflow.
-# Output: the bootc container image on ghcr.io (used later for `bootc upgrade`) and the ISO as a downloadable
-# workflow artifact (GitHub Releases can't hold files over 2 GB).
+# Builds the AI LifeOS operating system: an Arch Linux live/installer ISO (archiso) that boots straight into
+# LifeOS, plus the `lifeos` pacman package it installs. Runs when a pushed commit message contains [os-image],
+# or from Actions -> OS image -> Run workflow. Published as a pre-release (one .iso when it fits under 2 GB).
 name: OS image
 
 on:
@@ -11,7 +10,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 concurrency:
   group: os-image
@@ -21,73 +19,71 @@ jobs:
   build:
     if: github.event_name != 'push' || contains(github.event.head_commit.message, '[os-image]')
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 120
+    container:
+      image: archlinux:latest
+      options: --privileged
     steps:
-      - name: Free disk space
+      - name: Tools
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
-          sudo docker image prune --all --force || true
-          df -h /
+          pacman -Syu --noconfirm --needed archiso base-devel python python-pip nodejs npm git zstd github-cli
+          useradd -m builder
 
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Build the web UI
+      - name: Web UI
         working-directory: frontend
         run: npm ci --no-audit --no-fund && npm run build
 
-      - name: Build the system image
+      - name: Stage the package sources
         run: |
-          sudo podman build --pull=newer -f os/Containerfile -t localhost/ai-lifeos-os:latest .
+          S=os/arch/pkg/src-stage
+          mkdir -p $S/ollama $S/files
+          python -m pip install --no-cache-dir --break-system-packages --target $S/site ./backend
+          cp -a frontend/dist $S/web
+          cp -a os/files/. $S/files/
+          base=https://github.com/ollama/ollama/releases/latest/download
+          if curl -fsSL -o /tmp/o.tar.zst "$base/ollama-linux-amd64.tar.zst"; then zstd -dc /tmp/o.tar.zst | tar -x -C $S/ollama
+          else curl -fsSL "$base/ollama-linux-amd64.tgz" | tar -xz -C $S/ollama; fi
+          rm -rf $S/ollama/lib/ollama/cuda_* $S/ollama/lib/ollama/*cuda* 2>/dev/null || true
+          du -sh $S/*
 
-      - name: Push to GitHub Container Registry
+      - name: Build the lifeos package
         run: |
-          IMAGE=ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/ai-lifeos-os
-          echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
-          sudo podman tag localhost/ai-lifeos-os:latest "$IMAGE:latest" "$IMAGE:${{ github.run_number }}"
-          sudo podman push "$IMAGE:latest"
-          sudo podman push "$IMAGE:${{ github.run_number }}"
+          VER=0.1.${{ github.run_number }}
+          sed -i "s/^pkgver=.*/pkgver=$VER/" os/arch/pkg/PKGBUILD
+          chown -R builder os/arch/pkg
+          cd os/arch/pkg && sudo -u builder makepkg --nodeps --noconfirm
+          mkdir -p /repo && cp lifeos-*.pkg.tar.zst /repo/ && repo-add /repo/lifeos.db.tar.gz /repo/lifeos-*.pkg.tar.zst
 
-      - name: Make the installer ISO
+      - name: Build the ISO
         run: |
-          mkdir -p output
-          sudo podman run --rm --privileged --pull=newer \
-            --security-opt label=type:unconfined_t \
-            -v ./output:/output \
-            -v ./os/config.toml:/config.toml:ro \
-            -v /var/lib/containers/storage:/var/lib/containers/storage \
-            quay.io/centos-bootc/bootc-image-builder:latest \
-            --type anaconda-iso --rootfs btrfs \
-            localhost/ai-lifeos-os:latest
-          sudo chown -R "$USER" output
-          ISO=$(find output -name '*.iso' | head -1)
-          mv "$ISO" "output/AI-LifeOS-${{ github.run_number }}.iso"
-          ls -lh output
+          P=/tmp/profile
+          cp -r /usr/share/archiso/configs/releng $P
+          cat os/arch/packages.extra >> $P/packages.x86_64 && sort -u -o $P/packages.x86_64 $P/packages.x86_64
+          printf '\n[lifeos]\nSigLevel = Optional TrustAll\nServer = file:///repo\n' >> $P/pacman.conf
+          cp -a os/arch/airootfs/. $P/airootfs/
+          mkdir -p $P/airootfs/opt/lifeos-repo && cp /repo/* $P/airootfs/opt/lifeos-repo/
+          sed -i 's/^iso_name=.*/iso_name="AI-LifeOS"/; s/^iso_label=.*/iso_label="LIFEOS"/; s/^iso_publisher=.*/iso_publisher="AI LifeOS"/; s/^iso_application=.*/iso_application="AI LifeOS live and installer"/' $P/profiledef.sh
+          sed -i "s/^iso_version=.*/iso_version=\"${{ github.run_number }}\"/" $P/profiledef.sh
+          sed -i 's|file_permissions=(|file_permissions=(\n  ["/etc/sudoers.d/10-live"]="0:0:440"\n  ["/usr/local/bin/lifeos-install"]="0:0:755"|' $P/profiledef.sh
+          sed -i "s/^airootfs_image_tool_options=.*/airootfs_image_tool_options=('-comp' 'xz' '-Xbcj' 'x86' '-b' '1M' '-Xdict-size' '1M')/" $P/profiledef.sh
+          mkarchiso -v -w /tmp/work -o out $P
+          mv out/*.iso "out/AI-LifeOS-${{ github.run_number }}.iso"
+          ls -lh out
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: AI-LifeOS-iso-${{ github.run_number }}
-          path: output/AI-LifeOS-*.iso
-          compression-level: 0
-          retention-days: 30
-
-      - name: Publish as a pre-release (one file when it fits under 2 GB, otherwise parts)
+      - name: Publish as a pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ISO=output/AI-LifeOS-${{ github.run_number }}.iso
-          TAG=os-${{ github.run_number }}
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          ISO=out/AI-LifeOS-${{ github.run_number }}.iso
           mkdir -p publish
           sha256sum "$ISO" | awk '{print $1}' > "publish/$(basename "$ISO").sha256"
-          if [ "$(stat -c %s "$ISO")" -lt 2000000000 ]; then
-            cp "$ISO" publish/
-          else
-            split -b 1900M -d -a 1 "$ISO" "publish/$(basename "$ISO").part"
-          fi
+          cp /repo/lifeos-*.pkg.tar.zst publish/
+          if [ "$(stat -c %s "$ISO")" -lt 2000000000 ]; then cp "$ISO" publish/
+          else split -b 1900M -d -a 1 "$ISO" "publish/$(basename "$ISO").part"; fi
           ls -lh publish
-          gh release create "$TAG" publish/* --repo "${{ github.repository }}" --prerelease --target "${{ github.sha }}" \
-            --title "AI LifeOS OS image ${{ github.run_number }} (test build)" \
-            --notes "Bootable installer for the LifeOS operating system (Fedora bootc). Write the .iso to a USB stick with Rufus (DD mode). The installer erases the disk you choose."
+          gh release create "os-arch-${{ github.run_number }}" publish/* --repo "${{ github.repository }}" --prerelease \
+            --target "${{ github.sha }}" --title "AI LifeOS (Arch) ${{ github.run_number }} (test build)" \
+            --notes "Boots straight into LifeOS from a USB stick (write the .iso with Rufus, DD mode). To install it on a disk, open a terminal (Super+Enter) and run lifeos-install; the disk you choose is erased."

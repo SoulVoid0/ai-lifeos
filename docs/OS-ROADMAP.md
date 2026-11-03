@@ -49,8 +49,8 @@ everything the user sees.
 - Notifications through the freedesktop notification spec, so the bell receives other apps' notifications too.
 
 ### 3. LifeOS image (first build: `os/`)
-- A Fedora bootc (image-mode) base. The image is a container image built in GitHub Actions like the Windows
-  installer. `bootc-image-builder` turns it into an installer ISO, and updates are `bootc upgrade` with rollback.
+- An Arch Linux base built with archiso in GitHub Actions: a live USB that boots into LifeOS, plus `lifeos-install`
+  (archinstall with the LifeOS package set). LifeOS ships as the `lifeos` pacman package.
 - Preinstalled:
   - ROCm.
   - Ollama with the Low-resource model set.
@@ -79,16 +79,15 @@ everything the user sees.
 
 ## Trying the LifeOS image
 
-The image is built by `.github/workflows/os-image.yml` from `os/Containerfile` whenever a commit message contains
-`[os-image]`. Get it from GitHub → Actions → OS image → the latest run → Artifacts → `AI-LifeOS-iso-N`.
+LifeOS is now built on **Arch Linux** (archiso). The base is small and rolling, so you get the newest Mesa and kernel
+for the RX 6800 XT, and the whole system is tailored to LifeOS. LifeOS itself is a pacman package (`lifeos`), so
+updating it is `sudo pacman -Syu` once the package repository is online. Build: `.github/workflows/os-image.yml`
+(push a commit whose message contains `[os-image]`), with the files in `os/arch/` and `os/files/`.
 
-0. Get it from the newest `os-N` pre-release on the Releases page (faster than the artifact). Download every `.part` file into one folder, then join them in PowerShell in that folder: `cmd /c copy /b AI-LifeOS-N.iso.part0+AI-LifeOS-N.iso.part1+AI-LifeOS-N.iso.part2+AI-LifeOS-N.iso.part3 AI-LifeOS-N.iso` (use the real number and part count).
-1. Write the `.iso` to a USB stick (8 GB or more) with Fedora Media Writer or Rufus (choose DD mode in Rufus).
-2. Boot from the stick (F12/F8 boot menu). The installer asks for a disk and a user (if you skip the user, log in as `lifeos` with password `lifeos`, then run `passwd` in a terminal to change it). **The disk you pick is erased**,
-   so use a spare disk, or a free partition if you want to dual boot. Never pick your Windows disk.
-3. After restarting, log in, and LifeOS opens full screen. Ollama runs with ROCm on the RX 6800 XT. Download the
-   models in Settings → Local AI. For images and video, open a terminal (Super+Enter) and run `lifeos-install-comfyui`.
-
-What's in it: Fedora 42 bootc, labwc, SDDM, PipeWire, NetworkManager, Firefox as the LifeOS window, Ollama
-with ROCm, the LifeOS backend as a user service and Flatpak for other apps. Updates (`bootc upgrade`) come from
-`ghcr.io/soulvoid0/ai-lifeos-os`.
+1. Download the newest `os-arch-N` pre-release `.iso` from the Releases page and write it to a USB stick
+   (4 GB or more) with Rufus in DD mode.
+2. Boot from the stick (F12/F8 boot menu). It starts straight into LifeOS as the user `lifeos` (password `lifeos`),
+   without installing anything, so you can try it safely. Nothing is saved on the stick.
+3. To install, open a terminal (Super+Enter) and run `lifeos-install`. The Arch installer asks for the disk
+   (**it is erased**, so never pick your Windows disk), your user and password, language and time zone.
+4. After restarting, log in. Ollama uses the GPU through Vulkan. For images and video, run `lifeos-install-comfyui`.
