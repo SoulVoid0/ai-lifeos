@@ -617,7 +617,7 @@ def _rule_draft(text: str) -> dict[str, Any]:
 
 
 def _llm_draft(text: str) -> dict[str, Any]:
-    catalog = "\n".join(f"- {t.name}: {t.description}" for t in tools.TOOLS.values())
+    catalog = "\n".join(f"- {t.name}: {t.text()}" for t in tools.TOOLS.values())
     agents = ", ".join(a["slug"] for a in crew.specialists())
     folders = ", ".join(p.name for _, p in permissions.approved_roots()) or "none"
     schema = {"type": "object", "required": ["name", "trigger", "steps"], "properties": {

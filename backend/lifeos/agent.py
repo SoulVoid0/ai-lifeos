@@ -29,7 +29,7 @@ def _tool_catalog() -> str:
             + (f" ({v['description']})" if v.get("description") else "")
             for k, v in props.items())
         approval = " [needs user approval]" if t.prepare else ""
-        lines.append(f"- {t.name}({params}): {t.description}{approval}")
+        lines.append(f"- {t.name}({params}): {t.text()}{approval}")
     return "\n".join(lines)
 
 

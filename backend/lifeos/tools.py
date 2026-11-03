@@ -173,6 +173,32 @@ class ListMediaArgs(BaseModel):
 
 # ---------------------------------------------------------------- registry
 
+class WorkspaceArgs(BaseModel):
+    name: str = Field(..., description="Workspace name, e.g. 'study'")
+
+
+class CustomToolArgs(BaseModel):
+    name: str = Field(..., description="Name of the custom tool")
+    input: str = Field("", description="Text to pass to the tool")
+
+
+class RenameArgs(BaseModel):
+    folder: str = Field(..., description="Approved folder name or path")
+    extensions: list[str] | None = Field(None, description="Only these extensions, e.g. ['pdf']")
+    include_named: bool = Field(False, description="Also rename files that already have a real name")
+
+
+class BreakDownArgs(BaseModel):
+    task_id: int | None = Field(None, description="Task id")
+    title: str | None = Field(None, description="Task title when the id isn't known")
+    parts: int | None = Field(None, ge=2, le=10, description="How many steps (default: let the model decide)")
+
+
+class ReplanArgs(BaseModel):
+    task_id: int | None = Field(None, description="Task id of the parent task")
+    title: str | None = Field(None, description="Title of the parent task")
+
+
 @dataclass
 class Tool:
     name: str
@@ -186,6 +212,16 @@ class Tool:
     execute: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None
     undo: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     examples: list[str] = field(default_factory=list)
+    # Appends what's available right now (workspace or custom tool names) to the description.
+    extra: Callable[[], str] | None = None
+
+    def text(self) -> str:
+        if self.extra is None:
+            return self.description
+        try:
+            return self.description + self.extra()
+        except Exception:  # noqa: BLE001 - a description must never break a prompt
+            return self.description
 
 
 def _file_list_summary(found: list[dict[str, Any]], what: str = "file") -> str:
@@ -590,6 +626,105 @@ def _undo_write_file(result: dict[str, Any]) -> dict[str, Any]:
     return {"summary": f"Deleted {target.name}."}
 
 
+# ---------------------------------------------------------------- workspaces, custom tools, renames, breakdowns
+
+def _workspace_names() -> str:
+    from . import workspaces
+
+    names = [w["name"] for w in workspaces.list_all()]
+    return f" Saved workspaces: {', '.join(names)}." if names else " No workspaces saved yet (the user adds them on the Dashboard)."
+
+
+def _open_workspace(a: WorkspaceArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import workspaces
+
+    w = workspaces.find(a.name)
+    if not w:
+        raise ToolError(f"No workspace named {a.name!r}.{_workspace_names()}")
+    out = workspaces.open_workspace(w["id"], by="workflow" if ctx.get("workflow_run_id") else "assistant")
+    failed = f" {len(out['failed'])} item(s) couldn't be opened." if out["failed"] else ""
+    return {"summary": f"Opened the {w['name']} workspace: {', '.join(out['opened']) or 'nothing'}.{failed}", **out}
+
+
+def _custom_names(kind: str) -> Callable[[], str]:
+    def names() -> str:
+        from . import custom_tools
+
+        found = [f"{t['name']} ({t['description'] or 'no description'})" for t in custom_tools.list_all(True)
+                 if t["kind"] == kind]
+        return f" Available: {'; '.join(found)}." if found else " None defined yet (Settings → Custom tools)."
+    return names
+
+
+def _prepare_webhook(a: CustomToolArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    from . import custom_tools
+
+    t = custom_tools.find(a.name, "webhook")
+    req = custom_tools.describe_request(t, a.input)
+    return f"Call {t['name']}: {req['method']} {req['url']}", {"tool": t["name"], "input": a.input, "request": req}
+
+
+def _execute_webhook(args: dict[str, Any], preview: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    from . import custom_tools
+
+    t = custom_tools.find(preview["tool"], "webhook")
+    out = custom_tools.call_webhook(t, preview["input"])
+    return {"summary": f"{t['name']} answered (HTTP {out['status']}): {out['response'][:300]}", **out}
+
+
+def _custom_prompt(a: CustomToolArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import custom_tools
+
+    t = custom_tools.find(a.name, "prompt")
+    text = custom_tools.run_prompt(t, a.input)
+    return {"summary": text[:1500], "text": text}
+
+
+def _prepare_rename(a: RenameArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    from . import renamer
+
+    plan = renamer.plan(a.folder, extensions=a.extensions, include_named=a.include_named)
+    if not plan["moves"]:
+        return "No files with meaningless names to rename (files need readable text).", plan
+    sample = "; ".join(f"{Path(m['src']).name} → {Path(m['dest']).name}" for m in plan["moves"][:3])
+    return f"Rename {len(plan['moves'])} file(s) in {plan['folder']} after their content: {sample}", plan
+
+
+def _find_task(task_id: int | None, title: str | None) -> dict[str, Any]:
+    task = tasks.get(task_id) if task_id else (tasks.find(title) if title else None)
+    if not task:
+        raise ToolError("No matching open task found; give its id or exact title")
+    return task
+
+
+def _break_down(a: BreakDownArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    task = _find_task(a.task_id, a.title)
+    out = tasks.break_down(task["id"], a.parts)
+    steps = "; ".join(f"{s['title']} ({s['estimate_minutes']} min)" for s in out["subtasks"])
+    hours = out["total_minutes"] / 60
+    return {"summary": f"Split \"{task['title']}\" into {len(out['subtasks'])} steps, about {hours:.1f} h in total: {steps}",
+            **out}
+
+
+def _undo_break_down(result: dict[str, Any]) -> dict[str, Any]:
+    for t in result.get("subtasks", []):
+        try:
+            tasks.delete(t["id"])
+        except KeyError:
+            pass
+    return {"summary": f"Removed {len(result.get('subtasks', []))} step(s)."}
+
+
+def _replan(a: ReplanArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    task = _find_task(a.task_id, a.title)
+    out = tasks.replan(task["id"])
+    if not out["moved"]:
+        return {"summary": f"\"{task['title']}\" has no open steps to reschedule.", **out}
+    first = out["moved"][0]
+    return {"summary": f"Rescheduled {len(out['moved'])} open step(s) of \"{task['title']}\"; next: "
+                       f"\"{first['title']}\" by {first['due_at']}.", **out}
+
+
 TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("search_files", "Search indexed files in approved folders by topic, name, type, folder or date.",
          SearchFilesArgs, "read", "auto", run=_search_files),
@@ -647,6 +782,22 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("generate_video", "Generate a short video clip (a few seconds) from a text prompt with ComfyUI + LTX-Video. "
          "Slow: minutes per clip.", VideoArgs, "write", "auto", run=_generate_video, undo=_undo_media),
     Tool("list_media", "List recently generated images and videos.", ListMediaArgs, "read", "auto", run=_list_media),
+    Tool("open_workspace", "Open one of the user's saved workspaces (its files, folders, web pages and apps), e.g. "
+         "for 'prepare my workspace for studying'.", WorkspaceArgs, "read", "auto", run=_open_workspace,
+         extra=_workspace_names),
+    Tool("custom_webhook", "Call one of the user's own web tools (webhook) with some text. Requires approval.",
+         CustomToolArgs, "write", "confirm", prepare=_prepare_webhook, execute=_execute_webhook,
+         extra=_custom_names("webhook")),
+    Tool("custom_prompt", "Run one of the user's saved instructions on some text with the local model.",
+         CustomToolArgs, "read", "auto", run=_custom_prompt, extra=_custom_names("prompt")),
+    Tool("rename_by_content", "Propose renaming files with meaningless names (scan001.pdf, IMG_2041.jpg) in an "
+         "approved folder after their content. Requires approval; undoable.", RenameArgs, "write", "confirm",
+         prepare=_prepare_rename, execute=_execute_moves, undo=_undo_moves),
+    Tool("break_down_task", "Split a big task (assignment, project) into ordered steps with time estimates and "
+         "due dates spread before its deadline.", BreakDownArgs, "write", "auto", run=_break_down,
+         undo=_undo_break_down),
+    Tool("replan_task", "Reschedule the open steps of a broken-down task over the time left (when behind).",
+         ReplanArgs, "write", "auto", run=_replan),
 ]}
 
 
@@ -687,7 +838,7 @@ def policy_for(tool: Tool) -> str:
 def describe() -> list[dict[str, Any]]:
     out = []
     for t in TOOLS.values():
-        out.append({"name": t.name, "description": t.description, "risk": t.risk,
+        out.append({"name": t.name, "description": t.text(), "risk": t.risk,
                     "default_policy": t.default_policy, "policy": policy_for(t),
                     "parameters": t.args.model_json_schema()})
     return out
