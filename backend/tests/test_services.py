@@ -64,7 +64,7 @@ def test_ollama_auto_start(env, monkeypatch):
     up = iter([False, True])
     monkeypatch.setattr(services, "ollama_up", lambda: next(up, True))
     monkeypatch.setattr(services, "ollama_binary", lambda: "/usr/bin/ollama")
-    monkeypatch.setattr(services, "_spawn", lambda name, args, cwd=None: spawned.append(args))
+    monkeypatch.setattr(services, "_spawn", lambda name, args, cwd=None, extra_env=None: spawned.append(args))
     assert services.ensure_ollama(wait=3) and spawned == [["/usr/bin/ollama", "serve"]]
     settings.update({"auto_start_ollama": False})
     monkeypatch.setattr(services, "ollama_up", lambda: False)

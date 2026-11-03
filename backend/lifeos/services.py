@@ -7,6 +7,7 @@ in the LifeOS data folder.
 from __future__ import annotations
 
 import atexit
+import json
 import logging
 import os
 import shutil
@@ -167,10 +168,12 @@ def ollama_busy(seconds: float = 2.0) -> bool:
     return _cpu_seconds(("ollama", "llama")) - before > seconds
 
 
-def restart_ollama() -> bool:
-    """Hard stop: end Ollama (server and model runners) and start it again. Used when Stop didn't make it let go."""
+def restart_ollama(with_app: bool = False, reason: str = "to stop work that kept running after Stop") -> bool:
+    """Hard stop: end Ollama (server and model runners) and start it again. Used when Stop didn't make it let go.
+    with_app also ends the Ollama tray app, which would otherwise start its own server without LifeOS's settings."""
     if os.name == "nt":
-        for image in ("ollama.exe", "ollama_llama_server.exe", "llama-server.exe"):
+        images = ("ollama app.exe",) if with_app else ()
+        for image in (*images, "ollama.exe", "ollama_llama_server.exe", "llama-server.exe"):
             subprocess.run(["taskkill", "/F", "/T", "/IM", image], capture_output=True, timeout=20,
                            creationflags=subprocess.CREATE_NO_WINDOW)
     else:
@@ -178,15 +181,17 @@ def restart_ollama() -> bool:
         if not proc or proc.poll() is not None:
             return False  # not ours to kill
         proc.kill()
-    activity.log("system", "Restarted Ollama to stop work that kept running after Stop")
+    activity.log("system", f"Restarted Ollama {reason}")
     time.sleep(1)
     return ensure_ollama(wait=30)
 
 
-def _spawn(name: str, args: list[str], cwd: Path | None = None) -> subprocess.Popen:
+def _spawn(name: str, args: list[str], cwd: Path | None = None, extra_env: dict[str, str] | None = None) -> subprocess.Popen:
     logfile = open(config.data_dir() / f"{name}.log", "ab")  # noqa: SIM115 (kept open for the child)
+    logfile.write(f"\n{LOG_MARK} {time.strftime('%Y-%m-%d %H:%M:%S')} {json.dumps(extra_env or {})}\n".encode())
+    logfile.flush()
     proc = subprocess.Popen(args, cwd=str(cwd) if cwd else None, stdin=subprocess.DEVNULL, stdout=logfile,
-                            stderr=subprocess.STDOUT, env=user_env(), **_hidden())
+                            stderr=subprocess.STDOUT, env={**user_env(), **(extra_env or {})}, **_hidden())
     _started[name] = proc
     return proc
 
@@ -235,11 +240,168 @@ def ensure_ollama(wait: float = 20) -> bool:
         proc = _started.get("ollama")
         if not proc or proc.poll() is not None:
             log.info("Starting Ollama: %s serve", binary)
-            _spawn("ollama", [binary, "serve"])
+            env = tuning_env()
+            _spawn("ollama", [binary, "serve"], extra_env=env)
+            _save_applied(env)
             activity.log("system", "Started Ollama in the background")
     ok = _wait(ollama_up, wait)
     _state["ollama"] = "" if ok else "Ollama didn't start; see ollama.log in the LifeOS data folder"
     return ok
+
+
+# ---------------------------------------------------------------- Ollama server tuning
+
+LOG_MARK = "=== LifeOS started this program"
+TUNING_KEYS = ("OLLAMA_FLASH_ATTENTION", "OLLAMA_KV_CACHE_TYPE", "OLLAMA_NUM_PARALLEL", "OLLAMA_MAX_LOADED_MODELS")
+OURS = {"1", "2", "q8_0", "q4_0"}  # values LifeOS writes; anything else in the user's variables was set by them
+
+
+def tuning_env(cfg: dict[str, Any] | None = None) -> dict[str, str]:
+    """Environment for `ollama serve` that cuts its memory use: flash attention, a quantized context cache (half the
+    VRAM at q8_0), one request slot (a slot reserves a whole context cache, and one slot keeps the prompt cache warm
+    from step to step) and at most two models in memory (the main model plus the small fast one)."""
+    cfg = cfg or settings.get_all()
+    if not cfg.get("ollama_tuning"):
+        return {}
+    env = {"OLLAMA_NUM_PARALLEL": "1", "OLLAMA_MAX_LOADED_MODELS": "2"}
+    if cfg.get("ollama_flash_attention"):
+        env["OLLAMA_FLASH_ATTENTION"] = "1"
+        if cfg.get("ollama_kv_cache", "f16") != "f16":
+            env["OLLAMA_KV_CACHE_TYPE"] = cfg["ollama_kv_cache"]
+    return env
+
+
+def _applied_file() -> Path:
+    return config.data_dir() / "ollama-tuning.json"
+
+
+def _save_applied(env: dict[str, str]) -> None:
+    try:
+        _applied_file().write_text(json.dumps(env, sort_keys=True))
+    except OSError:
+        pass
+
+
+def applied_env() -> dict[str, str] | None:
+    try:
+        return json.loads(_applied_file().read_text())
+    except (OSError, ValueError):
+        return None
+
+
+_kv_cache: dict[str, Any] = {"at": 0.0, "fa_off": False}
+
+
+def _flash_attention_refused() -> bool:
+    """Whether the Ollama LifeOS started said flash attention isn't supported on this GPU (then the cache stays f16)."""
+    if time.time() - _kv_cache["at"] < 30:
+        return _kv_cache["fa_off"]
+    off = False
+    try:
+        path = config.data_dir() / "ollama.log"
+        with open(path, "rb") as f:
+            f.seek(max(0, path.stat().st_size - 400_000))
+            tail = f.read().decode("utf-8", "replace")
+        tail = tail[tail.rfind(LOG_MARK):] if LOG_MARK in tail else tail
+        low = tail.lower()
+        off = "flash attention enabled but not supported" in low or "flash attention disabled" in low
+    except OSError:
+        pass
+    _kv_cache.update(at=time.time(), fa_off=off)
+    return off
+
+
+def kv_cache_type(cfg: dict[str, Any] | None = None) -> str:
+    """The context cache type Ollama runs with, as far as LifeOS can tell."""
+    env = applied_env() or {}
+    cfg = cfg or settings.get_all()
+    if not cfg.get("ollama_tuning") or "OLLAMA_KV_CACHE_TYPE" not in env or _flash_attention_refused():
+        return "f16"
+    return env["OLLAMA_KV_CACHE_TYPE"]
+
+
+def _write_user_env(env: dict[str, str]) -> bool:
+    """Windows: save the tuning in the user's environment variables too, so the Ollama app uses it when it starts
+    Ollama itself (at sign-in). Removes values LifeOS set earlier that are now off. Leaves the user's own values."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ | winreg.KEY_SET_VALUE) as key:
+            for name in TUNING_KEYS:
+                try:
+                    current = str(winreg.QueryValueEx(key, name)[0])
+                except OSError:
+                    current = None
+                if name in env and current != env[name] and (current is None or current in OURS):
+                    winreg.SetValueEx(key, name, 0, winreg.REG_SZ, env[name])
+                elif name not in env and current in OURS:
+                    winreg.DeleteValue(key, name)
+        ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001A, 0, "Environment", 0x0002, 2000, None)
+        return True
+    except OSError:
+        return False
+
+
+def tuning_status() -> dict[str, Any]:
+    want = tuning_env()
+    have = applied_env()
+    return {"wanted": want, "applied": have, "pending_restart": have != want if ollama_up() else False,
+            "kv_cache": kv_cache_type(), "flash_attention_refused": _flash_attention_refused()}
+
+
+def apply_tuning(restart: bool = True, force: bool = False) -> dict[str, Any]:
+    """Save the tuning and restart Ollama with it. Waits for idle: never while a mission or image job is running,
+    unless force."""
+    from . import missions
+
+    env = tuning_env()
+    saved = _write_user_env(env)
+    if applied_env() == env and ollama_up():
+        return {"restarted": False, "saved_for_ollama_app": saved, "note": "already running with these settings"}
+    if not restart:
+        return {"restarted": False, "saved_for_ollama_app": saved, "note": "applies the next time Ollama starts"}
+    busy = bool(missions.list_missions(200, "active"))
+    if busy and not force:
+        return {"restarted": False, "saved_for_ollama_app": saved, "note": "a mission is running; restart after it"}
+    if not ollama_up():
+        return {"restarted": ensure_ollama(wait=30), "saved_for_ollama_app": saved}
+    if os.name != "nt" and not _alive("ollama"):
+        return {"restarted": False, "saved_for_ollama_app": saved, "note": "restart Ollama yourself to apply"}
+    ok = restart_ollama(with_app=True, reason="with LifeOS's memory-saving settings")
+    return {"restarted": ok, "saved_for_ollama_app": saved}
+
+
+def kv_fallback(detail: str) -> bool:
+    """Ollama refused to load a model with the quantized context cache (some versions crash when flash attention
+    isn't available): go back to the default f16 cache and restart it. True = it's worth sending the request again."""
+    cfg = settings.get_all()
+    if not cfg.get("ollama_tuning") or cfg.get("ollama_kv_cache") == "f16":
+        return False
+    settings.update({"ollama_kv_cache": "f16"})
+    activity.log("system", f"Ollama couldn't use the compressed context cache ({detail[:120]}); switched back to f16",
+                 status="error")
+    return bool(apply_tuning(restart=True, force=True).get("restarted"))
+
+
+def auto_tune_on_start() -> None:
+    """Once after an update or a settings change: restart an Ollama that isn't running with the tuning."""
+    if not settings.get("ollama_tuning") or not ollama_up():
+        return
+    url = settings.get("ollama_url")
+    if not any(h in url for h in ("127.0.0.1", "localhost")) or applied_env() == tuning_env():
+        return
+    if llm_busy():
+        return
+    apply_tuning(restart=True)
+
+
+def llm_busy() -> bool:
+    from . import llm
+
+    return bool(llm.loaded_models()) and ollama_busy(1.0)
 
 
 # ---------------------------------------------------------------- ComfyUI
@@ -325,6 +487,7 @@ def start_background() -> None:
     def run() -> None:
         try:
             ensure_ollama()
+            auto_tune_on_start()
             if media.cfg().get("comfy_autostart"):
                 ensure_comfy()
         except Exception:  # never take the backend down over a helper program

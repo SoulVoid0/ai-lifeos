@@ -5,6 +5,7 @@ import { ago } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { ErrorBox, PageHeader, Section, Spinner, notifyChanged, useToast } from "../components/ui";
 import { OldDataSettings, UpdateSettings } from "../components/Updates";
+import { LowResource } from "../components/LowResource";
 import { GpuSettings } from "../components/GpuSettings";
 import { CloudSettings, CrewSettings, IntegrationSettings, NotificationSettings } from "../components/SettingsExtra";
 
@@ -140,6 +141,7 @@ export default function Settings() {
               onBlur={() => save({ ollama_keep_alive: form.ollama_keep_alive || "30m" })} />
           </div>
         </div>
+        <LowResource form={form} save={save} reload={settings.reload} />
         <GpuSettings form={form} setForm={setForm} save={save} />
         <div className="mt-3">
           <label className="label">Planner</label>

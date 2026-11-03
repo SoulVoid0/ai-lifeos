@@ -106,6 +106,9 @@ jobs:
           # lower_priority and ollama_busy call kernel32 directly; make sure they run on real Windows before shipping.
           python -c "from lifeos import services; print('lowered', services.lower_priority(('python',)), 'busy', services.ollama_busy(0.5))"
           if ($LASTEXITCODE -ne 0) { throw "Windows process helpers failed" }
+          # Low-resource mode saves Ollama's tuning in the user's environment variables (winreg + a settings broadcast).
+          python -c "from lifeos import services; assert services._write_user_env({'OLLAMA_NUM_PARALLEL': '1'}); assert services._write_user_env({}); print('env ok')"
+          if ($LASTEXITCODE -ne 0) { throw "Saving Ollama's tuning failed" }
 
       - name: Publish the release
         shell: pwsh

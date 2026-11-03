@@ -345,7 +345,19 @@ class _ModelGate:
                 self._cond.notify_all()
 
 
+    def current(self) -> str | None:
+        """The model the gate let through last (it's loaded unless keep_alive ran out)."""
+        return self._model
+
+
 _gate = _ModelGate()
+GB = 1024 ** 3
+SMALL_MODEL_BYTES = 3.5 * 1e9  # Ollama tags count GB as 10^9 bytes; the 4B fast models are about 2.5 GB
+KV_BYTES = {"f16": 2.0, "q8_0": 1.0625, "q4_0": 0.5625}  # per cached value, including the quantization scales
+_residents: set[str] = set()  # small models running beside the gate's model
+_no_think_param: set[str] = set()  # Ollama rejected "think" for these
+_think_breaks_json: set[str] = set()  # this Ollama ignores the JSON schema when thinking is off for these
+_sent_think: dict[str, Any] = {}
 
 BIG_MODEL = re.compile(r"(?<![\d.])(2[4-9]|[3-9]\d|\d{3})b\b", re.I)  # 24b and up: these don't fit next to a desktop
 BIG_MODEL_CTX = 8192
@@ -360,17 +372,34 @@ def model_options(model: str, cfg: dict[str, Any] | None = None) -> dict[str, An
     ctx = own.get("num_ctx") or cfg["ollama_num_ctx"]
     if ctx and not own.get("num_ctx") and BIG_MODEL.search(model):
         ctx = min(ctx, BIG_MODEL_CTX)  # every 8k of context is VRAM the model's own layers can't use
+    if ctx and not own.get("num_ctx") and _is_fast(model, cfg):
+        ctx = min(ctx, FAST_MODEL_CTX)  # chats and one-step jobs: a small cache keeps it beside the main model
     if ctx:
         out["num_ctx"] = int(ctx)
     gpu = own.get("num_gpu")
     if gpu is None and cfg.get("ollama_gpu_gb"):
-        gpu = gpu_layers(model, float(cfg["ollama_gpu_gb"]), int(ctx or 4096))
+        gpu = gpu_layers(model, float(cfg["ollama_gpu_gb"]), int(ctx or 4096), kv_bytes(cfg))
     if gpu is not None:
         out["num_gpu"] = int(gpu)
     threads = own.get("num_thread") or cfg.get("ollama_cpu_threads") or default_threads()
     if threads:
         out["num_thread"] = int(threads)
     return out
+
+
+FAST_MODEL_CTX = 8192
+
+
+def _is_fast(model: str, cfg: dict[str, Any]) -> bool:
+    fast = parse_ref(cfg.get("fast_model") or "")
+    return bool(cfg.get("fast_model")) and fast[0] == "ollama" and fast[1] == model
+
+
+def kv_bytes(cfg: dict[str, Any] | None = None) -> float:
+    """Bytes per value in Ollama's context cache, as it actually runs (q8_0 only takes effect with flash attention)."""
+    from . import services
+
+    return KV_BYTES.get(services.kv_cache_type(cfg), 2.0)
 
 
 def default_threads() -> int:
@@ -388,9 +417,12 @@ def _model_info(model: str) -> dict[str, Any]:
     try:
         tags = httpx.get(f"{_base()}/api/tags", timeout=5).json().get("models") or []
         size = next((m.get("size") for m in tags if m.get("name") == model or m.get("model") == model), None)
-        show = httpx.post(f"{_base()}/api/show", json={"model": model}, timeout=10).json().get("model_info") or {}
+        shown = httpx.post(f"{_base()}/api/show", json={"model": model}, timeout=10).json()
+        show = shown.get("model_info") or {}
         arch = show.get("general.architecture", "")
+        caps = shown.get("capabilities")
         info = {"size": int(size or 0), "layers": int(show.get(f"{arch}.block_count") or 0),
+                "capabilities": [str(c) for c in caps] if isinstance(caps, list) else None,
                 "kv_heads": int(show.get(f"{arch}.attention.head_count_kv") or 0),
                 "key_len": int(show.get(f"{arch}.attention.key_length") or 0)
                 or (int(show.get(f"{arch}.embedding_length") or 0) // max(1, int(show.get(f"{arch}.attention.head_count") or 1)))}
@@ -400,7 +432,7 @@ def _model_info(model: str) -> dict[str, Any]:
     return info
 
 
-def gpu_layers(model: str, gpu_gb: float, ctx: int) -> int | None:
+def gpu_layers(model: str, gpu_gb: float, ctx: int, kv: float = 2.0) -> int | None:
     """How many of the model's layers fit in gpu_gb of VRAM next to its context cache. None = all of them fit
     (or the model's shape is unknown), so Ollama decides as usual."""
     info = _model_info(model)
@@ -408,11 +440,40 @@ def gpu_layers(model: str, gpu_gb: float, ctx: int) -> int | None:
     if not layers or not size:
         return None
     kv_heads, key_len = info.get("kv_heads") or 8, info.get("key_len") or 128
-    cache = 2 * layers * ctx * kv_heads * key_len * 2  # keys and values, f16
+    cache = 2 * layers * ctx * kv_heads * key_len * kv  # keys and values
     budget = gpu_gb * 1024 ** 3 - cache - 0.75 * 1024 ** 3  # and room for the compute buffers
     per_layer = size / (layers + 1)  # the output layer is about one more
     fit = int(budget // per_layer)
     return None if fit > layers else max(0, fit)
+
+
+def _loaded_now(model: str) -> bool:
+    return any(m["name"] == model or m["name"] == f"{model}:latest" for m in loaded_models())
+
+
+def light_model(fallback: str) -> str:
+    """The model for light work like chatting with an agent: the fast model when it can run without swapping anything
+    out, else the local model that's loaded right now, else fallback."""
+    cfg = settings.get_all()
+    fast = (cfg.get("fast_model") or "").strip()
+    current = _gate.current()
+    if fast and parse_ref(fast)[0] == "ollama" and model_available(fast) and installed(fast, status()["models"]):
+        if not current or current == fast or not _loaded_now(current) or _fits_together(current, fast, cfg):
+            return fast
+    if cfg.get("stay_on_loaded_model") and current and parse_ref(fallback)[0] == "ollama" and _loaded_now(current):
+        return current
+    return fallback
+
+
+def loaded_or(model: str) -> str:
+    """With "stay on the loaded model": the local model already in VRAM instead of `model`, so a review or report
+    doesn't swap 10+ GB of weights in and out. Small residents (the fast model) don't count."""
+    if not settings.get("stay_on_loaded_model") or parse_ref(model)[0] != "ollama":
+        return model
+    current = _gate.current()
+    if current and current != model and current not in _residents and _loaded_now(current):
+        return current
+    return model
 
 
 def unload_model(model: str) -> None:
@@ -459,6 +520,58 @@ def _priority_watch() -> None:
         time.sleep(5)
 
 
+def _think_option(model: str, cfg: dict[str, Any], schema: dict[str, Any] | None) -> bool | None:
+    """False to skip a thinking model's hidden reasoning pass (most of a step's tokens), None to leave it to Ollama."""
+    if cfg.get("ollama_think") or model in _no_think_param or (schema is not None and model in _think_breaks_json):
+        return None
+    caps = _model_info(model).get("capabilities")
+    if caps is not None and "thinking" not in caps:
+        return None  # nothing to turn off
+    return False
+
+
+def _fits_together(a: str, b: str, cfg: dict[str, Any]) -> bool:
+    sa, sb = (_model_info(a).get("size") or 0), (_model_info(b).get("size") or 0)
+    if not sa or not sb:
+        return False
+    budget = float(cfg.get("ollama_gpu_gb") or 12) * GB
+    return sa + sb + 1.75 * GB <= budget  # both context caches and compute buffers
+
+
+def _beside(model: str, cfg: dict[str, Any]) -> bool:
+    """Whether a small model can run next to the model that's loaded now, without either being swapped out."""
+    size = _model_info(model).get("size") or 0
+    current = _gate.current()
+    if not size or size > SMALL_MODEL_BYTES or not current or current == model:
+        return False
+    return _fits_together(current, model, cfg)
+
+
+def _make_room(model: str, cfg: dict[str, Any]) -> None:
+    """Before a bigger model takes over the GPU: unload small residents it doesn't fit next to."""
+    for r in list(_residents):
+        if r != model and not _fits_together(model, r, cfg):
+            unload_model(r)
+            _residents.discard(r)
+
+
+def _recover(model: str, payload: dict[str, Any], exc: httpx.HTTPStatusError, cfg: dict[str, Any]) -> bool:
+    """Fix what an Ollama error says is wrong with the request or server setup. True = send it again."""
+    try:
+        body = exc.response.text.lower()
+    except Exception:  # noqa: BLE001 (a streamed body that wasn't read)
+        body = ""
+    if "think" in payload and exc.response.status_code == 400 and "think" in body:
+        _no_think_param.add(model)
+        payload.pop("think")
+        return True
+    if any(k in body for k in ("flash_attn", "flash attention", "llama context", "kv cache", "cache type")):
+        from . import services
+
+        return services.kv_fallback(f"{model}: {body[:160]}")
+    return False
+
+
 def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] | None, timeout: float,
             temperature: float) -> str:
     cfg = settings.get_all()
@@ -466,12 +579,22 @@ def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] |
     payload: dict[str, Any] = {"model": model, "messages": messages, "stream": abortable,
                                "options": {"temperature": temperature}, "keep_alive": cfg["ollama_keep_alive"]}
     payload["options"].update(model_options(model, cfg))
+    think = _think_option(model, cfg, schema)
+    if think is not None:
+        payload["think"] = think
+    _sent_think[model] = think
     if schema is not None:
         payload["format"] = schema
     # Loading a large model (or one that spills into RAM) can take minutes, so the configured limit wins.
     limit = httpx.Timeout(max(timeout, float(cfg["ollama_timeout_s"])), connect=10)
-    with _gate(model, bool(cfg["ollama_one_model"]), bool(cfg["ollama_unload_on_switch"])), _busy(cfg):
-        for attempt in (1, 2):
+    beside = bool(cfg["ollama_one_model"]) and _beside(model, cfg)
+    if beside:
+        _residents.add(model)
+    elif cfg["ollama_unload_on_switch"] and _residents:
+        _make_room(model, cfg)
+    with _gate(model, bool(cfg["ollama_one_model"]) and not beside, bool(cfg["ollama_unload_on_switch"])), _busy(cfg):
+        timed_out = fixed = False
+        while True:
             try:
                 if abortable:
                     data, text = _ollama_stream(f"{_base()}/api/chat", payload, limit)
@@ -482,11 +605,21 @@ def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] |
                     text = data.get("message", {}).get("content", "")
                 break
             except httpx.TimeoutException as exc:
-                if attempt == 2:
+                if timed_out:
                     raise LLMUnavailable(f"Ollama request failed: timed out after {int(limit.read or 0)}s twice "
                                          f"(model {model}). Raise the time limit in Settings → Local AI, or use a "
                                          "smaller model.") from exc
+                timed_out = True
                 log.warning("Ollama timed out on %s; retrying once", model)
+            except httpx.HTTPStatusError as exc:
+                if not fixed and _recover(model, payload, exc, cfg):
+                    fixed = True
+                    continue
+                try:
+                    detail = exc.response.text[:240]
+                except Exception:  # noqa: BLE001
+                    detail = ""
+                raise LLMUnavailable(f"Ollama request failed: {exc.response.status_code} {detail}".strip()) from exc
             except httpx.HTTPError as exc:
                 raise LLMUnavailable(f"Ollama request failed: {exc}") from exc
     _record("ollama", model, int(data.get("prompt_eval_count") or 0), int(data.get("eval_count") or 0))
@@ -639,6 +772,10 @@ def chat_json(messages: list[dict[str, str]], schema: dict[str, Any], *, model: 
     try:
         return _extract_json(text)
     except BadOutput as exc:
+        provider, name = parse_ref(model)
+        if provider == "ollama" and _sent_think.get(name) is False:
+            _think_breaks_json.add(name)  # some Ollama versions drop the schema with thinking off: let it think
+            log.warning("%s ignored the JSON schema with thinking off; letting it think for JSON replies", name)
         retry = [*messages, {"role": "assistant", "content": text[:2000]},
                  {"role": "user", "content": f"That reply was not valid JSON ({exc}). Reply again with exactly one JSON "
                   "object that matches the schema. Leave out fields you have no value for instead of writing null."}]

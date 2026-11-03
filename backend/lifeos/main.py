@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, learning, llm, mailer, media, memory,
+from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, lean, learning, llm, mailer, media, memory,
                missions, permissions, proactive, projects, scheduler, search, services, settings, tasks, tools, vault,
                updates, workflows)
 
@@ -659,6 +659,44 @@ def start_service(name: str) -> dict[str, Any]:
         raise KeyError(f"Unknown service {name}")
     ok = services.ensure_ollama() if name == "ollama" else services.ensure_comfy()
     return {"ok": ok, **services.status()}
+
+
+class PullIn(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
+class LeanIn(BaseModel):
+    download: bool = True
+
+
+@app.get("/api/system/lean")
+def lean_status() -> dict[str, Any]:
+    return lean.status()
+
+
+@app.post("/api/system/lean")
+def lean_apply(body: LeanIn | None = None) -> dict[str, Any]:
+    return lean.apply(download=(body or LeanIn()).download)
+
+
+@app.post("/api/system/ollama/tuning")
+def ollama_tuning_apply() -> dict[str, Any]:
+    return {**services.apply_tuning(restart=True), **services.tuning_status()}
+
+
+@app.get("/api/system/models")
+def models_installed() -> dict[str, Any]:
+    return {"models": lean.installed(), "pulls": lean.pulls()}
+
+
+@app.post("/api/system/models/pull")
+def models_pull(body: PullIn) -> dict[str, Any]:
+    return lean.pull(body.model)
+
+
+@app.delete("/api/system/models/{name:path}")
+def models_remove(name: str) -> dict[str, Any]:
+    return lean.remove(name)
 
 
 @app.post("/api/system/shutdown")
