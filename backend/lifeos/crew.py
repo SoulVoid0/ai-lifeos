@@ -14,6 +14,10 @@ from typing import Any
 from . import activity, db, llm, settings, tools
 
 OVERSEER = "overseer"
+# Micro agents: a small fast model, a short prompt, a few steps, no peer review. For one-step lookups and chores.
+MICRO = ("quick",)
+FAST_MODEL = "qwen3:4b-instruct-2507-q4_K_M"
+LEAN_CODER = "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:UD-IQ3_XXS"
 COLORS = ("violet", "amber", "cyan", "emerald", "rose", "blue", "orange", "pink", "lime", "teal", "slate")
 ICONS = ("crown", "calendar", "folder", "search", "code", "brain", "mail", "bot", "pen", "shield", "chart", "sparkles",
          "image", "camera", "film")
@@ -77,6 +81,13 @@ DEFAULT_CREW: list[dict[str, Any]] = [
                 "lighting, mood) in one prompt, keep clips short because they render slowly on a local GPU, and report "
                 "the file.",
      "tools": ["generate_video", "list_media"]},
+    {"slug": "quick", "name": "Spark", "role": "Quick helper", "color": "slate", "icon": "sparkles", "model": FAST_MODEL,
+     "description": "Micro agent on a small, fast model: one-step lookups and chores (today's agenda, find a note, add a "
+                    "task or reminder, remember something). Cheap to run, so the big models stay free for real work.",
+     "persona": "You are quick and literal. You do exactly the one small thing asked with as few steps as possible, then "
+                "finish with a short answer.",
+     "tools": ["daily_summary", "list_tasks", "create_task", "complete_task", "list_events", "search_memory",
+               "save_memory", "search_everything"]},
 ]
 
 # Personalities: how each agent talks in chat and on the Station. Work output stays professional.
@@ -121,6 +132,10 @@ PERSONALITIES: dict[str, dict[str, Any]] = {
               "quirks": "Says 'action' and 'cut'. Describes everything as camera moves. Patient with long renders.",
               "catchphrases": ["Action!", "And... cut. Perfect.", "Slow push in, very cinematic."],
               "idle_lines": ["Rendering frame 42...", "That's a wrap.", "Needs a dolly zoom.", "Quiet on set!"]},
+    "quick": {"voice": "Zippy, cheerful and brief. Gets to the point in one breath.",
+              "quirks": "Proud of being small and fast. Hands anything big to the right specialist.",
+              "catchphrases": ["Done in a flash.", "Small job? Mine.", "Zip, zap, done."],
+              "idle_lines": ["Bzzt.", "Anything quick?", "Light as a feather.", "Running cool today."]},
 }
 
 _JSON = ("tools", "candidates", "catchphrases", "idle_lines")
@@ -137,7 +152,9 @@ RECOMMENDED: dict[str, list[dict[str, str]]] = {
               {"model": "qwen3:8b", "size": "5.2 GB", "why": "smaller"}],
     "research": [{"model": "qwen3:8b", "size": "5.2 GB", "why": "good at summarizing with sources"},
                  {"model": "gemma3:12b", "size": "8.1 GB", "why": "strong reading and writing"}],
-    "coder": [{"model": "qwen3-coder:30b", "size": "19 GB", "why": "best local coder; MoE with 3B active, so it stays usable "
+    "coder": [{"model": LEAN_CODER, "size": "12.8 GB", "why": "the 30B coder squeezed to fit fully in a 16 GB GPU: no "
+               "spill onto the CPU, much faster"},
+              {"model": "qwen3-coder:30b", "size": "19 GB", "why": "best local coder; MoE with 3B active, so it stays usable "
                "when a few GB spill from a 16 GB GPU into RAM (needs 32 GB RAM)"},
               {"model": "qwen2.5-coder:14b", "size": "9 GB", "why": "fits fully on a 16 GB GPU"},
               {"model": "qwen2.5-coder:7b", "size": "4.7 GB", "why": "for 8 GB GPUs"}],
@@ -149,12 +166,14 @@ RECOMMENDED: dict[str, list[dict[str, str]]] = {
               {"model": "qwen3:4b", "size": "2.6 GB", "why": "leaves more VRAM for the image model"}],
     "video": [{"model": "qwen3:8b", "size": "5.2 GB", "why": "turns requests into precise shot descriptions"},
               {"model": "qwen3:4b", "size": "2.6 GB", "why": "leaves more VRAM for the video model"}],
+    "quick": [{"model": FAST_MODEL, "size": "2.5 GB", "why": "fast, no thinking pass, fits beside a 14B model"},
+              {"model": "qwen3:1.7b", "size": "1.4 GB", "why": "smallest that still follows tool schemas"}],
     "comms": [{"model": "llama3.1:8b", "size": "4.9 GB", "why": "natural writing for drafts"},
               {"model": "gemma3:12b", "size": "8.1 GB", "why": "polished drafts"}],
 }
 # Steps per task for built-in agents. Writing code takes many small steps (read, write a file, check, fix), so Forge
 # gets the most; everyone else gets the crew-wide minimum (Settings -> agent_max_steps) or this, whichever is higher.
-DEFAULT_STEPS = {"coder": 30, "research": 15, "files": 12, "creative": 12}
+DEFAULT_STEPS = {"coder": 30, "research": 15, "files": 12, "creative": 12, "quick": 4}
 OLD_DEFAULT_STEPS = 6
 
 
@@ -163,7 +182,7 @@ def default_steps(slug: str) -> int:
 
 
 # Bumped when DEFAULT_CREW gains new defaults (models, step limits), so existing installs pick them up once.
-DEFAULTS_VERSION = 5
+DEFAULTS_VERSION = 6
 
 
 def _row(row: Any) -> dict[str, Any]:

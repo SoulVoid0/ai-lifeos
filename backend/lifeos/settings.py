@@ -38,6 +38,20 @@ DEFAULTS: dict[str, Any] = {
     # If Ollama keeps computing a few seconds after Stop (it can, while reading a long prompt with part of the model
     # on the CPU), restart it. Only when no other mission is still running.
     "ollama_hard_stop": True,
+    # Resource savers (see lean.py). Thinking models (qwen3, ...) write a long hidden "thinking" pass before every
+    # answer; off skips it, which is most of the tokens an agent step costs. On = let the model think.
+    "ollama_think": False,
+    # Server settings LifeOS gives Ollama when it starts it (and saves for the Ollama app): flash attention, a
+    # quantized context cache (q8_0 halves its VRAM; f16 = Ollama's default), one request slot per model (so the
+    # prompt cache is reused step after step) and at most two models in memory.
+    "ollama_tuning": True,
+    "ollama_flash_attention": True,
+    "ollama_kv_cache": "q8_0",
+    # A small, fast model for chat with agents and the Spark micro agent. It stays loaded beside a mid-size model
+    # instead of swapping it out. Empty = don't use one.
+    "fast_model": "",
+    # The Overseer's reviews and final report use the local model that's already loaded instead of loading its own.
+    "stay_on_loaded_model": False,
     # GitHub repository whose releases the desktop app updates from (owner/name). A read token for a private
     # repository is kept in the vault (see updates.py).
     "update_repo": "SoulVoid0/ai-lifeos",
@@ -138,6 +152,10 @@ def update(changes: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("ollama_timeout_s must be between 30 and 3600 seconds")
         if key == "ollama_keep_alive" and not re.fullmatch(r"-?\d+[smh]?", value):
             raise ValueError("ollama_keep_alive must look like 30m, 2h or 0")
+        if key == "ollama_kv_cache" and value not in ("f16", "q8_0", "q4_0"):
+            raise ValueError("ollama_kv_cache must be f16, q8_0 or q4_0")
+        if key == "fast_model" and len(value) > 120:
+            raise ValueError("fast_model is too long")
         if key == "lessons_per_task" and not 0 <= value <= 20:
             raise ValueError("lessons_per_task must be between 0 and 20")
         if key == "cloud_daily_budget_usd" and value < 0:

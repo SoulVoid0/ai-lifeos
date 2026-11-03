@@ -26,6 +26,22 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+export interface ModelPull { model: string; state: "pulling" | "done" | "failed"; status: string; completed: number; total: number; error: string | null }
+export interface OllamaTuning { wanted: Record<string, string>; applied: Record<string, string> | null; pending_restart: boolean; kv_cache: string; flash_attention_refused: boolean }
+export interface LeanStatus {
+  on: boolean;
+  plan: { agent: string; slug: string; model: string; installed: boolean; assigned: boolean }[];
+  pulls: ModelPull[];
+  tuning: OllamaTuning;
+  removable: string[];
+  think: boolean;
+  fast_model: string;
+  downloading?: string[];
+  gpu_hint?: string | null;
+  tuning_result?: unknown;
+}
+export interface InstalledModel { name: string; size: number; in_use: boolean }
+
 export interface GpuStatus {
   models: { name: string; size: number; vram: number; until: string | null }[];
   vram: number;
@@ -213,6 +229,12 @@ export interface Settings {
   ollama_unload_on_switch: boolean;
   ollama_hard_stop: boolean;
   ollama_model_options: Record<string, { num_ctx?: number; num_gpu?: number; num_thread?: number }>;
+  ollama_think: boolean;
+  ollama_tuning: boolean;
+  ollama_flash_attention: boolean;
+  ollama_kv_cache: "f16" | "q8_0" | "q4_0";
+  fast_model: string;
+  stay_on_loaded_model: boolean;
   chat_model: string;
   embed_model: string;
   planner: "auto" | "llm" | "rules";
@@ -697,6 +719,12 @@ export const api = {
   resetCrew: () => post<Agent[]>("/api/crew/reset"),
   crewStatus: shared(() => get<CrewStatus>("/api/crew/status")),
   gpu: shared(() => get<GpuStatus>("/api/system/gpu"), 2000),
+  lean: () => get<LeanStatus>("/api/system/lean"),
+  applyLean: (download = true) => post<LeanStatus>("/api/system/lean", { download }),
+  applyTuning: () => post<OllamaTuning & { restarted: boolean; note?: string }>("/api/system/ollama/tuning"),
+  installedModels: () => get<{ models: InstalledModel[]; pulls: ModelPull[] }>("/api/system/models"),
+  pullModel: (model: string) => post<ModelPull>("/api/system/models/pull", { model }),
+  removeModel: (model: string) => del<{ removed: string }>(`/api/system/models/${encodeURIComponent(model)}`),
   crewModels: () => get<{ local: string[]; ollama_ok: boolean; providers: Provider[]; cloud_enabled: boolean; default: string }>("/api/crew/models"),
   testModel: (model: string) => post<{ ok: boolean; reply?: string; seconds?: number; error?: string }>("/api/crew/test-model", { model }),
   exportPack: () => get<Record<string, unknown>>("/api/crew/pack"),
