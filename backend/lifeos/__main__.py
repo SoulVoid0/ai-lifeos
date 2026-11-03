@@ -7,6 +7,7 @@ from . import config
 def main() -> None:
     # Before anything opens the database.
     config.import_store_python_data()
+    config.pin_ca_bundle()
     from . import backup
 
     backup.restore_pending()

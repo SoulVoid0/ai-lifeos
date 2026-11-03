@@ -77,7 +77,12 @@ def latest_release(client: httpx.Client) -> dict[str, Any] | None:
 def manifest(client: httpx.Client | None = None) -> dict[str, Any] | None:
     """The newest release's latest.json with download links pointing at this backend. None if there's no release."""
     own = client is None
-    client = client or httpx.Client(timeout=30, follow_redirects=True)
+    try:
+        client = client or httpx.Client(timeout=30, follow_redirects=True)
+    except FileNotFoundError as e:  # the certificate list vanished (see config.pin_ca_bundle)
+        if not config.pin_ca_bundle():
+            raise UpdateError("HTTPS certificates are missing. Quit LifeOS from the tray and open it again.") from e
+        client = httpx.Client(timeout=30, follow_redirects=True)
     try:
         release = latest_release(client)
         if release is None:
@@ -90,6 +95,10 @@ def manifest(client: httpx.Client | None = None) -> dict[str, Any] | None:
         data = r.json()
     except (ValueError, httpx.HTTPError) as e:
         raise UpdateError(f"The release manifest couldn't be read: {e}") from e
+    except FileNotFoundError as e:  # the certificate list vanished (see config.pin_ca_bundle)
+        config.pin_ca_bundle()
+        raise UpdateError("HTTPS certificates were missing; LifeOS repaired them. Click Check now again. "
+                          "If this keeps happening, quit LifeOS from the tray and open it again.") from e
     finally:
         if own:
             client.close()
