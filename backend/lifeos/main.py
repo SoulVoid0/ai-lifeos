@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ from pydantic import BaseModel, Field
 from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, lean, learning, llm, mailer, media, memory,
                missions, permissions, proactive, projects, scheduler, search, services, settings, tasks, tools, vault,
                updates, workflows)
-from . import backup, cloud, custom_tools, renamer, workspaces
+from . import apps, backup, cloud, custom_tools, renamer, system, workspaces
 
 log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI):
     scheduler.watch_parent()
     if not os.environ.get("LIFEOS_NO_SERVICES"):
         services.start_background()
+        threading.Thread(target=apps.list_apps, daemon=True, name="apps-preload").start()
     yield
     _scheduler.stop()
     services.stop_all()
@@ -514,6 +516,65 @@ def llm_status() -> dict[str, Any]:
 @app.get("/api/folders/cloud")
 def cloud_folders() -> list[dict[str, Any]]:
     return cloud.folders()
+
+
+# ---------------------------------------------------------------- the computer (launcher, status, power)
+
+class LaunchIn(BaseModel):
+    id: str = Field(max_length=2000)
+
+
+class VolumeIn(BaseModel):
+    level: int | None = Field(default=None, ge=0, le=100)
+    change: str | None = None
+
+
+class EndProgramIn(BaseModel):
+    name: str = Field(max_length=260)
+
+
+class PowerIn(BaseModel):
+    action: str
+
+
+@app.get("/api/apps")
+def list_apps(q: str = "", refresh: bool = False, limit: int = 500) -> list[dict[str, Any]]:
+    if refresh:
+        apps.list_apps(refresh=True)
+    return apps.search(q, limit) if q else apps.list_apps()[:limit]
+
+
+@app.post("/api/apps/launch")
+def launch_app(body: LaunchIn) -> dict[str, Any]:
+    return apps.launch(app_id=body.id)
+
+
+@app.get("/api/system/status")
+def system_status() -> dict[str, Any]:
+    return system.status()
+
+
+@app.get("/api/system/programs")
+def system_programs(sort: str = "memory", limit: int = 25) -> list[dict[str, Any]]:
+    return system.processes(min(limit, 100), "cpu" if sort == "cpu" else "memory")
+
+
+@app.post("/api/system/programs/end")
+def end_program(body: EndProgramIn) -> dict[str, Any]:
+    """The user pressed End in the app, which is the confirmation; the assistant's end_program tool asks first."""
+    return system.end_program(body.name)
+
+
+@app.post("/api/system/volume")
+def set_volume(body: VolumeIn) -> dict[str, Any]:
+    if body.change not in (None, "up", "down", "mute"):
+        raise ValueError("change must be up, down or mute")
+    return system.set_volume(body.level, body.change)  # type: ignore[arg-type]
+
+
+@app.post("/api/system/power")
+def power(body: PowerIn) -> dict[str, Any]:
+    return system.power(body.action)  # type: ignore[arg-type]
 
 
 class WorkspaceItemIn(BaseModel):

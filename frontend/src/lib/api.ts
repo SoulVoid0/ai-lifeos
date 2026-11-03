@@ -195,6 +195,15 @@ export interface CustomTool {
   id: number; name: string; kind: "webhook" | "prompt"; description: string; enabled: boolean; has_secret: boolean;
   config: { url?: string; method?: string; body?: string; secret_header?: string; template?: string };
 }
+export interface AppEntry { id: string; name: string; source: string; launches: number; last_launched_at: string | null; comment?: string }
+export interface SystemStatus {
+  cpu_percent: number; cpu_count: number; uptime_hours: number; platform: string;
+  memory: { used_gb: number; total_gb: number; percent: number };
+  disk: { path: string; free_gb: number; total_gb: number; percent: number };
+  battery: { percent: number; plugged_in: boolean; minutes_left: number | null } | null;
+}
+export interface Program { name: string; pids: number[]; count: number; memory_mb: number; cpu_percent: number; protected: boolean }
+export type PowerAction = "lock" | "sleep" | "restart" | "shutdown" | "sign_out";
 export interface BackupFile { name: string; path: string; bytes: number; created_at: string }
 
 export interface Folder {
@@ -714,6 +723,13 @@ export const api = {
   folders: () => get<Folder[]>("/api/folders"),
   addFolder: (path: string, label?: string) => post<Folder>("/api/folders", { path, label }),
   removeFolder: (id: number) => del(`/api/folders/${id}`),
+  apps: (q = "", refresh = false) => get<AppEntry[]>(`/api/apps${qs({ q, refresh: refresh || undefined })}`),
+  launchApp: (id: string) => post<{ opened: string }>("/api/apps/launch", { id }),
+  systemStatus: () => get<SystemStatus>("/api/system/status"),
+  programs: (sort: "memory" | "cpu" = "memory") => get<Program[]>(`/api/system/programs${qs({ sort })}`),
+  endProgram: (name: string) => post<{ ended: string; processes: number }>("/api/system/programs/end", { name }),
+  setVolume: (v: { level?: number; change?: "up" | "down" | "mute" }) => post("/api/system/volume", v),
+  power: (action: PowerAction) => post<{ summary: string }>("/api/system/power", { action }),
   cloudFolders: () => get<CloudFolder[]>("/api/folders/cloud"),
 
   suggestionAction: (a: NonNullable<Suggestion["action"]>) => request<unknown>(a.method, a.path, a.body ?? {}),
