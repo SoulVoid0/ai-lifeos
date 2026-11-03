@@ -78,11 +78,12 @@ jobs:
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           ISO=$(ls out/*.iso | head -n 1)
+          rm -rf /tmp/work /var/cache/pacman/pkg/*  # mkarchiso's work tree fills the runner's disk
           mkdir -p publish
           sha256sum "$ISO" | awk '{print $1}' > "publish/$(basename "$ISO").sha256"
           cp /repo/lifeos-*.pkg.tar.zst publish/
-          if [ "$(stat -c %s "$ISO")" -lt 2000000000 ]; then cp "$ISO" publish/
-          else split -b 1900M -d -a 1 "$ISO" "publish/$(basename "$ISO").part"; fi
+          if [ "$(stat -c %s "$ISO")" -lt 2000000000 ]; then mv "$ISO" publish/
+          else split -b 1900M -d -a 1 "$ISO" "publish/$(basename "$ISO").part" && rm "$ISO"; fi
           ls -lh publish
           gh release create "os-arch-${{ github.run_number }}" publish/* --repo "${{ github.repository }}" --prerelease \
             --target "${{ github.sha }}" --title "AI LifeOS (Arch) ${{ github.run_number }} (test build)" \
