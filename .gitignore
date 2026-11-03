@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+*.db
+*.db-wal
+*.db-shm
+node_modules/
+frontend/dist/
+frontend/src-tauri/target/
+frontend/src-tauri/gen/
+.DS_Store
+*.tsbuildinfo
+build/
+frontend/src-tauri/binaries/

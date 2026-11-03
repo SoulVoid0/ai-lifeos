@@ -1,0 +1,32 @@
+[project]
+name = "lifeos"
+version = "0.1.0"
+description = "AI LifeOS backend: local-first personal AI operating system"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "httpx>=0.27",
+    "pydantic>=2.6",
+    "pypdf>=4.0",
+    "keyring>=24",
+    "tzdata>=2024.1",
+    "psutil>=5.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+packaging = ["pyinstaller>=6.6"]
+
+[project.scripts]
+lifeos = "lifeos.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["lifeos"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
