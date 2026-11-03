@@ -164,3 +164,20 @@ def test_ollama_one_model_at_a_time_and_retry(env, monkeypatch):
         t.join()
     assert overlap == [] and {"a", "b"} & set(unloaded)
     assert llm.complete([{"role": "user", "content": "hi"}], model="flaky") == "ok"
+
+
+def test_missing_certificate_file_is_repaired(env, monkeypatch, tmp_path):
+    """A deleted CA bundle (temp cleanup, or a stale SSL_CERT_FILE) used to break update checks with [Errno 2]."""
+    import os
+
+    import httpx
+
+    from lifeos import config
+
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "gone.pem"))
+    with __import__("pytest").raises(FileNotFoundError):
+        httpx.Client()
+    pinned = config.pin_ca_bundle()
+    assert pinned and os.environ["SSL_CERT_FILE"] == pinned and pinned.startswith(str(config.data_dir()))
+    httpx.Client().close()
+    assert config.pin_ca_bundle() == pinned  # stable on the next start

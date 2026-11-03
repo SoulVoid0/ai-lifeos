@@ -25,6 +25,32 @@ def data_dir() -> Path:
     return path
 
 
+def pin_ca_bundle() -> str | None:
+    """Keep HTTPS working for the whole run: point SSL_CERT_FILE at a copy of the certificate list in the data folder.
+
+    The packaged backend unpacks itself (certificates included) into %TEMP%, and Windows' temp cleanup can delete
+    that folder while LifeOS runs; a leftover SSL_CERT_FILE pointing at a deleted file breaks it the same way. Either
+    makes every update check and web request fail with "[Errno 2] No such file or directory"."""
+    current = os.environ.get("SSL_CERT_FILE")
+    if current and Path(current).is_file() and Path(current).parent != data_dir():
+        return current  # the user's own, and it exists
+    target = data_dir() / "cacert.pem"
+    try:
+        import certifi
+
+        src = Path(certifi.where())
+        if src.is_file() and (not target.is_file() or target.stat().st_size != src.stat().st_size):
+            shutil.copyfile(src, target)
+    except (ImportError, OSError) as exc:
+        log.warning("Couldn't copy the certificate list: %s", exc)
+    if target.is_file():
+        os.environ["SSL_CERT_FILE"] = str(target)
+        return str(target)
+    if current and not Path(current).is_file():
+        os.environ.pop("SSL_CERT_FILE", None)  # a dead path is worse than certifi's default
+    return None
+
+
 def db_path() -> Path:
     return Path(os.environ.get("LIFEOS_DB", data_dir() / "lifeos.db"))
 
