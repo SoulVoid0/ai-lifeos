@@ -8,6 +8,7 @@ import { OldDataSettings, UpdateSettings } from "../components/Updates";
 import { LowResource } from "../components/LowResource";
 import { GpuSettings } from "../components/GpuSettings";
 import { CloudSettings, CrewSettings, IntegrationSettings, NotificationSettings } from "../components/SettingsExtra";
+import { BackupSettings, CloudFolders, CustomToolsSettings, VoiceSettings } from "../components/SpecExtras";
 
 const ACCENTS = ["violet", "blue", "emerald", "cyan", "rose", "amber"];
 const ACCENT_HEX: Record<string, string> = { violet: "#8b5cf6", blue: "#3b82f6", emerald: "#10b981", rose: "#f43f5e", amber: "#f59e0b", cyan: "#06b6d4" };
@@ -93,7 +94,10 @@ export default function Settings() {
             </li>
           ))}
         </ul>
+        <CloudFolders onApproved={() => { folders.reload(); notifyChanged(); }} />
       </Section>
+
+      <BackupSettings form={form} setForm={setForm} save={save} />
 
       <Section title="Local AI (Ollama)" icon={<Cpu size={15} className="text-accent" />}>
         <div className="grid gap-3 sm:grid-cols-3">
@@ -166,6 +170,7 @@ export default function Settings() {
       <CrewSettings form={form} setForm={setForm} save={save} />
       <CloudSettings form={form} setForm={setForm} save={save} />
       <IntegrationSettings />
+      <CustomToolsSettings />
       <NotificationSettings form={form} setForm={setForm} save={save} />
 
       <Section title="Tool permissions" icon={<Shield size={15} className="text-accent" />}>
@@ -250,6 +255,7 @@ export default function Settings() {
             </div>
           </div>
         </div>
+        <VoiceSettings form={form} setForm={setForm} save={save} />
       </Section>
     </div>
   );

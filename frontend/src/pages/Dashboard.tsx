@@ -9,10 +9,12 @@ import { ago, isOverdue, PRIORITY_LABEL, when } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { FileRow } from "../components/FileRow";
-import { Empty, ErrorBox, Section, Spinner, notifyChanged } from "../components/ui";
+import { Empty, ErrorBox, Section, Spinner, notifyChanged, useToast } from "../components/ui";
+import { WorkspacesCard } from "../components/SpecExtras";
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const toast = useToast();
   const { data, error, reload } = useAsync(api.dashboard, [], 60000);
 
   useEffect(() => {
@@ -171,7 +173,18 @@ export default function Dashboard() {
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium">{s.title}</div>
                       <div className="text-xs text-muted">{s.detail}</div>
-                      {(s.command || s.link) && (
+                      {s.action && (
+                        <button className="btn-outline mt-1.5 text-xs" onClick={async () => {
+                          try {
+                            await api.suggestionAction(s.action!);
+                            toast("Done");
+                            notifyChanged();
+                          } catch (e) {
+                            toast((e as Error).message, "error");
+                          }
+                        }}>{s.action.label}</button>
+                      )}
+                      {!s.action && (s.command || s.link) && (
                         <button
                           className="mt-1.5 text-xs text-accent hover:underline"
                           onClick={() => (s.command ? run(s.command) : navigate(s.link!))}
@@ -220,6 +233,8 @@ export default function Dashboard() {
             </ul>
           )}
         </Section>
+
+        <WorkspacesCard className="lg:col-span-3" />
       </div>
     </div>
   );
