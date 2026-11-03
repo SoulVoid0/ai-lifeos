@@ -82,6 +82,7 @@ everything the user sees.
 The image is built by `.github/workflows/os-image.yml` from `os/Containerfile` whenever a commit message contains
 `[os-image]`. Get it from GitHub → Actions → OS image → the latest run → Artifacts → `AI-LifeOS-iso-N`.
 
+0. Get it from the newest `os-N` pre-release on the Releases page (faster than the artifact). Download every `.part` file into one folder, then join them in PowerShell in that folder: `cmd /c copy /b AI-LifeOS-N.iso.part0+AI-LifeOS-N.iso.part1+AI-LifeOS-N.iso.part2+AI-LifeOS-N.iso.part3 AI-LifeOS-N.iso` (use the real number and part count).
 1. Write the `.iso` to a USB stick (8 GB or more) with Fedora Media Writer or Rufus (choose DD mode in Rufus).
 2. Boot from the stick (F12/F8 boot menu). The installer asks for a disk and a user. **The disk you pick is erased**,
    so use a spare disk, or a free partition if you want to dual boot. Never pick your Windows disk.
