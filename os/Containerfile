@@ -2,13 +2,7 @@
 # A Fedora bootc (image-mode) system: the whole OS is this container image, updated atomically with rollback.
 # Built by .github/workflows/os-image.yml into an installer ISO with bootc-image-builder.
 
-# ---- the web UI
-FROM docker.io/library/node:22 AS web
-WORKDIR /build/frontend
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --no-audit --no-fund
-COPY frontend/ ./
-RUN npm run build
+# The web UI (frontend/dist) is built by the workflow before this file runs.
 
 # ---- the system
 FROM quay.io/fedora/fedora-bootc:42
@@ -36,7 +30,7 @@ COPY backend/ /usr/src/lifeos/backend/
 RUN python3 -m venv /usr/lib/lifeos \
     && /usr/lib/lifeos/bin/pip install --no-cache-dir /usr/src/lifeos/backend \
     && rm -rf /usr/src/lifeos
-COPY --from=web /build/frontend/dist/ /usr/share/lifeos/web/
+COPY frontend/dist/ /usr/share/lifeos/web/
 
 COPY os/files/ /
 RUN systemd-sysusers \
