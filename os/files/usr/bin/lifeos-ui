@@ -1,0 +1,12 @@
+#!/bin/sh
+# Opens the LifeOS interface full screen once the backend answers, and reopens it if it's closed.
+for i in $(seq 1 60); do
+  curl -fs http://127.0.0.1:8765/api/health >/dev/null && break
+  sleep 1
+done
+PROFILE="$HOME/.local/share/ai-lifeos/ui-profile"
+mkdir -p "$PROFILE"
+while true; do
+  firefox --kiosk --no-remote --profile "$PROFILE" http://127.0.0.1:8765/
+  sleep 1
+done

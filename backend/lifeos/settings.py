@@ -101,7 +101,11 @@ DEFAULTS: dict[str, Any] = {
     "reflection": True,
     "auto_route": False,
     "lessons_per_task": 5,
-    "notification_prefs": {"reminders": True, "workflows": True, "missions": True, "suggestions": False},
+    "notification_prefs": {"reminders": True, "workflows": True, "missions": True, "suggestions": False, "apps": True},
+    # Linux: receive other apps' desktop notifications in the LifeOS bell (notify_bus.py).
+    "os_notifications": True,
+    # The first-start setup screen (name, Wi-Fi, models, folders) was finished or skipped.
+    "setup_done": False,
     "quiet_hours": {"enabled": False, "start": "22:00", "end": "07:00"},
     "email": {"host": "", "port": 993, "username": "", "folder": "INBOX"},
     # Email alerts over SMTP (mailer.py); the password is in the vault.

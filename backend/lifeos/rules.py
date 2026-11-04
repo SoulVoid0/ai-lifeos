@@ -161,6 +161,47 @@ def _system_clause(c: str, low: str, plan: Plan) -> bool:
             return False
         return True
 
+    if re.search(r"\b(?:wi-?fi|wireless|internet connection)\b", low):
+        m = re.search(r"\bconnect(?: me)? to\s+(?:the\s+)?(?:wi-?fi\s+)?[\"']?([^\"']+?)[\"']?(?:\s+wi-?fi)?(?:\s+(?:with\s+)?(?:the\s+)?password\s+(\S+))?[.!]?$", c, re.I)
+        if m and not re.fullmatch(r"(?:the\s+)?(?:wi-?fi|internet|network)", m.group(1).strip(), re.I):
+            plan.steps.append({"tool": "wifi", "args": {"action": "connect", "ssid": m.group(1).strip(),
+                                                         "password": m.group(2) or ""}})
+        elif re.search(r"\bturn\s+(?:the\s+)?wi-?fi\s+off\b|\bturn\s+off\s+(?:the\s+)?wi-?fi\b|\bdisable\s+wi-?fi\b", low):
+            plan.steps.append({"tool": "wifi", "args": {"action": "off"}})
+        elif re.search(r"\bturn\s+(?:the\s+)?wi-?fi\s+on\b|\bturn\s+on\s+(?:the\s+)?wi-?fi\b|\benable\s+wi-?fi\b", low):
+            plan.steps.append({"tool": "wifi", "args": {"action": "on"}})
+        elif re.search(r"\bdisconnect\b", low):
+            plan.steps.append({"tool": "wifi", "args": {"action": "disconnect"}})
+        elif re.search(r"\b(?:networks?|list|show|scan|available|nearby)\b", low):
+            plan.steps.append({"tool": "wifi", "args": {"action": "list"}})
+        elif re.search(r"\b(?:am i|connected|status|which|what)\b", low):
+            plan.steps.append({"tool": "wifi", "args": {"action": "status"}})
+        else:
+            return False
+        return True
+
+    if re.search(r"\bbluetooth\b|\b(?:headphones|earbuds|airpods|headset|controller)\b", low) and \
+            re.search(r"\b(?:bluetooth|connect|disconnect|pair)\b", low):
+        m = re.search(r"\b(connect|disconnect|pair|forget)\s+(?:to\s+|with\s+)?(?:my\s+|the\s+)?(.+?)(?:\s+(?:via|over|with)\s+bluetooth|\s+bluetooth)?[.!]?$", c, re.I)
+        if re.search(r"\bturn\s+(?:on\s+)?bluetooth(?:\s+on)?\b|\benable\s+bluetooth\b", low) and "off" not in low:
+            plan.steps.append({"tool": "bluetooth", "args": {"action": "on"}})
+        elif re.search(r"\bturn\s+(?:off\s+)?bluetooth(?:\s+off)?\b|\bdisable\s+bluetooth\b", low):
+            plan.steps.append({"tool": "bluetooth", "args": {"action": "off"}})
+        elif m and m.group(2).strip().lower() not in ("bluetooth", "a device", "devices"):
+            plan.steps.append({"tool": "bluetooth", "args": {"action": m.group(1).lower(), "device": m.group(2).strip()}})
+        elif re.search(r"\b(?:scan|search|find|nearby|pair)\b", low):
+            plan.steps.append({"tool": "bluetooth", "args": {"action": "scan"}})
+        else:
+            plan.steps.append({"tool": "bluetooth", "args": {"action": "list"}})
+        return True
+
+    if re.search(r"\bbrightness\b|\bscreen\s+(?:brighter|dimmer)\b", low):
+        m = re.search(r"\b(\d{1,3})\s*%?", low)
+        if not m:
+            return False
+        plan.steps.append({"tool": "set_brightness", "args": {"level": max(1, min(100, int(m.group(1))))}})
+        return True
+
     if re.search(r"\b(?:what'?s|what is|which (?:apps?|programs?) (?:are|is))\s+(?:using|eating|hogging|slowing)\b", low) \
             or re.search(r"\b(?:running programs|task manager|running apps|what'?s running)\b", low):
         plan.steps.append({"tool": "list_programs", "args": {"sort": "cpu" if re.search(r"\bcpu|slow", low) else "memory"}})

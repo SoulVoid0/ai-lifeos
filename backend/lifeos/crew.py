@@ -186,7 +186,7 @@ def default_steps(slug: str) -> int:
 ADDED_TOOLS: dict[str, list[str]] = {
     "planner": ["break_down_task", "replan_task"],
     "quick": ["open_workspace", "custom_prompt", "launch_app", "list_apps", "system_status", "list_programs",
-              "end_program", "set_volume", "power_action"],
+              "end_program", "set_volume", "power_action", "wifi", "bluetooth", "set_brightness"],
     "files": ["rename_by_content", "system_status"],
     "research": ["custom_prompt"],
     "comms": ["custom_webhook"],
@@ -194,7 +194,7 @@ ADDED_TOOLS: dict[str, list[str]] = {
 for _a in DEFAULT_CREW:
     _a["tools"] = list(dict.fromkeys(_a["tools"] + ADDED_TOOLS.get(_a["slug"], [])))
 
-DEFAULTS_VERSION = 8
+DEFAULTS_VERSION = 9
 
 
 def _row(row: Any) -> dict[str, Any]:

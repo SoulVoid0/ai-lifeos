@@ -15,8 +15,8 @@ everything the user sees.
 | Brain | Backend (`backend/lifeos`): assistant, crew, memory, files, tasks, automations, approvals and undo | Done, runs on Windows, Linux and macOS |
 | Platform layer | `apps.py` (installed apps), `system.py` (status, programs, volume, power), `files.launch`, `services.py`. One function each, with Windows, Linux and macOS versions | Done in 0.1.18 |
 | Shell UI | The Tauri app: Computer page (launcher, status, power), Ctrl+K command palette, status bar, full screen with F11 | Done in 0.1.18 |
-| Session | LifeOS starts at login instead of a normal desktop and stays full screen, while other apps open in normal windows | Next |
-| System image | A bootable, installable LifeOS image with drivers, Ollama, ComfyUI and LifeOS preinstalled | After the session |
+| Session | LifeOS starts at login instead of a normal desktop and stays full screen, while other apps open in normal windows | Done: labwc session, device settings, notifications, setup screen |
+| System image | A bootable, installable LifeOS image with drivers, Ollama, ComfyUI and LifeOS preinstalled | First Arch builds (live USB and installer) |
 | Own compositor | A window manager made for LifeOS: the crew can arrange windows, and the Station can be the home screen | Later |
 
 ## Why Linux underneath (and what it gives your PC)
@@ -39,18 +39,21 @@ everything the user sees.
   "how's my PC".
 - Full-screen shell mode (F11), a live status bar and a command palette (Ctrl+K).
 
-### 2. LifeOS session on Linux
+### 2. LifeOS session on Linux (started: `packaging/linux/`)
 - A Wayland session called "AI LifeOS" that you pick on the login screen. It runs a small stacking compositor
   (labwc), with LifeOS as the full-screen home layer and the dock. Other apps open as normal windows above it.
 - The backend runs as a `systemd --user` service, with Ollama and ComfyUI as services.
   Data goes in `~/.local/share/ai-lifeos`, because `config.data_dir` already follows XDG on Linux.
-- Wi-Fi, Bluetooth, display and audio settings through NetworkManager, BlueZ, `wlr-randr` and PipeWire, added to
-  `system.py` as more tools.
-- Notifications through the freedesktop notification spec, so the bell receives other apps' notifications too.
+- Done: Wi-Fi, Bluetooth, display and brightness settings (`devices.py`: `nmcli`, `bluetoothctl`, `wlr-randr`,
+  `brightnessctl`; `netsh` and WMI on Windows) on the Computer page, and as the assistant tools `wifi`,
+  `bluetooth` and `set_brightness`. Audio volume was already in `system.py`.
+- Done: notifications through the freedesktop notification spec (`notify_bus.py`), so the bell receives other apps'
+  notifications too.
+- Done: a first-start setup screen (name, Wi-Fi, folders, the light model set).
 
-### 3. LifeOS image
-- A Fedora bootc (image-mode) base. The image is a container image built in GitHub Actions like the Windows
-  installer. `bootc-image-builder` turns it into an installer ISO, and updates are `bootc upgrade` with rollback.
+### 3. LifeOS image (first build: `os/`)
+- An Arch Linux base built with archiso in GitHub Actions: a live USB that boots into LifeOS, plus `lifeos-install`
+  (archinstall with the LifeOS package set). LifeOS ships as the `lifeos` pacman package.
 - Preinstalled:
   - ROCm.
   - Ollama with the Low-resource model set.
@@ -76,3 +79,18 @@ everything the user sees.
   logged, and file changes can be undone.
 - Local first: models run on your GPU, and cloud use stays opt-in under a budget.
 - The app keeps working on Windows. The OS is an extra way to run the same LifeOS, not a fork.
+
+## Trying the LifeOS image
+
+LifeOS is now built on **Arch Linux** (archiso). The base is small and rolling, so you get the newest Mesa and kernel
+for the RX 6800 XT, and the whole system is tailored to LifeOS. LifeOS itself is a pacman package (`lifeos`), so
+updating it is `sudo pacman -Syu` once the package repository is online. Build: `.github/workflows/os-image.yml`
+(push a commit whose message contains `[os-image]`), with the files in `os/arch/` and `os/files/`.
+
+1. Download the newest `os-arch-N` pre-release `.iso` from the Releases page and write it to a USB stick
+   (4 GB or more) with Rufus in DD mode.
+2. Boot from the stick (F12/F8 boot menu). It starts straight into LifeOS as the user `lifeos` (password `lifeos`),
+   without installing anything, so you can try it safely. Nothing is saved on the stick.
+3. To install, open a terminal (Super+Enter) and run `lifeos-install`. The Arch installer asks for the disk
+   (**it is erased**, so never pick your Windows disk), your user and password, language and time zone.
+4. After restarting, log in. Ollama uses the GPU through Vulkan. For images and video, run `lifeos-install-comfyui`.

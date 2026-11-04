@@ -14,10 +14,10 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, lean, learning, llm, mailer, media, memory,
+from . import (__version__, actions, activity, agent, config, conversations, db, crew, files, integrations, lean, learning, llm, mailer, media, memory,
                missions, permissions, proactive, projects, scheduler, search, services, settings, tasks, tools, vault,
                updates, workflows)
-from . import apps, backup, cloud, custom_tools, renamer, system, workspaces
+from . import apps, backup, cloud, custom_tools, devices, notify_bus, renamer, system, workspaces
 
 log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
@@ -36,6 +36,7 @@ async def lifespan(app: FastAPI):
     if not os.environ.get("LIFEOS_NO_SERVICES"):
         services.start_background()
         threading.Thread(target=apps.list_apps, daemon=True, name="apps-preload").start()
+        notify_bus.start()
     yield
     _scheduler.stop()
     services.stop_all()
@@ -575,6 +576,105 @@ def set_volume(body: VolumeIn) -> dict[str, Any]:
 @app.post("/api/system/power")
 def power(body: PowerIn) -> dict[str, Any]:
     return system.power(body.action)  # type: ignore[arg-type]
+
+
+class WifiIn(BaseModel):
+    ssid: str = Field(max_length=64)
+    password: str = Field(default="", max_length=128)
+
+
+class OnOffIn(BaseModel):
+    on: bool
+
+
+class BluetoothIn(BaseModel):
+    action: str
+    device: str = Field(default="", max_length=120)
+
+
+class DisplayIn(BaseModel):
+    name: str = Field(max_length=60)
+    mode: str = ""
+    scale: float | None = None
+    enabled: bool | None = None
+
+
+class BrightnessIn(BaseModel):
+    level: int = Field(ge=1, le=100)
+
+
+@app.get("/api/devices")
+def devices_overview() -> dict[str, Any]:
+    return {**devices.overview(), "notifications": notify_bus.status()}
+
+
+@app.get("/api/devices/wifi")
+def wifi_networks(rescan: bool = False) -> list[dict[str, Any]]:
+    return devices.wifi_networks(rescan)
+
+
+@app.post("/api/devices/wifi/connect")
+def wifi_connect(body: WifiIn) -> dict[str, Any]:
+    return devices.wifi_connect(body.ssid, body.password)
+
+
+@app.post("/api/devices/wifi/disconnect")
+def wifi_disconnect() -> dict[str, Any]:
+    return devices.wifi_disconnect()
+
+
+@app.post("/api/devices/wifi/power")
+def wifi_power(body: OnOffIn) -> dict[str, Any]:
+    return devices.wifi_power(body.on)
+
+
+@app.get("/api/devices/bluetooth")
+def bluetooth_devices(scan: int = 0) -> list[dict[str, Any]]:
+    return devices.bluetooth_devices(scan)
+
+
+@app.post("/api/devices/bluetooth")
+def bluetooth_action(body: BluetoothIn) -> dict[str, Any]:
+    if body.action not in ("connect", "disconnect", "pair", "forget", "power_on", "power_off"):
+        raise ValueError("Unknown Bluetooth action")
+    return devices.bluetooth_action(body.action, body.device)  # type: ignore[arg-type]
+
+
+@app.post("/api/devices/display")
+def set_display(body: DisplayIn) -> dict[str, Any]:
+    return devices.set_display(body.name, body.mode, body.scale, body.enabled)
+
+
+@app.post("/api/devices/brightness")
+def set_brightness(body: BrightnessIn) -> dict[str, Any]:
+    return devices.set_brightness(body.level)
+
+
+@app.post("/api/devices/open-settings/{page}")
+def open_os_settings(page: str) -> dict[str, Any]:
+    if page not in ("wifi", "bluetooth", "display", "sound"):
+        raise KeyError(page)
+    return devices.open_settings(page)  # type: ignore[arg-type]
+
+
+@app.get("/api/setup")
+def setup_state() -> dict[str, Any]:
+    """Whether to show the first-start setup screen: never once it's done, and not for people who already use LifeOS."""
+    with db.session() as conn:
+        used = conn.execute("SELECT (SELECT COUNT(*) FROM conversations) + (SELECT COUNT(*) FROM tasks)"
+                            " + (SELECT COUNT(*) FROM approved_folders)").fetchone()[0]
+    done = bool(settings.get("setup_done"))
+    home = Path.home()
+    suggested = [str(home / d) for d in ("Documents", "Downloads", "Desktop", "Pictures", "Videos", "Music")
+                 if (home / d).is_dir()]
+    return {"needed": not done and not used, "done": done, "user_name": settings.get("user_name"),
+            "suggested_folders": suggested, "platform": devices.overview()["platform"]}
+
+
+@app.post("/api/setup/done")
+def setup_finish() -> dict[str, Any]:
+    settings.update({"setup_done": True})
+    return {"done": True}
 
 
 class WorkspaceItemIn(BaseModel):

@@ -1,0 +1,13 @@
+[Unit]
+Description=Create the first LifeOS user if the installer made none
+Before=display-manager.service sddm.service systemd-user-sessions.service
+After=systemd-sysusers.service
+ConditionPathExists=!/var/lib/lifeos/firstuser-done
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/lifeos-firstuser
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
