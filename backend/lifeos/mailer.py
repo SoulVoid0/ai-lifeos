@@ -290,8 +290,9 @@ def _compose(cfg: dict[str, Any], m: dict[str, Any], acts: list[dict[str, Any]],
     inbox = _inbox_cfg() if cfg.get("buttons", True) else None
     to = inbox["username"] if inbox else ""
     goal = m["goal"][:200]
-    text = [f"Mission {m['id']}: {goal}", ""]
-    parts = [f'<p style="color:#6b7280;margin:0 0 12px">Mission {m["id"]}: {html.escape(goal)}</p>']
+    head = f"Mission {m['id']}: {goal}" if m.get("id") else goal
+    text = [head, ""]
+    parts = [f'<p style="color:#6b7280;margin:0 0 12px">{html.escape(head)}</p>']
     for a in acts:
         text += [f"Waiting for your approval: {a['summary']}", ""]
         parts.append(f'<div style="border:1px solid #e5e7eb;border-radius:10px;padding:14px;margin:0 0 12px">'
@@ -337,6 +338,37 @@ def _compose(cfg: dict[str, Any], m: dict[str, Any], acts: list[dict[str, Any]],
         text.append("Approve or answer in AI LifeOS. The task is paused until you do.")
         html_body = None
     return f"[LifeOS] {subject}"[:200], "\n".join(text).strip() + FOOTER, html_body
+
+
+def request_approval(action_id: int, heading: str, details: str = "") -> bool:
+    """Email one approval that isn't part of a mission (auto-tidy, a self-upgrade), with Approve / Deny buttons."""
+    try:
+        cfg = _cfg()
+    except Exception:
+        return False
+    if not cfg["enabled"] or not cfg["events"].get("approval"):
+        return False
+    a = actions.get(action_id)
+    if a["status"] != "pending":
+        return False
+    with _lock:
+        if action_id in _emailed["A"]:
+            return False
+        _emailed["A"].add(action_id)
+    subject, text, html_body = _compose(cfg, {"id": None, "goal": heading}, [a], [])
+    if details:
+        text = text.removesuffix(FOOTER) + "\n\n" + details[:8000] + FOOTER
+        if html_body:
+            html_body = (html_body.removesuffix("</div>") + '<pre style="white-space:pre-wrap;font-size:12px;'
+                         f'background:#f3f4f6;padding:10px;border-radius:8px">{html.escape(details[:8000])}</pre></div>')
+    threading.Thread(target=_deliver_and_poll, args=(subject, text, html_body), daemon=True, name="lifeos-mail").start()
+    return True
+
+
+def _deliver_and_poll(subject: str, text: str, html_body: str | None) -> None:
+    _deliver(subject, text, html_body)
+    if html_body:
+        start_poller()
 
 
 # ---------------------------------------------------------------- the reply poller

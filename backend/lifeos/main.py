@@ -18,6 +18,7 @@ from . import (__version__, actions, activity, agent, config, conversations, db,
                missions, permissions, proactive, projects, scheduler, search, services, settings, tasks, tools, vault,
                updates, workflows)
 from . import apps, backup, cloud, custom_tools, devices, notify_bus, renamer, system, workspaces
+from . import arena, common, gamemode, recall, remote, screen, tidy, upgrade, voice
 
 log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
@@ -37,8 +38,14 @@ async def lifespan(app: FastAPI):
         services.start_background()
         threading.Thread(target=apps.list_apps, daemon=True, name="apps-preload").start()
         notify_bus.start()
+        gamemode.start()
+        voice.sync_listener()
+        remote.sync()
     yield
     _scheduler.stop()
+    gamemode.stop()
+    voice.shutdown()
+    remote.stop()
     services.stop_all()
 
 
@@ -161,6 +168,8 @@ class AgentIn(BaseModel):
     quirks: str = ""
     catchphrases: list[str] = []
     idle_lines: list[str] = []
+    tts_voice: str = ""
+    tts_rate: float = 1.0
 
 
 class AgentPatch(BaseModel):
@@ -179,6 +188,8 @@ class AgentPatch(BaseModel):
     quirks: str | None = None
     catchphrases: list[str] | None = None
     idle_lines: list[str] | None = None
+    tts_voice: str | None = None
+    tts_rate: float | None = None
 
 
 class LessonIn(BaseModel):
@@ -1412,6 +1423,318 @@ def test_email_alerts() -> dict[str, Any]:
 @app.get("/api/email/messages")
 def email_messages(limit: int = 15, unread: bool = True) -> list[dict[str, Any]]:
     return integrations.check_email(limit, unread)
+
+
+# ---------------------------------------------------------------- 0.2: voice, screen, arena, tidy, remote, game mode,
+# wallpaper, self-upgrade and memory search
+
+class SayIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+    agent: str | None = None
+    voice: str | None = None
+    rate: float | None = None
+
+
+class ItemsIn(BaseModel):
+    items: list[str]
+
+
+class CommandIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+    speak: bool = True
+
+
+class ScreenIn(BaseModel):
+    question: str = Field("", max_length=2000)
+    fresh: bool | None = None
+
+
+class ArenaSide(BaseModel):
+    agent: str
+    model: str | None = None
+
+
+class ArenaIn(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    a: ArenaSide
+    b: ArenaSide
+
+
+class VoteIn(BaseModel):
+    winner: str
+    reason: str = Field("", max_length=400)
+
+
+class OnIn(BaseModel):
+    on: bool | None = None
+
+
+class FocusIn(BaseModel):
+    focus: str | None = Field(None, max_length=500)
+
+
+class RecallIn(BaseModel):
+    question: str = Field(..., min_length=1, max_length=1000)
+
+
+@app.get("/api/voice")
+def voice_status() -> dict[str, Any]:
+    return voice.status()
+
+
+@app.patch("/api/voice")
+def voice_config(body: dict[str, Any]) -> dict[str, Any]:
+    voice.configure(body)
+    return voice.status()
+
+
+@app.get("/api/voice/microphones")
+def voice_mics() -> list[dict[str, Any]]:
+    return voice.microphones()
+
+
+@app.get("/api/voice/system-voices")
+def voice_system() -> list[str]:
+    return voice.system_voices()
+
+
+@app.post("/api/voice/install")
+def voice_install(body: ItemsIn) -> dict[str, Any]:
+    return voice.install(body.items)
+
+
+@app.post("/api/voice/say")
+def voice_say(body: SayIn) -> dict[str, Any]:
+    if body.voice or body.rate:  # a preview of a specific voice: render it now so errors show
+        path = voice.synthesize(body.text, body.agent, body.voice, body.rate)
+        common.background("voice-preview", lambda: (voice._play(path), path.unlink(missing_ok=True)))
+        return {"queued": True}
+    return voice.say(body.text, body.agent)
+
+
+@app.get("/api/voice/audio")
+def voice_audio(text: str, agent: str | None = None) -> Response:
+    """The reply as a WAV file, for the browser to play (phone, browser mode)."""
+    path = voice.synthesize(text[:4000], agent)
+    data = path.read_bytes()
+    path.unlink(missing_ok=True)
+    return Response(data, media_type="audio/wav")
+
+
+@app.post("/api/voice/stop")
+def voice_stop() -> dict[str, Any]:
+    voice.stop_speaking()
+    return {"ok": True}
+
+
+@app.post("/api/voice/listen")
+def voice_listen() -> dict[str, Any]:
+    return voice.push_to_talk()
+
+
+@app.post("/api/voice/command")
+def voice_command(body: CommandIn) -> dict[str, Any]:
+    return voice.handle(body.text, speak=body.speak)
+
+
+@app.get("/api/crew/presets")
+def personality_presets() -> list[dict[str, Any]]:
+    return crew.PRESETS
+
+
+@app.get("/api/screen")
+def screen_status() -> dict[str, Any]:
+    return screen.status()
+
+
+@app.patch("/api/screen")
+def screen_config(body: dict[str, Any]) -> dict[str, Any]:
+    screen.configure(body)
+    return screen.status()
+
+
+@app.post("/api/screen/capture")
+def screen_capture() -> dict[str, Any]:
+    return screen.capture()
+
+
+@app.get("/api/screen/last.png")
+def screen_last() -> FileResponse:
+    path = screen.shot_path()
+    if not path.is_file():
+        raise KeyError("No screenshot yet")
+    return FileResponse(path, media_type="image/png")
+
+
+@app.post("/api/screen/ask")
+def screen_ask(body: ScreenIn) -> dict[str, Any]:
+    return screen.ask(body.question, fresh=body.fresh)
+
+
+@app.get("/api/arena")
+def arena_list(limit: int = 30) -> list[dict[str, Any]]:
+    return arena.list_matches(limit)
+
+
+@app.post("/api/arena")
+def arena_start(body: ArenaIn) -> dict[str, Any]:
+    return arena.start(body.prompt, body.a.model_dump(), body.b.model_dump())
+
+
+@app.get("/api/arena/leaderboard")
+def arena_board() -> dict[str, Any]:
+    return arena.leaderboard()
+
+
+@app.get("/api/arena/{mid}")
+def arena_get(mid: int) -> dict[str, Any]:
+    return arena.get(mid)
+
+
+@app.post("/api/arena/{mid}/vote")
+def arena_vote(mid: int, body: VoteIn) -> dict[str, Any]:
+    return arena.vote(mid, body.winner, body.reason)
+
+
+@app.delete("/api/arena/{mid}")
+def arena_delete(mid: int) -> dict[str, Any]:
+    return arena.delete(mid)
+
+
+@app.get("/api/tidy")
+def tidy_status() -> dict[str, Any]:
+    return tidy.status()
+
+
+@app.patch("/api/tidy")
+def tidy_config(body: dict[str, Any]) -> dict[str, Any]:
+    tidy.configure(body)
+    return tidy.status()
+
+
+@app.get("/api/tidy/preview")
+def tidy_preview() -> dict[str, Any]:
+    return tidy.plan()
+
+
+@app.post("/api/tidy/run")
+def tidy_run() -> dict[str, Any]:
+    return tidy.run(force=True, source="user")
+
+
+@app.get("/api/remote")
+def remote_status() -> dict[str, Any]:
+    return remote.status()
+
+
+@app.patch("/api/remote")
+def remote_config(body: dict[str, Any]) -> dict[str, Any]:
+    remote.configure(body)
+    return remote.status()
+
+
+@app.post("/api/remote/pin")
+def remote_pin() -> dict[str, Any]:
+    remote.new_pin()
+    return remote.status()
+
+
+@app.get("/api/remote/qr.svg")
+def remote_qr() -> Response:
+    st = remote.status()
+    if not st["pair_url"]:
+        raise ValueError("Turn the phone remote on first (and connect this PC to your Wi-Fi or network)")
+    return Response(remote.qr_svg(st["pair_url"]), media_type="image/svg+xml")
+
+
+@app.delete("/api/remote/devices/{device_id}")
+def remote_remove(device_id: str) -> list[dict[str, Any]]:
+    return remote.remove_device(device_id)
+
+
+@app.post("/api/remote/firewall")
+def remote_firewall() -> dict[str, Any]:
+    return remote.open_firewall()
+
+
+@app.get("/api/gamemode")
+def gamemode_status() -> dict[str, Any]:
+    return gamemode.status()
+
+
+@app.patch("/api/gamemode")
+def gamemode_config(body: dict[str, Any]) -> dict[str, Any]:
+    gamemode.configure(body)
+    return gamemode.status()
+
+
+@app.post("/api/gamemode")
+def gamemode_set(body: OnIn) -> dict[str, Any]:
+    return gamemode.set_manual(body.on)
+
+
+@app.get("/api/gamemode/detect")
+def gamemode_detect() -> dict[str, Any]:
+    game, how = gamemode.detect()
+    return {"game": game, "how": how}
+
+
+@app.get("/api/wallpaper")
+def wallpaper_config() -> dict[str, Any]:
+    return {**common.group("wallpaper"), "game_mode": gamemode.active()}
+
+
+@app.patch("/api/wallpaper")
+def set_wallpaper(body: dict[str, Any]) -> dict[str, Any]:
+    def check(c: dict[str, Any]) -> None:
+        if not 1 <= c["fps"] <= 60:
+            raise ValueError("fps must be between 1 and 60")
+        if not 0 <= c["dim"] <= 0.9:
+            raise ValueError("dim must be between 0 and 0.9")
+
+    return common.save_group("wallpaper", body, check)
+
+
+@app.get("/api/upgrade")
+def upgrade_status() -> dict[str, Any]:
+    return upgrade.status()
+
+
+@app.patch("/api/upgrade")
+def upgrade_config(body: dict[str, Any]) -> dict[str, Any]:
+    upgrade.configure(body)
+    return upgrade.status()
+
+
+@app.post("/api/upgrade/propose")
+def upgrade_propose(body: FocusIn | None = None) -> dict[str, Any]:
+    return upgrade.propose_async(body.focus if body else None)
+
+
+@app.get("/api/recall")
+def recall_status() -> dict[str, Any]:
+    return recall.status()
+
+
+@app.patch("/api/recall")
+def recall_config(body: dict[str, Any]) -> dict[str, Any]:
+    recall.configure(body)
+    return recall.status()
+
+
+@app.post("/api/recall/search")
+def recall_search(body: RecallIn) -> dict[str, Any]:
+    return recall.answer(body.question)
+
+
+@app.post("/api/recall/sync")
+def recall_sync() -> dict[str, Any]:
+    return recall.sync_history()
+
+
+@app.delete("/api/recall/history")
+def recall_forget() -> dict[str, Any]:
+    return {"deleted": recall.forget_history()}
 
 
 # Serve the built web UI when present (browser mode without Tauri).

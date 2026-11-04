@@ -112,6 +112,28 @@ DEFAULTS: dict[str, Any] = {
     "email_alerts": {"enabled": False, "to": "", "host": "smtp.gmail.com", "port": 465, "username": "",
                      "security": "ssl", "buttons": True, "events": {"mission_done": True, "mission_failed": True, "approval": True,
                                                    "question": True, "workflow": False}},
+    # ------------------------------------------------ 0.2 features (each a group; see the module named in the comment)
+    # voice.py: wake word, speech recognition and the agents' voices.
+    "voice": {"wake_word": False, "wake_phrase": "hey life os", "mic": "", "stt_model": "small", "engine": "auto",
+              "default_voice": "piper:en_US-lessac-medium", "chime": True, "speak_agent_chat": False,
+              "pause_in_games": True, "listen_seconds": 8},
+    # screen.py: screen questions with a local vision model.
+    "screen": {"model": "qwen2.5vl:7b", "keep_screenshot": True, "hotkey": True},
+    # tidy.py: the Archivist sorts and renames new downloads.
+    "tidy": {"enabled": False, "folder": "", "mode": "ask", "rename": True, "min_age_minutes": 10,
+             "interval_minutes": 60, "last_run_at": ""},
+    # remote.py: the phone remote on the home network (paired phones are stored as hashes).
+    "remote": {"enabled": False, "port": 8766, "devices": []},
+    # gamemode.py: free the GPU while a game runs.
+    "game_mode": {"enabled": True, "auto_detect": True, "fullscreen": True, "games": [], "free_gpu": True,
+                  "stop_comfy": True, "hold_ai": True, "reload_after": True, "notify": True},
+    # The live wallpaper (desktop app): the Station's crew behind your desktop icons.
+    "wallpaper": {"enabled": False, "fps": 15, "show_clock": True, "show_ticker": True, "dim": 0.15},
+    # upgrade.py: Forge proposes changes to LifeOS's own code.
+    "self_upgrade": {"enabled": False, "repo_path": "", "every_days": 7, "focus": "", "run_tests": True, "push": False,
+                     "model": "", "last_run_at": ""},
+    # recall.py: memory search, including a copy of browser history (opt-in).
+    "recall": {"browser_history": False, "keep_days": 90, "last_sync": ""},
 }
 
 

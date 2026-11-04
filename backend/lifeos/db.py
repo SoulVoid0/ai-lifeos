@@ -393,6 +393,46 @@ CREATE TABLE IF NOT EXISTS custom_tools (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS arena_matches (
+    id INTEGER PRIMARY KEY,
+    prompt TEXT NOT NULL,
+    a_agent TEXT NOT NULL,
+    a_model TEXT NOT NULL,
+    b_agent TEXT NOT NULL,
+    b_model TEXT NOT NULL,
+    a_result TEXT,
+    b_result TEXT,
+    a_seconds REAL,
+    b_seconds REAL,
+    status TEXT NOT NULL DEFAULT 'running',
+    error TEXT,
+    winner TEXT,
+    reason TEXT,
+    lessons TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+
+-- Memory search: a copy of the browsers' history (title, address, time), opt-in.
+CREATE TABLE IF NOT EXISTS history (
+    id INTEGER PRIMARY KEY,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    browser TEXT NOT NULL,
+    visited_at TEXT NOT NULL,
+    UNIQUE(url, visited_at)
+);
+CREATE INDEX IF NOT EXISTS idx_history_visited ON history(visited_at);
+CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(
+    title, url, content='history', content_rowid='id', tokenize='porter unicode61'
+);
+CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
+    INSERT INTO history_fts(rowid, title, url) VALUES (new.id, new.title, new.url);
+END;
+CREATE TRIGGER IF NOT EXISTS history_ad AFTER DELETE ON history BEGIN
+    INSERT INTO history_fts(history_fts, rowid, title, url) VALUES ('delete', old.id, old.title, old.url);
+END;
 """
 
 # Columns added after the first release. SQLite has no ADD COLUMN IF NOT EXISTS.
@@ -410,6 +450,8 @@ MIGRATIONS = [
     "ALTER TABLE agents ADD COLUMN catchphrases TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE agents ADD COLUMN idle_lines TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE tasks ADD COLUMN parent_id INTEGER",
+    "ALTER TABLE agents ADD COLUMN tts_voice TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE agents ADD COLUMN tts_rate REAL NOT NULL DEFAULT 1.0",
 ]
 
 # Writers wait this long for the lock instead of failing with "database is locked".

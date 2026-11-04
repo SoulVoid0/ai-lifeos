@@ -288,6 +288,11 @@ def _run_job(media_id: int) -> None:
     m = get(media_id)
     if m["status"] != "queued":  # stopped while it waited for the GPU
         return
+    from . import gamemode
+
+    gamemode.wait_until_clear()  # don't render on the GPU while a game runs
+    if get(media_id)["status"] != "queued":
+        return
     started = time.monotonic()
     _set(media_id, status="running")
     try:

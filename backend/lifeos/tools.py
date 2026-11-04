@@ -244,6 +244,19 @@ class ReplanArgs(BaseModel):
     title: str | None = Field(None, description="Title of the parent task")
 
 
+class ScreenArgs(BaseModel):
+    question: str = Field("", description="What to find out about the screen, e.g. 'what does this error mean?'")
+
+
+class RecallArgs(BaseModel):
+    question: str = Field(..., description="The user's question in their words, with the time if they said one, e.g. "
+                                           "'the site about GPUs I looked at on Tuesday'")
+
+
+class UpgradeArgs(BaseModel):
+    title: str = ""
+
+
 @dataclass
 class Tool:
     name: str
@@ -882,6 +895,39 @@ def _replan(a: ReplanArgs, ctx: dict[str, Any]) -> dict[str, Any]:
                        f"\"{first['title']}\" by {first['due_at']}.", **out}
 
 
+def _look_at_screen(a: ScreenArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import screen
+
+    try:
+        out = screen.ask(a.question, fresh=True)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": out["answer"][:1500], **out}
+
+
+def _recall(a: RecallArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import recall
+
+    out = recall.answer(a.question)
+    return {"summary": out["answer"][:1500], "results": out["results"][:8], "window": out["window"]}
+
+
+def _prepare_upgrade(a: UpgradeArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    raise ToolError("Self-upgrades are proposed by Forge from Settings → Self-upgrade, not by a tool call")
+
+
+def _execute_upgrade(args: dict[str, Any], preview: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    from . import upgrade
+
+    return upgrade.execute(args, preview, options)
+
+
+def _undo_upgrade(result: dict[str, Any]) -> dict[str, Any]:
+    from . import upgrade
+
+    return upgrade.undo(result)
+
+
 TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("search_files", "Search indexed files in approved folders by topic, name, type, folder or date.",
          SearchFilesArgs, "read", "auto", run=_search_files),
@@ -975,6 +1021,15 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          undo=_undo_break_down),
     Tool("replan_task", "Reschedule the open steps of a broken-down task over the time left (when behind).",
          ReplanArgs, "write", "auto", run=_replan),
+    Tool("look_at_screen", "Take a screenshot and ask the local vision model about it (errors, what's open, what "
+         "something means). Use when the user says 'this', 'my screen' or 'this error'.", ScreenArgs, "read", "auto",
+         run=_look_at_screen),
+    Tool("recall", "Search the user's own past by time and topic: web pages they visited (browser history), files, "
+         "chats, memories, missions. For 'what was that site/file/thing I ... on Tuesday/yesterday/last week'.",
+         RecallArgs, "read", "auto", run=_recall),
+    Tool("apply_self_upgrade", "Apply a LifeOS code change Forge proposed (on a new git branch, tests run first). "
+         "Only created from Settings → Self-upgrade.", UpgradeArgs, "destructive", "confirm",
+         prepare=_prepare_upgrade, execute=_execute_upgrade, undo=_undo_upgrade),
 ]}
 
 

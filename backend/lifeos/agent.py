@@ -23,6 +23,8 @@ HELP = ("I can find files in your approved folders, organize them (with your app
 def _tool_catalog() -> str:
     lines = []
     for t in tools.TOOLS.values():
+        if t.name == "apply_self_upgrade":
+            continue  # only created from Settings, never by the assistant
         props = t.args.model_json_schema().get("properties", {})
         params = ", ".join(
             f"{k}: {v.get('type') or '/'.join(x.get('type', '?') for x in v.get('anyOf', []))}"

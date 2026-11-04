@@ -13,6 +13,11 @@ dependencies = [
     "tzdata>=2024.1",
     "psutil>=5.9",
     "dbus-next>=0.2.3; sys_platform == 'linux'",
+    # 0.2: screenshots (screen awareness), QR codes (phone remote), speech recognition and microphone (voice).
+    "pillow>=10.0",
+    "segno>=1.6",
+    "vosk>=0.3.45",
+    "sounddevice>=0.4.6",
 ]
 
 [project.optional-dependencies]
