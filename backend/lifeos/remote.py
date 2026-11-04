@@ -380,6 +380,13 @@ def r_cancel(mid: int) -> dict[str, Any]:
     return missions.cancel(mid)
 
 
+@app.post("/r/panic")
+def r_panic() -> dict[str, Any]:
+    from . import panic
+
+    return panic.trigger("phone")
+
+
 @app.post("/r/stop-all")
 def r_stop_all() -> dict[str, Any]:
     return {"stopped": missions.stop_all()}
@@ -496,10 +503,12 @@ function render(){tabs();if(!S)return;const v=$("#view");$("#gm").textContent=S.
  else if(tab==="pc"){v.innerHTML=`<div class="card"><b>Game mode</b><div class="muted">${S.game_mode.active?"On: "+esc(S.game_mode.game||"")+". The crew is paused and the GPU is free.":"Off. Turns on by itself when a game starts."}</div><div class="row" style="margin-top:8px"><button class="btn grow" onclick="game(true)">On</button><button class="btn ghost grow" onclick="game(false)">Off</button><button class="btn ghost grow" onclick="game(null)">Auto</button></div></div>`+
   `<div class="card"><b>Ask about the PC's screen</b><input id="sq" placeholder="What's this error?" style="margin-top:6px"><button class="btn" style="margin-top:8px" onclick="askScreen()">Look</button><div id="sans" class="muted" style="margin-top:8px;white-space:pre-wrap"></div></div>`+
   `<div class="card"><b>Tell LifeOS</b><input id="cmd" placeholder="e.g. ask Chrono to plan my week" style="margin-top:6px"><button class="btn" style="margin-top:8px" onclick="sayCmd()">Send</button><div id="cans" class="muted" style="margin-top:8px;white-space:pre-wrap"></div></div>`+
-  `<div class="card"><button class="btn bad" style="width:100%" onclick="stopAll()">Stop all missions</button></div>`}}
+  `<div class="card"><button class="btn bad" style="width:100%" onclick="stopAll()">Stop all missions</button>
+  <button class="btn bad" style="width:100%;margin-top:8px" onclick="panicBtn()">PANIC: stop everything and hide LifeOS</button></div>`}}
 async function refresh(){try{S=await api("GET","/r/state");$("#dot").style.background="var(--ok)";if(!["chat","pc"].includes(tab)||!document.activeElement||document.activeElement===document.body)render();else tabs()}catch(e){$("#dot").style.background="var(--bad)"}}
 async function startMission(){const g=$("#goal").value.trim();if(!g)return;try{const m=await api("POST","/r/missions",{goal:g,agent:$("#who").value||null});toast("Mission #"+m.id+" started");refresh()}catch(e){toast(e.message)}}
 async function cancelM(id){await api("POST",`/r/missions/${id}/cancel`).catch(e=>toast(e.message));refresh()}
+async function panicBtn(){const r=await api("POST","/r/panic").catch(e=>toast(e.message));if(r)toast("Panic: "+r.done.join(", "));refresh()}
 async function stopAll(){const r=await api("POST","/r/stop-all").catch(e=>toast(e.message));if(r)toast("Stopped "+r.stopped);refresh()}
 async function decide(id,d){try{const r=await api("POST",`/r/actions/${id}/${d}`);toast((d==="approve"?"Approved: ":"Denied: ")+r.summary)}catch(e){toast(e.message)}refresh()}
 async function answer(id,t){if(!t)return;try{await api("POST",`/r/briefs/${id}/answer`,{text:t});toast("Answer sent")}catch(e){toast(e.message)}refresh()}

@@ -257,6 +257,21 @@ class UpgradeArgs(BaseModel):
     title: str = ""
 
 
+class CouncilArgs(BaseModel):
+    question: str = Field(..., description="The decision to debate, with the context the council needs")
+    members: list[str] = Field(default_factory=list, description="Agent slugs to sit on the council (2-6); empty = a default panel")
+
+
+class FlashcardArgs(BaseModel):
+    topic: str = Field("", description="What to learn, e.g. 'Spanish travel phrases' or 'how TCP works'")
+    path: str = Field("", description="Or a file (in an approved folder) to make cards from")
+    count: int = Field(15, description="How many cards (3-60)")
+
+
+class MiniAppArgs(BaseModel):
+    description: str = Field(..., description="What the tool should do, who it's for and any must-have features")
+
+
 @dataclass
 class Tool:
     name: str
@@ -912,6 +927,36 @@ def _recall(a: RecallArgs, ctx: dict[str, Any]) -> dict[str, Any]:
     return {"summary": out["answer"][:1500], "results": out["results"][:8], "window": out["window"]}
 
 
+def _convene_council(a: CouncilArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import council
+
+    s = council.start(a.question, a.members or None)
+    return {"summary": f"Council {s['id']} convened ({', '.join(s['names'].values())}). The debate runs in the background; "
+                       "the decision appears on the Council page and in the bell.", "council_id": s["id"]}
+
+
+def _make_flashcards(a: FlashcardArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import learn
+
+    try:
+        d = learn.create_deck(topic=a.topic, path=a.path, count=a.count)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Making a flashcard deck \"{d['title']}\" ({a.count} cards). It shows up under Learn in a minute.",
+            "deck_id": d["id"]}
+
+
+def _build_mini_app(a: MiniAppArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import toolsmith
+
+    try:
+        app = toolsmith.build(a.description)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Building the mini app in the background (Tools page, #{app['id']}). It opens in its own "
+                       "window when it's ready.", "app_id": app["id"]}
+
+
 def _prepare_upgrade(a: UpgradeArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     raise ToolError("Self-upgrades are proposed by Forge from Settings → Self-upgrade, not by a tool call")
 
@@ -1027,6 +1072,12 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("recall", "Search the user's own past by time and topic: web pages they visited (browser history), files, "
          "chats, memories, missions. For 'what was that site/file/thing I ... on Tuesday/yesterday/last week'.",
          RecallArgs, "read", "auto", run=_recall),
+    Tool("convene_council", "Have several agents debate a decision and vote (advice only, nothing is done). For hard "
+         "choices with trade-offs: 'should I...', 'which is better...'.", CouncilArgs, "read", "auto", run=_convene_council),
+    Tool("make_flashcards", "Make a flashcard deck (spaced repetition, in Learn) from a topic or a file, to help the user "
+         "learn or memorize something.", FlashcardArgs, "write", "auto", run=_make_flashcards),
+    Tool("build_mini_app", "Build a small single-window tool (timer, converter, tracker, calculator, mini game) as a "
+         "sandboxed app the user opens from the Tools page.", MiniAppArgs, "write", "auto", run=_build_mini_app),
     Tool("apply_self_upgrade", "Apply a LifeOS code change Forge proposed (on a new git branch, tests run first). "
          "Only created from Settings → Self-upgrade.", UpgradeArgs, "destructive", "confirm",
          prepare=_prepare_upgrade, execute=_execute_upgrade, undo=_undo_upgrade),

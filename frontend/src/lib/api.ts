@@ -750,6 +750,43 @@ export interface RecallHit { source: "web" | "chat" | "file" | "memory" | "missi
 export interface RecallAnswer { question: string; answer: string; keywords: string[]; window: { start: string | null; end: string | null; label: string }; widened: string | null; results: RecallHit[]; history_on: boolean }
 export interface RecallStatus { config: { browser_history: boolean; keep_days: number; last_sync: string }; visits: number; per_browser: Record<string, number>; browsers_found: string[] }
 
+// ---------------------------------------------------------------- 0.3 features
+
+export interface CouncilTurn { round: number; agent: string; text: string; seconds: number }
+export interface CouncilVote { agent: string; choice: number; reason: string }
+export interface CouncilSession {
+  id: number; question: string; agents: string[]; rounds: number; transcript: CouncilTurn[]; options: string[]; votes: CouncilVote[];
+  tally: number[]; decision: string | null; summary: string | null; user_choice: string | null; names: Record<string, string>;
+  status: "running" | "voting" | "decided" | "failed" | "stopped"; error: string | null; created_at: string; finished_at: string | null;
+}
+export interface XpAgent {
+  slug: string; name: string; role: string; color: string; icon: string; level: number; rank: string; xp: number; week_xp: number;
+  level_start: number; next_level: number; progress: number; avg_score: number | null; success_rate: number | null;
+  tasks_done: number; tasks_failed: number; good_tasks: number; rated_high: number; arena_wins: number; arena_losses: number;
+  arena_ties: number; councils: number; council_majority: number; lessons: number; work_seconds: number; steps: number;
+}
+export interface XpBoard { agents: XpAgent[]; crew_xp: number; crew_level: number; xp_table: Record<string, number> }
+export interface MoodConfig { enabled: boolean; colors: boolean; music: boolean; volume: number; follow_time: boolean; follow_activity: boolean }
+export interface Mood {
+  config: MoodConfig; phase: "night" | "dawn" | "day" | "dusk"; activity: "idle" | "busy" | "alert" | "focus" | "gaming";
+  counts: { working: number; waiting: number }; palette: { accent: string; tint: string; glow: string };
+  music: { on: boolean; volume: number; tempo: number; intensity: number; scale: string; root: number }; hour: number;
+}
+export interface SfxConfig { enabled: boolean; volume: number; theme: "scifi" | "soft" | "retro"; clicks: boolean }
+export interface PetConfig { enabled: boolean; species: "bot" | "cat" | "slime" | "ghost" | "fox"; name: string; size: number; roam: boolean; speak: boolean }
+export interface MiniApp { id: number; name: string; description: string; icon: string; version: number; status: "building" | "ready" | "failed"; error: string | null; notes: string; busy: boolean; created_at: string; updated_at: string }
+export interface DoctorFinding { severity: "ok" | "info" | "warn" | "bad"; area: string; title: string; detail: string; fix: string }
+export interface DoctorReport { at: string; worst: DoctorFinding["severity"]; findings: DoctorFinding[]; summary: string; seconds: number; counts: Record<string, number> }
+export interface DoctorStatus { config: { weekly: boolean; last_run_at: string; notify: boolean }; busy: boolean; report: DoctorReport | null }
+export interface Deck { id: number; title: string; source: string; status: "making" | "ready" | "failed"; error: string | null; created_at: string; cards: number; due: number; new: number; learned: number; card_list?: Card[] }
+export interface Card { id: number; deck_id: number; front: string; back: string; ease: number; interval_days: number; reps: number; lapses: number; due_at: string; deck_title?: string }
+export interface LearnStats { cards: number; due: number; learned: number; streak: number; reviews_week: number; accuracy_week: number | null; config: { daily_reminder: boolean; new_per_day: number } }
+export interface StoryScene { id: number; idx: number; text: string; choices: string[]; chosen: string | null; image_prompt: string; media_id: number | null; image_status: string | null; image_error: string | null }
+export interface Story { id: number; title: string; premise: string; style: string; narrator: string; status: "writing" | "ready" | "ended" | "failed"; error: string | null; created_at: string; scene_count: number; scenes?: StoryScene[]; cover_media_id?: number | null }
+export interface PanicStatus { active: boolean; since: string | null; automation_paused: boolean; config: { hotkey: boolean; hide_windows: boolean; pause_automation: boolean; unload_models: boolean; mute: boolean; stop_media: boolean }; done?: string[]; hide_windows?: boolean }
+export interface UsbDrive { id: string; label: string; allowed: boolean; present: boolean; mount?: string; free?: number; total?: number; last_backup_at?: string; last_bytes?: number }
+export interface UsbStatus { config: { enabled: boolean; include_media: boolean; keep: number; ask_new: boolean; min_hours: number }; drives: UsbDrive[]; running: string | null; last: { path: string; bytes: number; drive: string; seconds: number } | null; error: string }
+
 export const api = {
   health: () => get<{ ok: boolean; version: string }>("/api/health"),
   dashboard: () => get<Dashboard>("/api/dashboard"),
@@ -1030,4 +1067,64 @@ export const api = {
   recallSearch: (question: string) => post<RecallAnswer>("/api/recall/search", { question }),
   recallSync: () => post<{ added: number; browsers: string[]; errors?: string[] }>("/api/recall/sync"),
   forgetHistory: () => del<{ deleted: number }>("/api/recall/history"),
+
+  // 0.3
+  councils: () => get<CouncilSession[]>("/api/council"),
+  council: (id: number) => get<CouncilSession>(`/api/council/${id}`),
+  councilDefaults: () => get<{ members: string[]; max: number }>("/api/council/defaults"),
+  startCouncil: (question: string, members: string[], rounds: number) => post<CouncilSession>("/api/council", { question, members, rounds }),
+  stopCouncil: (id: number) => post<CouncilSession>(`/api/council/${id}/stop`),
+  chooseCouncil: (id: number, option: number | null) => post<CouncilSession>(`/api/council/${id}/choose`, { option }),
+  councilMission: (id: number) => post<{ id: number }>(`/api/council/${id}/mission`),
+  deleteCouncil: (id: number) => del(`/api/council/${id}`),
+  mood: () => get<Mood>("/api/mood"),
+  setMood: (c: Partial<MoodConfig>) => patch<Mood>("/api/mood", c),
+  xp: () => get<XpBoard>("/api/xp"),
+  sfx: () => get<SfxConfig>("/api/sfx"),
+  setSfx: (c: Partial<SfxConfig>) => patch<SfxConfig>("/api/sfx", c),
+  pet: () => get<PetConfig>("/api/pet"),
+  setPet: (c: Partial<PetConfig>) => patch<PetConfig>("/api/pet", c),
+  miniApps: () => get<MiniApp[]>("/api/mini-apps"),
+  miniApp: (id: number) => get<MiniApp>(`/api/mini-apps/${id}`),
+  buildMiniApp: (description: string) => post<MiniApp>("/api/mini-apps", { description }),
+  reviseMiniApp: (id: number, change: string) => post<MiniApp>(`/api/mini-apps/${id}/revise`, { change }),
+  undoMiniApp: (id: number) => post<MiniApp>(`/api/mini-apps/${id}/undo`),
+  deleteMiniApp: (id: number) => del(`/api/mini-apps/${id}`),
+  miniAppStore: (id: number) => get<Record<string, unknown>>(`/api/mini-apps/${id}/store`),
+  setMiniAppStore: (id: number, key: string, value: unknown, remove = false) => post<Record<string, unknown>>(`/api/mini-apps/${id}/store`, { key, value, remove }),
+  miniAppUrl: (id: number, version: number) => `${BASE}/miniapp/${id}?v=${version}`,
+  doctor: () => get<DoctorStatus>("/api/doctor"),
+  setDoctor: (c: Partial<DoctorStatus["config"]>) => patch<DoctorStatus>("/api/doctor", c),
+  runDoctor: () => post<DoctorReport>("/api/doctor/run"),
+  cleanTemp: () => post<{ removed: number; freed: number; skipped: number; folder: string }>("/api/doctor/clean-temp"),
+  learn: () => get<{ stats: LearnStats; decks: Deck[] }>("/api/learn"),
+  setLearn: (c: Partial<LearnStats["config"]>) => patch<LearnStats>("/api/learn", c),
+  deck: (id: number) => get<Deck>(`/api/learn/decks/${id}`),
+  makeDeck: (d: { topic?: string; text?: string; path?: string; count?: number; title?: string }) => post<Deck>("/api/learn/decks", d),
+  deleteDeck: (id: number) => del(`/api/learn/decks/${id}`),
+  addCard: (deck: number, front: string, back: string) => post<Deck>(`/api/learn/decks/${deck}/cards`, { front, back }),
+  editCard: (id: number, c: { front?: string; back?: string }) => patch<Card>(`/api/learn/cards/${id}`, c),
+  deleteCard: (id: number) => del(`/api/learn/cards/${id}`),
+  importCards: (deck: number, text: string) => post<{ added: number }>(`/api/learn/decks/${deck}/import`, { text }),
+  deckExportUrl: (id: number) => `${BASE}/api/learn/decks/${id}/export`,
+  learnQueue: (deck?: number) => get<Card[]>(`/api/learn/queue${qs({ deck_id: deck })}`),
+  reviewCard: (id: number, grade: number) => post<Card>(`/api/learn/cards/${id}/review`, { grade }),
+  checkCard: (id: number, answer: string) => post<{ correct: boolean; feedback: string; suggested_grade: number; back: string }>(`/api/learn/cards/${id}/check`, { answer }),
+  stories: () => get<{ stories: Story[]; styles: string[] }>("/api/stories"),
+  story: (id: number) => get<Story>(`/api/stories/${id}`),
+  startStory: (premise: string, style: string, narrator: string, pictures: boolean) => post<Story>("/api/stories", { premise, style, narrator, pictures }),
+  chooseStory: (id: number, choice: string, pictures = true) => post<Story>(`/api/stories/${id}/choose`, { choice, pictures }),
+  retryStory: (id: number) => post<Story>(`/api/stories/${id}/retry`),
+  redrawScene: (sceneId: number) => post(`/api/stories/scenes/${sceneId}/picture`),
+  deleteStory: (id: number) => del(`/api/stories/${id}`),
+  storyMarkdownUrl: (id: number) => `${BASE}/api/stories/${id}/markdown`,
+  panic: shared(() => get<PanicStatus>("/api/panic"), 1500),
+  triggerPanic: () => post<PanicStatus>("/api/panic"),
+  clearPanic: () => post<PanicStatus>("/api/panic/clear"),
+  setPanic: (c: Partial<PanicStatus["config"]>) => patch<PanicStatus>("/api/panic", c),
+  usb: () => get<UsbStatus>("/api/usb-backup"),
+  setUsb: (c: Partial<UsbStatus["config"]>) => patch<UsbStatus>("/api/usb-backup", c),
+  allowUsb: (id: string, allowed: boolean) => post<UsbStatus>(`/api/usb-backup/${id}/allow`, { allowed }),
+  runUsb: (id: string) => post<{ path: string; bytes: number }>(`/api/usb-backup/${id}/run`),
+  forgetUsb: (id: string) => del<UsbStatus>(`/api/usb-backup/${id}`),
 };

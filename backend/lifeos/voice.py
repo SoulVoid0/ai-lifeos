@@ -681,6 +681,8 @@ def route(text: str) -> dict[str, Any]:
         return {"kind": "none", "text": ""}
     if HUSH_RE.match(t):
         return {"kind": "hush", "text": t}
+    if re.fullmatch(r"(?:life ?os,? )?(?:panic|panic button|emergency stop|code red)", t):
+        return {"kind": "panic", "text": t}
     if STOP_RE.match(t):
         return {"kind": "stop", "text": t}
     if re.search(r"\bgame mode (on|off)\b|\b(i'?m|i am) (gaming|playing)\b|\b(done|finished) (gaming|playing)\b", t):
@@ -718,6 +720,11 @@ def handle(text: str, speak: bool = True) -> dict[str, Any]:
         if r["kind"] == "hush":
             stop_speaking()
             return {"route": r, "reply": ""}
+        if r["kind"] == "panic":
+            from . import panic
+
+            panic.trigger("voice")
+            return {"route": r, "reply": "", "agent": None}
         if r["kind"] == "stop":
             n = missions.stop_all()
             reply = f"Stopped {n} mission{'s' if n != 1 else ''}." if n else "Nothing was running."

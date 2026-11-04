@@ -10,6 +10,7 @@ import { GpuSettings } from "../components/GpuSettings";
 import { CloudSettings, CrewSettings, IntegrationSettings, NotificationSettings } from "../components/SettingsExtra";
 import { BackupSettings, CloudFolders, CustomToolsSettings, VoiceSettings } from "../components/SpecExtras";
 import { V02Settings } from "../components/V02Settings";
+import { V03Settings } from "../components/V03Settings";
 
 const ACCENTS = ["violet", "blue", "emerald", "cyan", "rose", "amber"];
 const ACCENT_HEX: Record<string, string> = { violet: "#8b5cf6", blue: "#3b82f6", emerald: "#10b981", rose: "#f43f5e", amber: "#f59e0b", cyan: "#06b6d4" };
@@ -170,6 +171,7 @@ export default function Settings() {
 
       <CrewSettings form={form} setForm={setForm} save={save} />
       <V02Settings />
+      <V03Settings />
       <CloudSettings form={form} setForm={setForm} save={save} />
       <IntegrationSettings />
       <CustomToolsSettings />

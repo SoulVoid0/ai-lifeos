@@ -313,6 +313,95 @@ mod desktop {
     }
 }
 
+/// The desktop pet: a small transparent always-on-top window near the bottom-right corner. Its page moves it around.
+#[tauri::command]
+fn set_pet(app: AppHandle, on: bool, size: f64) -> Result<bool, String> {
+    if let Some(w) = app.get_webview_window("pet") {
+        if on {
+            let _ = w.set_size(tauri::LogicalSize::new(size * 1.6 + 80.0, size * 1.4 + 64.0));
+            let _ = w.show();
+            return Ok(true);
+        }
+        let _ = w.destroy();
+        return Ok(false);
+    }
+    if !on {
+        return Ok(false);
+    }
+    let monitor = app
+        .get_webview_window("main")
+        .and_then(|w| w.primary_monitor().ok().flatten())
+        .ok_or("No monitor found")?;
+    let scale = monitor.scale_factor();
+    let (mw, mh) = (monitor.size().width as f64 / scale, monitor.size().height as f64 / scale);
+    let (w, h) = (size * 1.6 + 80.0, size * 1.4 + 64.0);
+    WebviewWindowBuilder::new(&app, "pet", WebviewUrl::App("index.html#/pet".into()))
+        .title("LifeOS pet")
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .focused(false)
+        .always_on_top(true)
+        .inner_size(w, h)
+        .position(mw - w - 40.0, mh - h - 48.0)
+        .visible(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// A Forge-built mini app in its own window (the page frames the sandboxed app).
+#[tauri::command]
+fn open_mini_app(app: AppHandle, id: u32, title: String) -> Result<(), String> {
+    let label = format!("miniapp-{id}");
+    if let Some(w) = app.get_webview_window(&label) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(format!("index.html#/miniapp/{id}").into()))
+        .title(title)
+        .inner_size(900.0, 680.0)
+        .min_inner_size(360.0, 300.0)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Bring the main window forward (the pet and mini apps use it).
+#[tauri::command]
+fn focus_main(app: AppHandle) {
+    show_main(&app);
+}
+
+/// Panic: hide every LifeOS window at once (the wallpaper and pet included).
+#[tauri::command]
+fn panic_hide(app: AppHandle) {
+    hide_all(&app);
+}
+
+fn hide_all(app: &AppHandle) {
+    for (label, w) in app.webview_windows() {
+        if label == "wallpaper" {
+            let _ = w.destroy();
+            #[cfg(windows)]
+            desktop::refresh_wallpaper();
+        } else {
+            let _ = w.hide();
+        }
+    }
+}
+
+/// Ctrl+Shift+F12: the panic button, from anywhere.
+fn panic_hotkey(app: &AppHandle) {
+    hide_all(app);
+    std::thread::spawn(|| {
+        let _ = http("POST", "/api/panic", 20_000);
+    });
+}
+
 /// Ctrl+Shift+Space: grab the screen before LifeOS comes to the front, then open the "ask about the screen" box.
 fn screen_hotkey(app: &AppHandle) {
     let handle = app.clone();
@@ -389,15 +478,21 @@ pub fn run() {
         })
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
+                .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
-                        screen_hotkey(app);
+                        if shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::F12) {
+                            panic_hotkey(app);
+                        } else {
+                            screen_hotkey(app);
+                        }
                     }
                 })
                 .build(),
         )
         .manage(PendingUpdate(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![app_version, check_update, install_update, set_wallpaper])
+        .invoke_handler(tauri::generate_handler![
+            app_version, check_update, install_update, set_wallpaper, set_pet, open_mini_app, panic_hide, focus_main
+        ])
         .setup(|app| {
             let log_dir = app.path().app_log_dir().ok();
             let child = if backend_healthy() { None } else { spawn_backend(log_dir) };
@@ -414,6 +509,7 @@ pub fn run() {
             build_tray(app.handle())?;
             // Another program may own the shortcut already; LifeOS works without it.
             let _ = app.global_shortcut().register(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Space));
+            let _ = app.global_shortcut().register(Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::F12));
             if !std::env::args().any(|a| a == MINIMIZED_FLAG) {
                 show_main(app.handle());
             }

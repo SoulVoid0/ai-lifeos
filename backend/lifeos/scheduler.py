@@ -50,6 +50,30 @@ def _daily_backup() -> object:
     return backup.create() if backup.due() else None
 
 
+def _usb() -> object:
+    from . import usbbackup
+
+    return usbbackup.tick()
+
+
+def _levels() -> object:
+    from . import xp
+
+    return xp.check_levels()
+
+
+def _doctor() -> object:
+    from . import doctor
+
+    return doctor.scheduled()
+
+
+def _learn() -> object:
+    from . import learn
+
+    return learn.remind()
+
+
 class Scheduler:
     def __init__(self) -> None:
         self._stop = threading.Event()
@@ -65,6 +89,10 @@ class Scheduler:
             ("tidy", 60, _tidy),
             ("history", 15 * 60, _history),
             ("self-upgrade", 60 * 60, _self_upgrade),
+            ("usb-backup", 10, _usb),
+            ("levels", 5 * 60, _levels),
+            ("doctor", 6 * 60 * 60, _doctor),
+            ("learn", 30 * 60, _learn),
         ]
         self._last: dict[str, float] = {}
 

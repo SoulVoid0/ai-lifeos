@@ -9,7 +9,7 @@ license=(custom)
 depends=(python labwc sddm xorg-server firefox foot swaybg xdg-desktop-portal-wlr wlr-randr brightnessctl
          pipewire pipewire-pulse wireplumber networkmanager bluez bluez-utils
          mesa vulkan-radeon vulkan-icd-loader curl git noto-fonts noto-fonts-emoji polkit
-         portaudio espeak-ng grim alsa-utils)
+         portaudio espeak-ng grim alsa-utils smartmontools)
 install=lifeos.install
 options=(!strip !debug)
 

@@ -20,6 +20,13 @@ import Projects from "./pages/Projects";
 import Gallery from "./pages/Gallery";
 import Wallpaper from "./pages/Wallpaper";
 import Arena from "./pages/Arena";
+import Council from "./pages/Council";
+import Stats from "./pages/Stats";
+import Tools, { MiniAppWindow } from "./pages/Tools";
+import Learn from "./pages/Learn";
+import Stories from "./pages/Stories";
+import Doctor from "./pages/Doctor";
+import Pet from "./pages/Pet";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -27,6 +34,8 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <HashRouter>
         <Routes>
           <Route path="wallpaper" element={<Wallpaper />} />
+          <Route path="pet" element={<Pet />} />
+          <Route path="miniapp/:id" element={<MiniAppWindow />} />
           <Route element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="computer" element={<Computer />} />
@@ -37,6 +46,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="projects" element={<Projects />} />
             <Route path="gallery" element={<Gallery />} />
             <Route path="arena" element={<Arena />} />
+            <Route path="council" element={<Council />} />
+            <Route path="stats" element={<Stats />} />
+            <Route path="tools" element={<Tools />} />
+            <Route path="learn" element={<Learn />} />
+            <Route path="stories" element={<Stories />} />
+            <Route path="doctor" element={<Doctor />} />
             <Route path="memory" element={<Memory />} />
             <Route path="files" element={<Files />} />
             <Route path="calendar" element={<Calendar />} />

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
-  Activity, Bell, Bot, Brain, CalendarDays, FolderGit2, FolderOpen, Gamepad2, Images, LayoutDashboard, Monitor, Network, Pause, Play, Search,
-  Settings as Cog, Swords, Workflow,
+  Activity, Bell, Bot, Brain, BookOpenText, CalendarDays, FolderGit2, FolderOpen, Gamepad2, GraduationCap, Images, Landmark, LayoutDashboard,
+  Monitor, Network, Pause, Play, Search, Settings as Cog, Stethoscope, Swords, Trophy, Workflow, Wrench,
 } from "lucide-react";
 import { api, type Notification } from "../lib/api";
 import { ago } from "../lib/format";
@@ -15,6 +15,8 @@ import { CommandPalette } from "./CommandPalette";
 import { StatusBar } from "./StatusBar";
 import { SetupScreen } from "./Devices";
 import { GameChip, ScreenAsk, VoiceOrb, useWallpaperAutostart } from "./V02Overlay";
+import { MoodLayer, PanicButton, useEventSounds, usePetAutostart } from "./V03Overlay";
+import { PetOverlay } from "../pages/Pet";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -23,6 +25,12 @@ const NAV = [
   { to: "/station", label: "Station", icon: Gamepad2 },
   { to: "/gallery", label: "Gallery", icon: Images },
   { to: "/arena", label: "Arena", icon: Swords },
+  { to: "/council", label: "Council", icon: Landmark },
+  { to: "/stats", label: "Crew stats", icon: Trophy },
+  { to: "/tools", label: "Tools", icon: Wrench },
+  { to: "/learn", label: "Learn", icon: GraduationCap },
+  { to: "/stories", label: "Stories", icon: BookOpenText },
+  { to: "/doctor", label: "PC doctor", icon: Stethoscope },
   { to: "/assistant", label: "Assistant", icon: Bot },
   { to: "/automations", label: "Automations", icon: Workflow },
   { to: "/projects", label: "Projects", icon: FolderGit2 },
@@ -68,11 +76,8 @@ export function Layout() {
     return () => window.removeEventListener("lifeos:changed", reload);
   }, [settings.reload]);
 
-  useEffect(() => {
-    const accent = settings.data?.theme_accent;
-    const colors: Record<string, string> = { violet: "#8b5cf6", blue: "#3b82f6", emerald: "#10b981", rose: "#f43f5e", amber: "#f59e0b", cyan: "#06b6d4" };
-    document.documentElement.style.setProperty("--accent", colors[accent ?? "violet"] ?? colors.violet);
-  }, [settings.data?.theme_accent]);
+  useEventSounds(notes.data);
+  usePetAutostart();
 
   const paused = settings.data?.automation_paused ?? false;
   const togglePause = async () => {
@@ -99,14 +104,14 @@ export function Layout() {
             </div>
           </div>
         </div>
-        <nav className="flex-1 space-y-0.5 px-2">
+        <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto px-2">
           {NAV.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
               end={to === "/"}
               className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition ${
+                `flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm transition ${
                   isActive ? "bg-accent-soft text-text" : "text-muted hover:bg-panel-2 hover:text-text"
                 }`
               }
@@ -154,6 +159,7 @@ export function Layout() {
           <div className="ml-auto"><StatusBar /></div>
           <ScreenAsk />
           <VoiceOrb />
+          <PanicButton />
           <div className="relative">
             <button className="btn-ghost relative" onClick={() => setBellOpen((o) => !o)} aria-label="Notifications">
               <Bell size={17} />
@@ -201,6 +207,8 @@ export function Layout() {
           <Outlet />
         </main>
         <CommandPalette nav={NAV} />
+        <MoodLayer themeAccent={settings.data?.theme_accent} />
+        {!isDesktop && <PetOverlay />}
         <SetupScreen />
       </div>
     </div>

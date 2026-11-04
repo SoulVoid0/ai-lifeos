@@ -230,19 +230,21 @@ def default_steps(slug: str) -> int:
 # Bumped when DEFAULT_CREW gains new defaults (models, step limits), so existing installs pick them up once.
 # Tools added to built-in agents after their first release; appended on upgrade, keeping the user's own edits.
 ADDED_TOOLS: dict[str, list[str]] = {
-    "planner": ["break_down_task", "replan_task"],
+    "overseer": ["convene_council"],
+    "planner": ["break_down_task", "replan_task", "convene_council"],
     "quick": ["open_workspace", "custom_prompt", "launch_app", "list_apps", "system_status", "list_programs",
               "end_program", "set_volume", "power_action", "wifi", "bluetooth", "set_brightness", "look_at_screen",
               "recall"],
     "files": ["rename_by_content", "system_status"],
-    "research": ["custom_prompt", "look_at_screen", "recall"],
+    "research": ["custom_prompt", "look_at_screen", "recall", "make_flashcards"],
+    "coder": ["build_mini_app"],
     "comms": ["custom_webhook"],
     "memory": ["recall"],
 }
 for _a in DEFAULT_CREW:
     _a["tools"] = list(dict.fromkeys(_a["tools"] + ADDED_TOOLS.get(_a["slug"], [])))
 
-DEFAULTS_VERSION = 10
+DEFAULTS_VERSION = 11
 
 
 def _row(row: Any) -> dict[str, Any]:

@@ -134,6 +134,26 @@ DEFAULTS: dict[str, Any] = {
                      "model": "", "last_run_at": ""},
     # recall.py: memory search, including a copy of browser history (opt-in).
     "recall": {"browser_history": False, "keep_days": 90, "last_sync": ""},
+    # ------------------------------------------------ 0.3 features
+    # xp.py: the last level each agent was seen at (for level-up notes).
+    "xp_levels": {},
+    # mood.py: colors and ambient music follow the time of day and what the crew is doing.
+    "mood": {"enabled": True, "colors": True, "music": False, "volume": 0.25, "follow_time": True,
+             "follow_activity": True},
+    # Sound effects (played by the app; the theme and volume live here so every window agrees).
+    "sfx": {"enabled": True, "volume": 0.5, "theme": "scifi", "clicks": False},
+    # The desktop pet: a small creature that reacts to what the crew is doing.
+    "pet": {"enabled": False, "species": "bot", "name": "Byte", "size": 96, "roam": True, "speak": True},
+    # The panic button: stop everything at once.
+    "panic": {"hotkey": True, "hide_windows": True, "pause_automation": True, "unload_models": True, "mute": True,
+              "stop_media": True, "active": False, "since": "", "paused_by_panic": False},
+    # usbbackup.py: back up to a USB drive when it's plugged in.
+    "usb_backup": {"enabled": False, "drives": {}, "include_media": False, "keep": 5, "ask_new": True,
+                   "min_hours": 12},
+    # doctor.py: weekly PC checkups.
+    "doctor": {"weekly": True, "last_run_at": "", "notify": True},
+    # learn.py: flashcard reminders.
+    "learn": {"daily_reminder": True, "new_per_day": 20, "last_reminder": ""},
 }
 
 
