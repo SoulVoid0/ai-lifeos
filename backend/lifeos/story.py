@@ -170,9 +170,10 @@ def _next(sid: int, choice: str | None, pictures: bool) -> None:
             scene_id = int(cur.lastrowid)
             if idx == 0 and data.get("title"):
                 conn.execute("UPDATE stories SET title = ? WHERE id = ?", (str(data["title"])[:120], sid))
-            conn.execute("UPDATE stories SET status = ? WHERE id = ?", ("ended" if ending else "ready", sid))
         if pictures and image_prompt:
-            picture(scene_id)
+            picture(scene_id)  # queued (not waited for) before the scene shows, so it appears with its placeholder
+        with db.session() as conn:
+            conn.execute("UPDATE stories SET status = ? WHERE id = ?", ("ended" if ending else "ready", sid))
     except Exception as exc:  # noqa: BLE001 - shown on the story, with a retry button
         with db.session() as conn:
             conn.execute("UPDATE stories SET status = 'failed', error = ? WHERE id = ?", (f"{type(exc).__name__}: {exc}"[:400], sid))
