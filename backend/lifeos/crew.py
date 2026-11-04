@@ -354,7 +354,8 @@ def _validate(data: dict[str, Any], creating: bool) -> dict[str, Any]:
             raise ValueError("tts_voice must look like piper:en_US-amy-medium or system:Microsoft Zira Desktop")
         out["tts_voice"] = v
     if data.get("tts_rate") is not None:
-        out["tts_rate"] = max(0.5, min(float(data["tts_rate"]), 2.0))
+        r = float(data["tts_rate"])
+        out["tts_rate"] = 0.0 if r <= 0 else max(0.5, min(r, 2.0))  # 0 = the agent's default speed
     for key, n in (("catchphrases", 8), ("idle_lines", 12)):
         if key in data and data[key] is not None:
             items = [re.sub(r"\s+", " ", str(x)).strip()[:120] for x in data[key]]

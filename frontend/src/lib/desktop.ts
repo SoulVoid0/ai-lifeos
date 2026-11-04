@@ -17,3 +17,4 @@ export function onDesktopEvent<T>(name: string, fn: (payload: T) => void): () =>
   listen<T>(name, (e) => fn(e.payload)).then((u) => (gone ? u() : (off = u)));
   return () => { gone = true; off?.(); };
 }
+export const setWallpaper = (on: boolean) => (isDesktop ? invoke<boolean>("set_wallpaper", { on }) : Promise.resolve(false));

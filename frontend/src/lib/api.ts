@@ -363,6 +363,8 @@ export interface Agent {
   quirks: string;
   catchphrases: string[];
   idle_lines: string[];
+  tts_voice?: string;
+  tts_rate?: number;
 }
 
 export type AgentState = "idle" | "working" | "waiting" | "asking" | "offline";
@@ -700,6 +702,54 @@ export interface DayPlan {
 
 // ---------------------------------------------------------------- endpoints
 
+// ---------------------------------------------------------------- 0.2 features
+
+export interface VoiceConfig {
+  wake_word: boolean; wake_phrase: string; mic: string; stt_model: "small" | "lgraph"; engine: "auto" | "piper" | "system" | "browser";
+  default_voice: string; chime: boolean; speak_agent_chat: boolean; pause_in_games: boolean; listen_seconds: number;
+}
+export interface VoiceJob { item: string; state: "downloading" | "done" | "failed"; done: number; total: number; error: string | null }
+export interface VoiceExchange { heard: string; reply: string; agent: string | null; kind: string; at: string }
+export interface VoiceStatus {
+  config: VoiceConfig; piper: boolean; voices_installed: string[];
+  catalog: { id: string; label: string; installed: boolean }[];
+  stt_models: { key: string; name: string; size: string; label: string; installed: boolean }[];
+  packages: { vosk: boolean; sounddevice: boolean }; system_tts: string | null; jobs: VoiceJob[];
+  listener: { state: string; heard: string; reply: string; agent: string | null; error: string; level: number; since: number };
+  history: VoiceExchange[]; agent_voices: Record<string, { voice: string; rate: number }>;
+}
+export interface Preset { id: string; label: string; tts_voice: string; tts_rate: number; voice: string; quirks: string; catchphrases: string[]; idle_lines: string[] }
+export interface ScreenStatus {
+  config: { model: string; keep_screenshot: boolean; hotkey: boolean };
+  models: { model: string; size: string; why: string }[]; installed: boolean;
+  last: { answer?: string; question?: string; model?: string; busy?: boolean; at?: number; seconds?: number };
+  screenshot_at: number | null; hotkey: string | null;
+}
+export interface ScreenAnswer { answer: string; model: string; question: string; seconds: number }
+export interface ArenaMatch {
+  id: number; prompt: string; a_agent: string; a_model: string; b_agent: string; b_model: string;
+  a_result: string | null; b_result: string | null; a_seconds: number | null; b_seconds: number | null;
+  status: "running" | "ready" | "decided" | "failed"; error: string | null; winner: "a" | "b" | "tie" | null; reason: string | null;
+  a_name: string | null; b_name: string | null; created_at: string; new_lessons?: { id: number; agent: string; text: string }[];
+}
+export interface ArenaRank { key: string; name: string; win: number; loss: number; tie: number; games: number; win_rate: number | null }
+export interface TidyConfig { enabled: boolean; folder: string; mode: "ask" | "auto"; rename: boolean; min_age_minutes: number; interval_minutes: number; last_run_at: string }
+export interface TidyStatus { config: TidyConfig; folder: string; loose_files: number; default_folder: string; os_downloads: string | null }
+export interface TidyPlan { folder: string; moves: (Move & { renamed: boolean })[]; by_category: Record<string, number>; renamed: number }
+export interface RemoteDevice { id: string; name: string; created_at: string; last_seen: string; ip: string }
+export interface RemoteStatus { enabled: boolean; running: boolean; port: number; urls: string[]; pin: string | null; pin_expires_in: number | null; pair_url: string | null; devices: RemoteDevice[]; error: string }
+export interface GameModeConfig { enabled: boolean; auto_detect: boolean; fullscreen: boolean; games: string[]; free_gpu: boolean; stop_comfy: boolean; hold_ai: boolean; reload_after: boolean; notify: boolean }
+export interface GameMode { active: boolean; game: string | null; since: number | null; reason: string | null; manual: boolean | null; config: GameModeConfig; unloaded: number }
+export interface WallpaperConfig { enabled: boolean; fps: number; show_clock: boolean; show_ticker: boolean; dim: number; game_mode?: boolean }
+export interface UpgradeConfig { enabled: boolean; repo_path: string; every_days: number; focus: string; run_tests: boolean; push: boolean; model: string; last_run_at: string }
+export interface UpgradeStatus {
+  config: UpgradeConfig; repo: string | null; git: boolean; model: string | null; busy: boolean;
+  last: { state: string; error: string; at: string | null; action_id: number | null }; proposals: Action[];
+}
+export interface RecallHit { source: "web" | "chat" | "file" | "memory" | "mission" | "activity"; title: string; url?: string; path?: string; snippet?: string; when: string; detail?: string; score: number; mission_id?: number; conversation_id?: number }
+export interface RecallAnswer { question: string; answer: string; keywords: string[]; window: { start: string | null; end: string | null; label: string }; widened: string | null; results: RecallHit[]; history_on: boolean }
+export interface RecallStatus { config: { browser_history: boolean; keep_days: number; last_sync: string }; visits: number; per_browser: Record<string, number>; browsers_found: string[] }
+
 export const api = {
   health: () => get<{ ok: boolean; version: string }>("/api/health"),
   dashboard: () => get<Dashboard>("/api/dashboard"),
@@ -924,4 +974,60 @@ export const api = {
     request<EmailAlerts>("PUT", "/api/email-alerts", e),
   testEmailAlerts: () => post<{ ok: boolean; to?: string; error?: string }>("/api/email-alerts/test"),
   emailMessages: (limit = 15, unread = true) => get<EmailMessage[]>(`/api/email/messages${qs({ limit, unread })}`),
+
+  // 0.2
+  voice: () => get<VoiceStatus>("/api/voice"),
+  setVoice: (c: Partial<VoiceConfig>) => patch<VoiceStatus>("/api/voice", c),
+  microphones: () => get<{ index: number; name: string; default: boolean }[]>("/api/voice/microphones"),
+  systemVoices: () => get<string[]>("/api/voice/system-voices"),
+  installVoice: (items: string[]) => post<VoiceStatus>("/api/voice/install", { items }),
+  say: (text: string, agent?: string | null, voice?: string, rate?: number) => post<{ queued: boolean; engine?: string; text?: string }>("/api/voice/say", { text, agent: agent ?? null, voice, rate }),
+  stopSpeaking: () => post("/api/voice/stop"),
+  listen: () => post<{ ok: boolean }>("/api/voice/listen"),
+  voiceCommand: (text: string, speak = true) => post<{ reply: string; agent: string | null; route: { kind: string } }>("/api/voice/command", { text, speak }),
+  voiceAudioUrl: (text: string, agent?: string | null) => `${BASE}/api/voice/audio${qs({ text, agent })}`,
+  presets: () => get<Preset[]>("/api/crew/presets"),
+  screen: () => get<ScreenStatus>("/api/screen"),
+  setScreen: (c: Partial<ScreenStatus["config"]>) => patch<ScreenStatus>("/api/screen", c),
+  askScreen: (question: string, fresh?: boolean) => post<ScreenAnswer>("/api/screen/ask", { question, fresh }),
+  captureScreen: () => post<{ width: number; height: number }>("/api/screen/capture"),
+  screenshotBlob: async () => {
+    const res = await fetch(`${BASE}/api/screen/last.png?t=${Date.now()}`, { headers: { "X-LifeOS-Client": "1" } });
+    if (!res.ok) throw new ApiError(res.status, "No screenshot yet");
+    return URL.createObjectURL(await res.blob());
+  },
+  arena: () => get<ArenaMatch[]>("/api/arena"),
+  arenaMatch: (id: number) => get<ArenaMatch>(`/api/arena/${id}`),
+  startArena: (prompt: string, a: { agent: string; model?: string }, b: { agent: string; model?: string }) => post<ArenaMatch>("/api/arena", { prompt, a, b }),
+  voteArena: (id: number, winner: "a" | "b" | "tie", reason = "") => post<ArenaMatch>(`/api/arena/${id}/vote`, { winner, reason }),
+  deleteArena: (id: number) => del(`/api/arena/${id}`),
+  arenaBoard: () => get<{ agents: ArenaRank[]; models: ArenaRank[]; rounds: number }>("/api/arena/leaderboard"),
+  tidy: () => get<TidyStatus>("/api/tidy"),
+  setTidy: (c: Partial<TidyConfig>) => patch<TidyStatus>("/api/tidy", c),
+  tidyPreview: () => get<TidyPlan>("/api/tidy/preview"),
+  tidyRun: () => post<{ status: string; action?: Action }>("/api/tidy/run"),
+  remote: () => get<RemoteStatus>("/api/remote"),
+  setRemote: (c: { enabled?: boolean; port?: number }) => patch<RemoteStatus>("/api/remote", c),
+  newRemotePin: () => post<RemoteStatus>("/api/remote/pin"),
+  remoteQr: async () => {
+    const res = await fetch(`${BASE}/api/remote/qr.svg?t=${Date.now()}`, { headers: { "X-LifeOS-Client": "1" } });
+    if (!res.ok) throw new ApiError(res.status, "No QR code");
+    return URL.createObjectURL(await res.blob());
+  },
+  removeRemoteDevice: (id: string) => del<RemoteDevice[]>(`/api/remote/devices/${id}`),
+  remoteFirewall: () => post<{ ok: boolean; note: string }>("/api/remote/firewall"),
+  gameMode: shared(() => get<GameMode>("/api/gamemode"), 2000),
+  setGameModeConfig: (c: Partial<GameModeConfig>) => patch<GameMode>("/api/gamemode", c),
+  setGameMode: (on: boolean | null) => post<GameMode>("/api/gamemode", { on }),
+  detectGame: () => get<{ game: string | null; how: string | null }>("/api/gamemode/detect"),
+  wallpaper: () => get<WallpaperConfig>("/api/wallpaper"),
+  setWallpaperConfig: (c: Partial<WallpaperConfig>) => patch<WallpaperConfig>("/api/wallpaper", c),
+  upgrade: () => get<UpgradeStatus>("/api/upgrade"),
+  setUpgrade: (c: Partial<UpgradeConfig>) => patch<UpgradeStatus>("/api/upgrade", c),
+  proposeUpgrade: (focus?: string) => post<UpgradeStatus>("/api/upgrade/propose", { focus: focus ?? null }),
+  recall: () => get<RecallStatus>("/api/recall"),
+  setRecall: (c: Partial<RecallStatus["config"]>) => patch<RecallStatus>("/api/recall", c),
+  recallSearch: (question: string) => post<RecallAnswer>("/api/recall/search", { question }),
+  recallSync: () => post<{ added: number; browsers: string[]; errors?: string[] }>("/api/recall/sync"),
+  forgetHistory: () => del<{ deleted: number }>("/api/recall/history"),
 };

@@ -347,6 +347,9 @@ def synthesize(text: str, agent_slug: str | None = None, voice: str | None = Non
     ok = False
     if engine in ("auto", "piper") and kind == "piper":
         ok = _piper_wav(text, name, r, out)
+        if (not ok and piper_binary() and name in CATALOG and name not in installed_voices()
+                and _jobs.get(f"voice:{name}", {}).get("state") != "failed"):
+            install([f"voice:{name}"])  # fetch it in the background; this line uses another voice, the next one this
         if not ok and engine == "auto" and piper_binary():
             installed = installed_voices()
             if installed:  # its own voice isn't downloaded: any Piper voice beats the robot voice

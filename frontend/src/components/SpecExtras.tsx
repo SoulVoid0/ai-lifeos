@@ -399,11 +399,17 @@ export function BackupSettings({ form, setForm, save }: Props) {
 
 // ---------------------------------------------------------------- voice replies
 
-export function speak(text: string) {
+function browserSpeak(text: string) {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
   const clean = text.replace(/```[\s\S]*?```/g, " code block. ").replace(/[*_#`>|]/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").slice(0, 1500);
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(new SpeechSynthesisUtterance(clean));
+}
+
+/** Read text aloud: with the agent's own local voice (Piper or the system voice, played by the backend), or the
+ * browser's voice when that's chosen or the backend can't speak. */
+export function speak(text: string, agent: string | null = "overseer") {
+  api.say(text, agent).then((r) => { if (!r.queued) browserSpeak(text); }).catch(() => browserSpeak(text));
 }
 
 export function VoiceSettings({ form, save }: Props) {
@@ -412,7 +418,7 @@ export function VoiceSettings({ form, save }: Props) {
       <input type="checkbox" className="mt-1 accent-[var(--color-accent)]" checked={form.speak_replies ?? false}
         onChange={(e) => save({ speak_replies: e.target.checked })} />
       <span className="inline-flex items-center gap-1"><Volume2 size={13} /> Read the assistant's replies aloud
-        <span className="block text-xs text-muted">&nbsp;Uses the voice built into Windows, so no GPU or download is needed.</span></span>
+        <span className="block text-xs text-muted">&nbsp;In each agent's own voice (Settings → Voice), or the voice built into Windows.</span></span>
     </label>
   );
 }

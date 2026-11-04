@@ -936,7 +936,10 @@ def rate_task(task_id: int, body: RatingIn) -> dict[str, Any]:
 
 @app.post("/api/crew/agents/{slug}/chat")
 def chat_with_agent(slug: str, body: AgentChatIn) -> dict[str, Any]:
-    return missions.talk(slug, body.message, [t.model_dump() for t in body.history])
+    out = missions.talk(slug, body.message, [t.model_dump() for t in body.history])
+    if out.get("reply") and voice.cfg()["speak_agent_chat"]:
+        voice.say(out["reply"], slug)  # in the agent's own voice
+    return out
 
 
 @app.get("/api/crew/agents/{slug}/activity")

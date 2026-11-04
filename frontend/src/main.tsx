@@ -18,12 +18,15 @@ import World from "./pages/World";
 import Automations from "./pages/Automations";
 import Projects from "./pages/Projects";
 import Gallery from "./pages/Gallery";
+import Wallpaper from "./pages/Wallpaper";
+import Arena from "./pages/Arena";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <ToastProvider>
       <HashRouter>
         <Routes>
+          <Route path="wallpaper" element={<Wallpaper />} />
           <Route element={<Layout />}>
             <Route index element={<Dashboard />} />
             <Route path="computer" element={<Computer />} />
@@ -33,6 +36,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="automations" element={<Automations />} />
             <Route path="projects" element={<Projects />} />
             <Route path="gallery" element={<Gallery />} />
+            <Route path="arena" element={<Arena />} />
             <Route path="memory" element={<Memory />} />
             <Route path="files" element={<Files />} />
             <Route path="calendar" element={<Calendar />} />

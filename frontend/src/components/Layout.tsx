@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   Activity, Bell, Bot, Brain, CalendarDays, FolderGit2, FolderOpen, Gamepad2, Images, LayoutDashboard, Monitor, Network, Pause, Play, Search,
-  Settings as Cog, Workflow,
+  Settings as Cog, Swords, Workflow,
 } from "lucide-react";
 import { api, type Notification } from "../lib/api";
 import { ago } from "../lib/format";
@@ -14,6 +14,7 @@ import { isDesktop } from "../lib/desktop";
 import { CommandPalette } from "./CommandPalette";
 import { StatusBar } from "./StatusBar";
 import { SetupScreen } from "./Devices";
+import { GameChip, ScreenAsk, VoiceOrb, useWallpaperAutostart } from "./V02Overlay";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -21,6 +22,7 @@ const NAV = [
   { to: "/crew", label: "Control Center", icon: Network },
   { to: "/station", label: "Station", icon: Gamepad2 },
   { to: "/gallery", label: "Gallery", icon: Images },
+  { to: "/arena", label: "Arena", icon: Swords },
   { to: "/assistant", label: "Assistant", icon: Bot },
   { to: "/automations", label: "Automations", icon: Workflow },
   { to: "/projects", label: "Projects", icon: FolderGit2 },
@@ -41,6 +43,7 @@ export function Layout() {
   const crew = useAsync(api.crewStatus, [], 5000);
   const health = useAsync(api.health, [], 15000);
   const seen = useRef<Set<number>>(new Set());
+  useWallpaperAutostart();
   const primed = useRef(false);
 
   // Surface new reminders, crew questions and workflow summaries as toasts and OS notifications.
@@ -147,7 +150,10 @@ export function Layout() {
             />
           </form>
           {paused && <span className="chip border-warn/40 text-warn">Automation paused</span>}
+          <GameChip />
           <div className="ml-auto"><StatusBar /></div>
+          <ScreenAsk />
+          <VoiceOrb />
           <div className="relative">
             <button className="btn-ghost relative" onClick={() => setBellOpen((o) => !o)} aria-label="Notifications">
               <Bell size={17} />

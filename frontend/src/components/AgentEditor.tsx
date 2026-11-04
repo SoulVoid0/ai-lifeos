@@ -41,7 +41,7 @@ export function AgentEditor({ agent, tools, onClose }: { agent: Agent | null; to
       const body = { name: form.name, role: form.role, description: form.description, persona: form.persona, model: form.model,
         tools: form.tools, color: form.color, icon: form.icon, max_steps: form.max_steps, enabled: form.enabled,
         candidates: form.candidates ?? [], voice: form.voice ?? "", quirks: form.quirks ?? "",
-        catchphrases: form.catchphrases ?? [], idle_lines: form.idle_lines ?? [] };
+        catchphrases: form.catchphrases ?? [], idle_lines: form.idle_lines ?? [], tts_voice: form.tts_voice ?? "", tts_rate: form.tts_rate ?? 0 };
       if (creating) await api.createAgent({ ...body, name: form.name ?? "" });
       else await api.updateAgent(agent.slug, body);
       toast(creating ? `Recruited ${form.name}` : `Saved ${form.name}`);
@@ -152,7 +152,7 @@ export function AgentEditor({ agent, tools, onClose }: { agent: Agent | null; to
 
         <div className="mt-4">
           <div className="mb-2 text-sm font-semibold">Personality</div>
-          <PersonalityFields value={{ voice: form.voice ?? "", quirks: form.quirks ?? "", catchphrases: form.catchphrases ?? [], idle_lines: form.idle_lines ?? [] }}
+          <PersonalityFields slug={agent?.slug} value={{ voice: form.voice ?? "", quirks: form.quirks ?? "", catchphrases: form.catchphrases ?? [], idle_lines: form.idle_lines ?? [], tts_voice: form.tts_voice ?? "", tts_rate: form.tts_rate ?? 0 }}
             onChange={(v) => setForm((f) => ({ ...f, ...v }))} />
         </div>
 
