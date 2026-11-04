@@ -266,7 +266,14 @@ function EmailAlertSettings() {
           <Toggle key={key} checked={st.events[key]} onChange={(v) => put({ events: { ...st.events, [key]: v } })} label={label} />
         ))}
       </div>
-      <p className="mt-1 text-[11px] text-muted">Approvals and questions from the same mission send at most one email every 10 minutes.</p>
+      <div className="mt-3">
+        <Toggle checked={st.buttons} onChange={(v) => put({ buttons: v })} label="Approve, Deny and answer buttons in the email"
+          hint={st.buttons_inbox
+            ? `A button opens a ready-made email to ${st.buttons_inbox}; press Send and LifeOS acts on it within a minute while this PC is on.`
+            : "Needs an inbox to read the replies: use Gmail or Outlook here, or fill in the read-only email (IMAP) above."} />
+        {st.replies.last_error && <p className="mt-1 text-xs text-danger">Reading replies failed: {st.replies.last_error}</p>}
+      </div>
+      <p className="mt-1 text-[11px] text-muted">Approvals and questions that come in together are sent as one email.</p>
     </div>
   );
 }

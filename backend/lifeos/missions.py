@@ -661,10 +661,7 @@ def _wait_action(mid: int, task: dict[str, Any], agent: dict[str, Any], action: 
     event(mid, "approval", f"{agent['name']} is waiting for your approval: {action['summary']}", agent=agent["slug"],
           task_id=task["id"], data={"action_id": action["id"]})
     _notify(f"{agent['name']} needs your approval", action["summary"])
-    mailer.notify("approval", f"{agent['name']} needs your approval",
-                  f"{agent['name']} is waiting for your approval on mission {mid} (\"{_goal(mid)[:200]}\"):\n\n"
-                  f"{action['summary']}\n\nApprove or reject it in AI LifeOS. The task is paused until you do.",
-                  mission_id=mid)
+    mailer.needs_you(mid)
     _limiter.release()
     try:
         cancel = _cancel_event(mid)
@@ -698,9 +695,7 @@ def _ask(mid: int, task_id: int | None, agent_slug: str, question: str, options:
     event(mid, "brief", f"{name} asks: {question[:300]}", agent=agent_slug, task_id=task_id,
           data={"brief_id": bid, "options": options})
     _notify(f"{name} has a question", question)
-    mailer.notify("question", f"{name} has a question", f"{name} asks, on mission {mid} (\"{_goal(mid)[:200]}\"):\n\n"
-                  f"{question}\n\n" + ("Options:\n" + "\n".join(f"- {o}" for o in options) + "\n\n" if options else "")
-                  + "Answer it in AI LifeOS. The task is paused until you do.", mission_id=mid)
+    mailer.needs_you(mid)
     held = task_id is not None
     if held:
         _limiter.release()
