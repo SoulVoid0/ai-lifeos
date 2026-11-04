@@ -110,7 +110,7 @@ DEFAULTS: dict[str, Any] = {
     "email": {"host": "", "port": 993, "username": "", "folder": "INBOX"},
     # Email alerts over SMTP (mailer.py); the password is in the vault.
     "email_alerts": {"enabled": False, "to": "", "host": "smtp.gmail.com", "port": 465, "username": "",
-                     "security": "ssl", "events": {"mission_done": True, "mission_failed": True, "approval": True,
+                     "security": "ssl", "buttons": True, "events": {"mission_done": True, "mission_failed": True, "approval": True,
                                                    "question": True, "workflow": False}},
 }
 
