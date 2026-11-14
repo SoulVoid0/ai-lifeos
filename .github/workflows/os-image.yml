@@ -53,7 +53,7 @@ jobs:
           make -C apartment
           cp apartment/lifeos-apartment os/arch/pkg/src-stage/lifeos-apartment-bin
 
-      - name: Build the lsiw package (LSIW with C: at /)
+      - name: "Build the lsiw package (LSIW with C: at /)"
         run: |
           chown -R builder os/arch/lsiw
           cd os/arch/lsiw && sudo -u builder makepkg --nodeps --noconfirm
