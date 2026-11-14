@@ -634,7 +634,12 @@ static void find_target(void)
     }
 }
 
-static void set_relative(bool on) { SDL_SetRelativeMouseMode(on ? SDL_TRUE : SDL_FALSE); }
+/* Some VMs (Hyper-V, VirtualBox with mouse integration) only have an absolute pointer, which gives no motion while
+ * the mouse is captured. Right-drag looks around with plain cursor positions instead; once used, the apartment stops
+ * capturing the mouse so the cursor stays visible. Arrow keys turn too. */
+static bool drag_look, dragging;
+static int drag_x, drag_y;
+static void set_relative(bool on) { SDL_SetRelativeMouseMode(on && !drag_look ? SDL_TRUE : SDL_FALSE); }
 
 static void open_mode(int m)
 {
@@ -1245,7 +1250,7 @@ static void draw_panels(void)
     case M_HELP: {
         panel(x, y, w, h, "How the apartment works");
         const char *help =
-            "WASD or arrows: walk  ·  Shift: run  ·  Mouse: look\n"
+            "WASD or Up/Down: walk  ·  Shift: run  ·  Mouse, Left/Right arrows or right-drag: look  ·  PgUp/PgDn: look up/down\n"
             "E: talk to a crew member, sit on the couch, use the TV, lie in bed, use the PC\n"
             "Esc: menu  ·  P: shop  ·  C: decorate  ·  F1: this help  ·  F2: graphics quality\n\n"
             "The crew lives here. They follow the real clock: they sleep in the AI bedrooms at night, eat in the kitchen "
@@ -1375,8 +1380,12 @@ static void update_player(float dt)
         float f = 0, s = 0;
         if (ks[SDL_SCANCODE_W] || ks[SDL_SCANCODE_UP]) f += 1;
         if (ks[SDL_SCANCODE_S] || ks[SDL_SCANCODE_DOWN]) f -= 1;
-        if (ks[SDL_SCANCODE_D] || ks[SDL_SCANCODE_RIGHT]) s += 1;
-        if (ks[SDL_SCANCODE_A] || ks[SDL_SCANCODE_LEFT]) s -= 1;
+        if (ks[SDL_SCANCODE_D]) s += 1;
+        if (ks[SDL_SCANCODE_A]) s -= 1;
+        if (ks[SDL_SCANCODE_LEFT]) P.yaw += 2.2f * dt;
+        if (ks[SDL_SCANCODE_RIGHT]) P.yaw -= 2.2f * dt;
+        if (ks[SDL_SCANCODE_PAGEUP]) P.pitch = clampf(P.pitch + 1.4f * dt, -1.45f, 1.45f);
+        if (ks[SDL_SCANCODE_PAGEDOWN]) P.pitch = clampf(P.pitch - 1.4f * dt, -1.45f, 1.45f);
         float sp = (ks[SDL_SCANCODE_LSHIFT] || ks[SDL_SCANCODE_RSHIFT]) ? 4.2f : 2.4f;
         float len = sqrtf(f * f + s * s);
         if (len > 0) {
@@ -1549,19 +1558,27 @@ int main(int argc, char **argv)
             case SDL_MOUSEMOTION:
                 mouse_x = ev.motion.x; mouse_y = ev.motion.y;
                 if (SDL_GetRelativeMouseMode()) look(ev.motion.xrel, ev.motion.yrel);
+                else if (dragging) { look((ev.motion.x - drag_x) * 2, (ev.motion.y - drag_y) * 2); drag_x = ev.motion.x; drag_y = ev.motion.y; }
                 else if (is_panel(mode)) {
                     int ww, wh; SDL_GetWindowSize(win, &ww, &wh);
                     int r = row_at(mouse_x * WIN_W / (ww ? ww : 1), mouse_y * WIN_H / (wh ? wh : 1));
                     if (r >= 0) menu_sel = row_first() + r;
                 }
                 break;
+            case SDL_MOUSEBUTTONUP:
+                if (ev.button.button == SDL_BUTTON_RIGHT) dragging = false;
+                break;
             case SDL_MOUSEBUTTONDOWN:
-                if (ev.button.button == SDL_BUTTON_LEFT) {
+                if (ev.button.button == SDL_BUTTON_RIGHT && (mode == M_WALK || mode == M_SIT || mode == M_LIE)) {
+                    drag_look = dragging = true;
+                    set_relative(false);
+                    drag_x = ev.button.x; drag_y = ev.button.y;
+                } else if (ev.button.button == SDL_BUTTON_LEFT) {
                     if (is_panel(mode)) {
                         int ww, wh; SDL_GetWindowSize(win, &ww, &wh);
                         handle_click(ev.button.x * WIN_W / (ww ? ww : 1), ev.button.y * WIN_H / (wh ? wh : 1));
                     } else if (mode == M_WALK) {
-                        if (!SDL_GetRelativeMouseMode()) set_relative(true);
+                        if (!SDL_GetRelativeMouseMode() && !drag_look) set_relative(true);
                         else if (target.kind != I_NONE) interact();
                     }
                 }
