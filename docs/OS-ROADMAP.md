@@ -91,6 +91,7 @@ updating it is `sudo pacman -Syu` once the package repository is online. Build: 
    (4 GB or more) with Rufus in DD mode.
 2. Boot from the stick (F12/F8 boot menu). It starts straight into LifeOS as the user `lifeos` (password `lifeos`),
    without installing anything, so you can try it safely. Nothing is saved on the stick.
-3. To install, open a terminal (Super+Enter) and run `lifeos-install`. The Arch installer asks for the disk
-   (**it is erased**, so never pick your Windows disk), your user and password, language and time zone.
+3. To install, boot the AI-LifeOS-Installer ISO (or run `lifeos-install` on the live system). The LifeOS installer asks for the
+   language, keyboard, time zone, the disk (erase it, use its free space next to Windows, or replace one partition),
+   your account and password, and how LSIW is set up.
 4. After restarting, log in. Ollama uses the GPU through Vulkan. For images and video, run `lifeos-install-comfyui`.
