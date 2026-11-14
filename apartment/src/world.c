@@ -823,34 +823,65 @@ void world_build(void)
     C_TRIM = rgb(246, 244, 238); C_WOOD = rgb(176, 134, 92); C_DARKWOOD = rgb(96, 66, 44);
     C_METAL = rgb(150, 154, 160); C_WHITE = rgb(246, 246, 246); C_BLACK = rgb(22, 22, 26); C_CEIL = rgb(236, 234, 230);
     W.ncolliders = W.nwalls = W.nspots = W.ninters = 0;
-    if (W.list) glDeleteLists(W.list, 1);
-    W.list = glGenLists(1);
+    if (W.list) glDeleteLists(W.list, 1 + NROOMS);
+    /* one display list for what every room shares, then one per room so rooms outside the view can be skipped */
+    W.list = glGenLists(1 + NROOMS);
     glNewList(W.list, GL_COMPILE);
-    for (int r = 0; r < NROOMS; r++) floor_room(r);
     ceiling();
-    for (int r = 0; r < NROOMS; r++) {
-        Col paint = item_col(SHOP.lay.wall[r], rgb(230, 224, 210));
-        if (r == R_HALL) {
-            /* the hallway's long walls are the rooms' hallway sides */
-            room_side(r, 0, paint); room_side(r, 1, paint); room_side(r, 2, paint); room_side(r, 3, paint);
-            continue;
-        }
-        for (int s = 0; s < 4; s++) room_side(r, s, paint);
-    }
     door_frames();
     window_frames();
-    wall_colliders();
-    living_room();
-    master_bedroom();
-    bathroom();
-    ai_room(R_AI1);
-    ai_room(R_AI2);
-    kitchen();
-    work_room();
-    hallway();
     glEndList();
+    wall_colliders();
+    for (int r = 0; r < NROOMS; r++) {
+        glNewList(W.list + 1 + r, GL_COMPILE);
+        floor_room(r);
+        Col paint = item_col(SHOP.lay.wall[r], rgb(230, 224, 210));
+        for (int s2 = 0; s2 < 4; s2++) room_side(r, s2, paint);
+        switch (r) {
+        case R_LIVING: living_room(); break;
+        case R_MASTER: master_bedroom(); break;
+        case R_BATH: bathroom(); break;
+        case R_AI1: ai_room(R_AI1); break;
+        case R_AI2: ai_room(R_AI2); break;
+        case R_KITCHEN: kitchen(); break;
+        case R_WORK: work_room(); break;
+        default: hallway(); break;
+        }
+        glEndList();
+    }
     W.spawn = v3(5.0f, 0, 8.0f);
     for (int i = 0; i < W.nspots; i++) W.spots[i].occupant = -1;
+}
+
+/* Draws the static apartment, skipping rooms entirely outside the view (frustum test on each room's box). */
+void world_draw_static(void)
+{
+    float pm[16], mv[16], m[16];
+    glGetFloatv(GL_PROJECTION_MATRIX, pm);
+    glGetFloatv(GL_MODELVIEW_MATRIX, mv);
+    for (int c = 0; c < 4; c++)
+        for (int r = 0; r < 4; r++) {
+            float v = 0;
+            for (int k = 0; k < 4; k++) v += pm[k * 4 + r] * mv[c * 4 + k];
+            m[c * 4 + r] = v;
+        }
+    float pl[6][4];
+    for (int i = 0; i < 6; i++) {
+        int row = i / 2;
+        float sg = (i & 1) ? -1.0f : 1.0f;
+        for (int c = 0; c < 4; c++) pl[i][c] = m[c * 4 + 3] + sg * m[c * 4 + row];
+    }
+    glCallList(W.list);
+    for (int r = 0; r < NROOMS; r++) {
+        const Rect *q = &ROOM_RECT[r];
+        float lo[3] = {q->x0 - 0.6f, -0.1f, q->z0 - 0.6f}, hi[3] = {q->x1 + 0.6f, H + 0.1f, q->z1 + 0.6f};
+        bool visible = true;
+        for (int i = 0; i < 6 && visible; i++) {
+            float px = pl[i][0] >= 0 ? hi[0] : lo[0], py = pl[i][1] >= 0 ? hi[1] : lo[1], pz = pl[i][2] >= 0 ? hi[2] : lo[2];
+            if (pl[i][0] * px + pl[i][1] * py + pl[i][2] * pz + pl[i][3] < 0) visible = false;
+        }
+        if (visible) glCallList(W.list + 1 + r);
+    }
 }
 
 /* ------------------------------------------------------------------ dynamic */

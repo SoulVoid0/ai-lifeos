@@ -8,7 +8,8 @@ KDE Plasma desktop.
 |---|---|
 | Walk / run / look | WASD or arrows, Shift, mouse |
 | Interact | E (talk to an agent, sit on the couch, TV, bed, PC, shop kiosk, whiteboard) |
-| Menu / shop / decorate / help | Esc / P / C / F1 |
+| Menu (Return to the PC, Settings, Quit) / shop / decorate / help | Esc / P / C / F1 |
+| Look without a captured mouse (Hyper-V, VirtualBox) | Left/Right arrows, PgUp/PgDn, or hold the right mouse button and drag |
 | Graphics quality | F2 (Low renders at half resolution and 30 fps; picked automatically on software rendering) |
 | Use the PC | E at the desk: the apartment closes and Plasma is yours |
 | Back to the apartment | Shift+F4 on the Plasma desktop (or "Back to the apartment" in the menu) |
@@ -35,3 +36,8 @@ LifeOS Tasks, LifeOS Crew). Move or remove them in Plasma's edit mode; add them 
 Code: `apartment/` (C, SDL2, OpenGL 1.x, SDL2_ttf, libcurl), session scripts in `os/files/usr/bin/lifeos-apartment*`,
 `lifeos-desktop-setup`, `lifeos-screens`; widgets in `os/files/usr/share/plasma/plasmoids/`; LSIW packaging in
 `os/arch/lsiw/`. Try it on any Linux desktop: `make -C apartment && LIFEOS_APARTMENT_WINDOWED=1 apartment/lifeos-apartment`.
+
+**Settings** (Esc > Settings): graphics quality, mouse sensitivity and invert, mouse look mode (captured, or right-drag
+for VMs), walking and turn speed, field of view, frame rate limit (30/45/60/none), "Save power when idle" (5 fps in the
+background, 10 fps after a minute without input unless the TV plays), and every movement key can be rebound.
+While the apartment is up, KDE's shortcuts (Meta/start menu, Alt+Tab) are blocked: KDE is reached through the PC only.

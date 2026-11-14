@@ -158,6 +158,7 @@ void world_build(void);                  /* (re)compiles the static geometry fro
 int room_at(float x, float z);
 bool collide_circle(float *x, float *z, float r);
 bool sight_clear(float ax, float az, float bx, float bz);
+void world_draw_static(void);             /* the compiled rooms, skipping ones outside the view */
 void world_draw_dynamic(float t, float sky_k);   /* windows, screens, aquarium fish, fire... */
 Col sky_color(float *k_out);             /* from the real clock */
 void door_points(int room, V3 *inside, V3 *outside);

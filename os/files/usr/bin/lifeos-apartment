@@ -16,12 +16,19 @@ log="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos"
 mkdir -p "$log"
 args="$*"
 crashes=0
+# While the apartment is up, the Meta key must not open KDE's start menu (KDE is only reached through the PC).
+# The apartment also inhibits desktop shortcuts itself; this covers KWin's modifier-only Meta shortcut.
+kwin_reconfigure() { dbus-send --session --type=method_call --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure >/dev/null 2>&1; }
+if command -v kwriteconfig6 >/dev/null; then
+  kwriteconfig6 --file kwinrc --group ModifierOnlyShortcuts --key Meta "" && kwin_reconfigure
+  trap 'kwriteconfig6 --file kwinrc --group ModifierOnlyShortcuts --key Meta --delete; kwin_reconfigure' EXIT
+fi
 while :; do
   started=$(date +%s)
   "$BIN" $args >>"$log/apartment.log" 2>&1
   code=$?
   # 0: closed or logged out, 10: the user went to the PC (KDE desktop). Anything else is a crash.
-  [ "$code" -eq 0 ] || [ "$code" -eq 10 ] && exit 0
+  [ "$code" -eq 0 ] || [ "$code" -eq 10 ] && exit 0  # the EXIT trap gives the Meta key back to KDE
   [ $(( $(date +%s) - started )) -lt 30 ] && crashes=$((crashes + 1)) || crashes=0
   if [ "$crashes" -ge 3 ]; then
     notify-send -a "LifeOS" "The apartment keeps closing" "You're on the KDE desktop. Details: $log/apartment.log. Press Shift+F4 to try again." 2>/dev/null

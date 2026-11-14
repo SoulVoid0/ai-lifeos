@@ -29,7 +29,28 @@ static bool quality_saved;
 /* ------------------------------------------------------------------ player */
 static struct { float x, z, yaw, pitch, eye; } P = {5, 8, 0, 0, 1.62f};
 
-enum { M_WALK, M_CHAT, M_MENU, M_SHOP, M_DECOR, M_VIDEOS, M_SETTINGS, M_SIT, M_LIE, M_PC_IN, M_PC_OUT, M_HELP, M_BOARD };
+/* ------------------------------------------------------------------ controls (rebindable in Settings) */
+enum { K_FWD, K_BACK, K_LEFT, K_RIGHT, K_RUN, K_USE, K_TURNL, K_TURNR, K_LOOKU, K_LOOKD, NKEYS };
+static const char *KEY_NAMES[NKEYS] = {"Walk forward", "Walk back", "Step left", "Step right", "Run (hold)",
+                                       "Interact / talk", "Turn left", "Turn right", "Look up", "Look down"};
+static const char *KEY_IDS[NKEYS] = {"fwd", "back", "left", "right", "run", "use", "turnl", "turnr", "looku", "lookd"};
+static const SDL_Scancode KEY_DEF[NKEYS] = {SDL_SCANCODE_W, SDL_SCANCODE_S, SDL_SCANCODE_A, SDL_SCANCODE_D,
+                                            SDL_SCANCODE_LSHIFT, SDL_SCANCODE_E, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT,
+                                            SDL_SCANCODE_PAGEUP, SDL_SCANCODE_PAGEDOWN};
+static SDL_Scancode KEYS[NKEYS] = {SDL_SCANCODE_W, SDL_SCANCODE_S, SDL_SCANCODE_A, SDL_SCANCODE_D,
+                                   SDL_SCANCODE_LSHIFT, SDL_SCANCODE_E, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT,
+                                   SDL_SCANCODE_PAGEUP, SDL_SCANCODE_PAGEDOWN};
+static float walk_speed = 1.0f, turn_speed = 1.0f;
+static int fps_limit = 60;        /* 30, 45, 60, or 0 = no limit (vsync only) */
+static bool idle_save = true;     /* drop to a few frames per second when idle or in the background */
+static Uint32 last_input_ms;
+static bool has_focus = true;
+static int rebinding = -1;       /* the key row waiting for a key press, or -1 */
+/* Some VMs (Hyper-V, VirtualBox with mouse integration) only have an absolute pointer, which gives no motion while
+ * the mouse is captured. "Drag" look mode leaves the cursor free and looks around while the right button is held. */
+static bool drag_look;
+
+enum { M_WALK, M_CHAT, M_MENU, M_SHOP, M_DECOR, M_VIDEOS, M_SETTINGS, M_SIT, M_LIE, M_PC_IN, M_PC_OUT, M_HELP, M_BOARD, M_QUIT };
 static int mode = M_WALK, back_mode = M_WALK;
 static float anim_t;
 static V3 anim_from; static float anim_yaw0, anim_pitch0;
@@ -93,13 +114,15 @@ static void write_file(const char *path, const char *data)
 
 static void save_state(bool at_pc)
 {
-    char path[600], buf[1024];
+    char path[600], buf[2048];
     snprintf(path, sizeof path, "%s/apartment.ini", state_dir());
-    snprintf(buf, sizeof buf,
+    int n = snprintf(buf, sizeof buf,
              "x=%.3f\nz=%.3f\nyaw=%.3f\npitch=%.3f\nquality=%d\nsens=%.2f\ninvert=%d\nfov=%.0f\nvolume=%d\n"
              "fps=%d\nnames=%d\ndisplay=%d\nat_pc=%d\n",
              P.x, P.z, P.yaw, P.pitch, CFG.quality, CFG.sens, CFG.invert, CFG.fov, CFG.volume, CFG.show_fps,
              CFG.show_names, CFG.display, at_pc);
+    n += snprintf(buf + n, sizeof buf - n, "walk=%.2f\nturn=%.2f\ndrag=%d\nfps_limit=%d\nidle_save=%d\n", walk_speed, turn_speed, drag_look, fps_limit, idle_save);
+    for (int i = 0; i < NKEYS && n < (int)sizeof buf - 40; i++) n += snprintf(buf + n, sizeof buf - n, "key_%s=%d\n", KEY_IDS[i], (int)KEYS[i]);
     write_file(path, buf);
 }
 
@@ -126,6 +149,15 @@ static void load_state(void)
         else if (!strcmp(k, "fps")) CFG.show_fps = atoi(v);
         else if (!strcmp(k, "names")) CFG.show_names = atoi(v);
         else if (!strcmp(k, "display")) CFG.display = atoi(v);
+        else if (!strcmp(k, "walk")) walk_speed = clampf((float)atof(v), 0.5f, 2.0f);
+        else if (!strcmp(k, "turn")) turn_speed = clampf((float)atof(v), 0.3f, 3.0f);
+        else if (!strcmp(k, "drag")) drag_look = atoi(v);
+        else if (!strcmp(k, "fps_limit")) fps_limit = atoi(v);
+        else if (!strcmp(k, "idle_save")) idle_save = atoi(v);
+        else if (!strncmp(k, "key_", 4)) {
+            for (int i = 0; i < NKEYS; i++)
+                if (!strcmp(k + 4, KEY_IDS[i])) { int sc = atoi(v); if (sc > 0 && sc < SDL_NUM_SCANCODES) KEYS[i] = (SDL_Scancode)sc; }
+        }
     }
     free(b);
     CFG.quality = CFG.quality < 0 ? 0 : CFG.quality > 2 ? 2 : CFG.quality;
@@ -637,7 +669,7 @@ static void find_target(void)
 /* Some VMs (Hyper-V, VirtualBox with mouse integration) only have an absolute pointer, which gives no motion while
  * the mouse is captured. Right-drag looks around with plain cursor positions instead; once used, the apartment stops
  * capturing the mouse so the cursor stays visible. Arrow keys turn too. */
-static bool drag_look, dragging;
+static bool dragging;
 static int drag_x, drag_y;
 static void set_relative(bool on) { SDL_SetRelativeMouseMode(on && !drag_look ? SDL_TRUE : SDL_FALSE); }
 
@@ -785,14 +817,22 @@ static void list_rows(int n, int *sel, float x, float y, float w, float h, void 
 static int row_first(void) { return (int)rows[79].x; }
 
 /* --- the pause menu */
-static const char *MENU[] = {"Resume", "Shop", "Decorate", "Videos", "Settings", "Use the computer (KDE desktop)",
-                             "Help", "Log out", "Restart", "Shut down"};
-#define NMENU 10
+static const char *MENU[] = {"Return to the PC", "Settings", "Quit"};
+#define NMENU 3
+static const char *QUIT[] = {"Log out", "Sleep", "Hibernate", "Restart", "Shut down", "Back"};
+#define NQUIT 6
+static bool from_menu;   /* Settings / Quit were opened from the Esc menu: Esc goes back to it */
 
 static void menu_row(int i, float x, float y, float w, float rh, bool on)
 {
     (void)w; (void)rh;
     text(F_BODY, x, y, MENU[i], on ? C_ACCENT : C_TXT);
+}
+
+static void quit_row(int i, float x, float y, float w, float rh, bool on)
+{
+    (void)w; (void)rh;
+    text(F_BODY, x, y, QUIT[i], on ? C_ACCENT : C_TXT);
 }
 
 static void power(const char *what)
@@ -805,22 +845,28 @@ static void power(const char *what)
                                   "|| loginctl terminate-session \"$XDG_SESSION_ID\") >/dev/null 2>&1 &");
     else snprintf(cmd, sizeof cmd, "systemctl %s >/dev/null 2>&1 &", what);
     if (system(cmd) != 0) toast("Couldn't %s", what);
-    running = false;
+    if (strcmp(what, "suspend") && strcmp(what, "hibernate")) running = false;
+    else close_panel();
 }
 
 static void menu_activate(int i)
 {
     switch (i) {
-    case 0: close_panel(); break;
-    case 1: menu_sel = 0; mode = M_SHOP; break;
-    case 2: menu_sel = 0; mode = M_DECOR; break;
-    case 3: nvideos = video_scan(videos, MAX_VIDEOS); menu_sel = 0; mode = M_VIDEOS; break;
-    case 4: menu_sel = 0; mode = M_SETTINGS; break;
-    case 5: mode = back_mode = M_WALK; P.x = W.pc_stand.x; P.z = W.pc_stand.z; enter_pc(); break;
-    case 6: mode = M_HELP; break;
-    case 7: power("logout"); break;
-    case 8: power("reboot"); break;
-    case 9: power("poweroff"); break;
+    case 0: mode = back_mode = M_WALK; P.x = W.pc_stand.x; P.z = W.pc_stand.z; enter_pc(); break;
+    case 1: menu_sel = 0; from_menu = true; mode = M_SETTINGS; break;
+    case 2: menu_sel = 0; from_menu = true; mode = M_QUIT; break;
+    }
+}
+
+static void quit_activate(int i)
+{
+    switch (i) {
+    case 0: power("logout"); break;
+    case 1: power("suspend"); break;
+    case 2: power("hibernate"); break;
+    case 3: power("reboot"); break;
+    case 4: power("poweroff"); break;
+    default: menu_sel = 2; mode = M_MENU; from_menu = false; break;
     }
 }
 
@@ -951,7 +997,7 @@ static void video_pick(int r)
 }
 
 /* --- settings */
-#define NSET 8
+#define NSET (14 + NKEYS + 1)
 static void apply_quality(void);
 
 static void setting_row(int r, float x, float y, float w, float rh, bool on)
@@ -961,6 +1007,32 @@ static void setting_row(int r, float x, float y, float w, float rh, bool on)
                                       "Show names over the crew", "Show FPS", "Screen (display number)"};
     char v[64];
     static const char *q[3] = {"Low (fastest)", "Medium", "High"};
+    static const char *more[6] = {"Mouse look", "Walking speed", "Turn speed (keys)", "Frame rate limit", "Save power when idle", "Reset keys to default"};
+    if (r >= 8) {
+        const char *name;
+        if (r >= 13 && r < 13 + NKEYS) {
+            int k = r - 13;
+            name = KEY_NAMES[k];
+            if (rebinding == k) snprintf(v, sizeof v, "Press a key (Esc cancels)");
+            else snprintf(v, sizeof v, "%s", SDL_GetScancodeName(KEYS[k]));
+        } else {
+            int m = r < 13 ? r - 8 : 5;
+            name = more[m];
+            if (m == 0) snprintf(v, sizeof v, "%s", drag_look ? "Hold right button + drag" : "Mouse captured");
+            else if (m == 1) snprintf(v, sizeof v, "%.0f%%", walk_speed * 100);
+            else if (m == 2) snprintf(v, sizeof v, "%.0f%%", turn_speed * 100);
+            else if (m == 3) { if (fps_limit) snprintf(v, sizeof v, "%d fps", fps_limit); else snprintf(v, sizeof v, "No limit"); }
+            else if (m == 4) snprintf(v, sizeof v, "%s", idle_save ? "On" : "Off");
+            else v[0] = 0;
+        }
+        text(F_BODY, x, y, name, on ? C_ACCENT : C_TXT);
+        char b[96];
+        if (r >= 13 && r < 13 + NKEYS) snprintf(b, sizeof b, "[ %s ]", v);
+        else if (v[0]) snprintf(b, sizeof b, "<  %s  >", v);
+        else snprintf(b, sizeof b, "Enter");
+        text(F_BODY, x + w * 0.55f, y, b, (rebinding >= 0 && rebinding == r - 13) ? C_ACCENT : C_TXT);
+        return;
+    }
     switch (r) {
     case 0: snprintf(v, sizeof v, "%s", q[CFG.quality]); break;
     case 1: snprintf(v, sizeof v, "%.1f", CFG.sens); break;
@@ -998,6 +1070,15 @@ static void setting_change(int r, int dir)
     case 5: CFG.show_names = !CFG.show_names; break;
     case 6: CFG.show_fps = !CFG.show_fps; break;
     case 7: { int n = SDL_GetNumVideoDisplays(); CFG.display = (CFG.display + dir + n) % (n ? n : 1); move_to_display(); break; }
+    case 8: drag_look = !drag_look; break;
+    case 9: walk_speed = clampf(walk_speed + dir * 0.1f, 0.5f, 2.0f); break;
+    case 10: turn_speed = clampf(turn_speed + dir * 0.1f, 0.3f, 3.0f); break;
+    case 11: { static const int L[4] = {30, 45, 60, 0}; int i = 0; while (i < 4 && L[i] != fps_limit) i++;
+        fps_limit = L[((i < 4 ? i : 2) + dir + 4) % 4]; break; }
+    case 12: idle_save = !idle_save; break;
+    default:
+        if (r >= 13 && r < 13 + NKEYS) { rebinding = r - 13; return; }
+        memcpy(KEYS, KEY_DEF, sizeof KEYS); toast("Keys reset"); break;
     }
     save_state(false);
 }
@@ -1144,7 +1225,7 @@ static void draw_hud(float fps)
         rect(WIN_W / 2.0f - 2, WIN_H / 2.0f - 2, 4, 4, rgba(255, 255, 255, 200));
         if (target.kind != I_NONE) {
             char s[160];
-            snprintf(s, sizeof s, "[E]  %s", target.text);
+            snprintf(s, sizeof s, "[%s]  %s", SDL_GetScancodeName(KEYS[K_USE]), target.text);
             int w = text_w(F_BODY, s) + 30;
             rect(WIN_W / 2.0f - w / 2.0f, WIN_H * 0.62f, (float)w, text_h(F_BODY) + 12.0f, rgba(10, 12, 18, 180));
             text_center(F_BODY, WIN_W / 2.0f, WIN_H * 0.62f + 6, s, C_TXT);
@@ -1194,7 +1275,15 @@ static void draw_panels(void)
         x = (WIN_W - w) / 2; y = (WIN_H - h) / 2;
         panel(x, y, w, h, "LifeOS");
         list_rows(NMENU, &menu_sel, x + 20, y + 30 + text_h(F_TITLE), w - 40, h, menu_row);
-        return;
+        foot = "Esc resume  ·  P shop  ·  C decorate  ·  F1 help";
+        break;
+    case M_QUIT:
+        h = text_h(F_BODY) * 1.7f * NQUIT + text_h(F_TITLE) + 80; w = fminf(WIN_W * 0.4f, 520);
+        x = (WIN_W - w) / 2; y = (WIN_H - h) / 2;
+        panel(x, y, w, h, "Quit");
+        list_rows(NQUIT, &menu_sel, x + 20, y + 30 + text_h(F_TITLE), w - 40, h, quit_row);
+        foot = "Enter select  ·  Esc back";
+        break;
     case M_SHOP: {
         shop_sort();
         panel(x, y, w, h, "Shop");
@@ -1251,8 +1340,9 @@ static void draw_panels(void)
         panel(x, y, w, h, "How the apartment works");
         const char *help =
             "WASD or Up/Down: walk  ·  Shift: run  ·  Mouse, Left/Right arrows or right-drag: look  ·  PgUp/PgDn: look up/down\n"
+            "(Change keys, mouse speed and look mode in Esc > Settings)\n"
             "E: talk to a crew member, sit on the couch, use the TV, lie in bed, use the PC\n"
-            "Esc: menu  ·  P: shop  ·  C: decorate  ·  F1: this help  ·  F2: graphics quality\n\n"
+            "Esc: menu (PC, settings, quit)  ·  P: shop  ·  C: decorate  ·  F1: this help  ·  F2: graphics quality\n\n"
             "The crew lives here. They follow the real clock: they sleep in the AI bedrooms at night, eat in the kitchen "
             "at meal times, and walk to the work room when you give them a task (talk to one, press Tab, describe the task).\n\n"
             "Using LifeOS earns points. Spend them in the shop (the kiosk in the hallway, or P) on paint, floors, furniture "
@@ -1276,6 +1366,7 @@ static int list_len(void)
 {
     switch (mode) {
     case M_MENU: return NMENU;
+    case M_QUIT: return NQUIT;
     case M_SHOP: return nshop;
     case M_DECOR: return D_FIXED + ndecor;
     case M_VIDEOS: return nvideos + (video_active() ? 1 : 0);
@@ -1288,6 +1379,7 @@ static void list_activate(int i)
 {
     switch (mode) {
     case M_MENU: menu_activate(i); break;
+    case M_QUIT: quit_activate(i); break;
     case M_SHOP: shop_buy(i); break;
     case M_DECOR: if (i >= D_FIXED) decor_change(i, 1); else decor_change(i, 1); break;
     case M_VIDEOS: video_pick(i); break;
@@ -1308,12 +1400,21 @@ static void utf8_pop(char *s)
     s[n] = 0;
 }
 
-static bool is_panel(int m) { return m == M_MENU || m == M_SHOP || m == M_DECOR || m == M_VIDEOS || m == M_SETTINGS || m == M_HELP || m == M_BOARD; }
+static bool is_panel(int m) { return m == M_QUIT || m == M_MENU || m == M_SHOP || m == M_DECOR || m == M_VIDEOS || m == M_SETTINGS || m == M_HELP || m == M_BOARD; }
 
 static void handle_key(SDL_Keysym k)
 {
     SDL_Keycode key = k.sym;
     if (mode == M_PC_IN || mode == M_PC_OUT) return;
+    if (rebinding >= 0) {
+        if (key != SDLK_ESCAPE) {
+            for (int i = 0; i < NKEYS; i++) if (i != rebinding && KEYS[i] == k.scancode) KEYS[i] = KEYS[rebinding];  /* swap */
+            KEYS[rebinding] = k.scancode;
+            save_state(false);
+        }
+        rebinding = -1;
+        return;
+    }
     if (mode == M_CHAT) {
         if (key == SDLK_ESCAPE) close_panel();
         else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) chat_send();
@@ -1329,7 +1430,10 @@ static void handle_key(SDL_Keysym k)
     }
     if (is_panel(mode)) {
         int n = list_len();
-        if (key == SDLK_ESCAPE) { if (mode == M_MENU) close_panel(); else if (back_mode == M_WALK && mode != M_MENU && 0) close_panel(); else close_panel(); }
+        if (key == SDLK_ESCAPE) {
+            if (from_menu && (mode == M_SETTINGS || mode == M_QUIT)) { menu_sel = mode == M_SETTINGS ? 1 : 2; mode = M_MENU; from_menu = false; }
+            else { from_menu = false; close_panel(); }
+        }
         else if (key == SDLK_UP || key == SDLK_w) { if (n) menu_sel = (menu_sel - 1 + n) % n; }
         else if (key == SDLK_DOWN || key == SDLK_s) { if (n) menu_sel = (menu_sel + 1) % n; }
         else if (key == SDLK_LEFT || key == SDLK_a) list_side(-1);
@@ -1340,12 +1444,13 @@ static void handle_key(SDL_Keysym k)
         return;
     }
     /* walking, sitting, lying */
-    switch (key) {
-    case SDLK_ESCAPE: menu_sel = 0; open_mode(M_MENU); break;
-    case SDLK_e:
+    if (k.scancode == KEYS[K_USE]) {
         if (mode == M_SIT || mode == M_LIE) stand_up();
         else if (target.kind != I_NONE) interact();
-        break;
+        return;
+    }
+    switch (key) {
+    case SDLK_ESCAPE: menu_sel = 0; from_menu = false; open_mode(M_MENU); break;
     case SDLK_p: menu_sel = 0; open_mode(M_SHOP); break;
     case SDLK_c: menu_sel = 0; open_mode(M_DECOR); break;
     case SDLK_F1: open_mode(M_HELP); break;
@@ -1378,15 +1483,15 @@ static void update_player(float dt)
     if (mode == M_WALK) {
         const Uint8 *ks = SDL_GetKeyboardState(NULL);
         float f = 0, s = 0;
-        if (ks[SDL_SCANCODE_W] || ks[SDL_SCANCODE_UP]) f += 1;
-        if (ks[SDL_SCANCODE_S] || ks[SDL_SCANCODE_DOWN]) f -= 1;
-        if (ks[SDL_SCANCODE_D]) s += 1;
-        if (ks[SDL_SCANCODE_A]) s -= 1;
-        if (ks[SDL_SCANCODE_LEFT]) P.yaw += 2.2f * dt;
-        if (ks[SDL_SCANCODE_RIGHT]) P.yaw -= 2.2f * dt;
-        if (ks[SDL_SCANCODE_PAGEUP]) P.pitch = clampf(P.pitch + 1.4f * dt, -1.45f, 1.45f);
-        if (ks[SDL_SCANCODE_PAGEDOWN]) P.pitch = clampf(P.pitch - 1.4f * dt, -1.45f, 1.45f);
-        float sp = (ks[SDL_SCANCODE_LSHIFT] || ks[SDL_SCANCODE_RSHIFT]) ? 4.2f : 2.4f;
+        if (ks[KEYS[K_FWD]] || ks[SDL_SCANCODE_UP]) f += 1;
+        if (ks[KEYS[K_BACK]] || ks[SDL_SCANCODE_DOWN]) f -= 1;
+        if (ks[KEYS[K_RIGHT]]) s += 1;
+        if (ks[KEYS[K_LEFT]]) s -= 1;
+        if (ks[KEYS[K_TURNL]]) P.yaw += 2.2f * turn_speed * dt;
+        if (ks[KEYS[K_TURNR]]) P.yaw -= 2.2f * turn_speed * dt;
+        if (ks[KEYS[K_LOOKU]]) P.pitch = clampf(P.pitch + 1.4f * turn_speed * dt, -1.45f, 1.45f);
+        if (ks[KEYS[K_LOOKD]]) P.pitch = clampf(P.pitch - 1.4f * turn_speed * dt, -1.45f, 1.45f);
+        float sp = (ks[KEYS[K_RUN]] || (KEYS[K_RUN] == SDL_SCANCODE_LSHIFT && ks[SDL_SCANCODE_RSHIFT]) ? 4.2f : 2.4f) * walk_speed;
         float len = sqrtf(f * f + s * s);
         if (len > 0) {
             f /= len; s /= len;
@@ -1494,6 +1599,7 @@ int main(int argc, char **argv)
     SDL_SetHint(SDL_HINT_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR, "0");
     SDL_SetHint(SDL_HINT_MOUSE_RELATIVE_MODE_WARP, "0");
     SDL_SetHint(SDL_HINT_APP_NAME, "LifeOS Apartment");
+    SDL_SetHint(SDL_HINT_GRAB_KEYBOARD, "1");
     SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "lifeos-apartment");
     SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "lifeos-apartment");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0) { fprintf(stderr, "apartment: SDL_Init: %s\n", SDL_GetError()); return 1; }
@@ -1509,6 +1615,9 @@ int main(int argc, char **argv)
         win = SDL_CreateWindow("LifeOS Apartment", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, flags);
     }
     if (!win) { fprintf(stderr, "apartment: window: %s\n", SDL_GetError()); return 1; }
+    /* The apartment is the desktop: keep the Meta key, Alt+Tab and other desktop shortcuts away from KDE while it
+     * runs (KDE is only reached through the PC). Uses the Wayland keyboard-shortcuts-inhibit protocol. */
+    if (!windowed) SDL_SetWindowKeyboardGrab(win, SDL_TRUE);
     SDL_GLContext gl = SDL_GL_CreateContext(win);
     if (!gl) { fprintf(stderr, "apartment: OpenGL: %s\n", SDL_GetError()); return 1; }
     SDL_GL_SetSwapInterval(1);
@@ -1549,6 +1658,8 @@ int main(int argc, char **argv)
         now_hours();
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
+            if (ev.type == SDL_KEYDOWN || ev.type == SDL_MOUSEMOTION || ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEWHEEL)
+                last_input_ms = SDL_GetTicks();
             switch (ev.type) {
             case SDL_QUIT: running = false; break;
             case SDL_KEYDOWN: handle_key(ev.key.keysym); break;
@@ -1592,8 +1703,8 @@ int main(int argc, char **argv)
                     SDL_GL_GetDrawableSize(win, &WIN_W, &WIN_H);
                     gfx_resize(WIN_H);
                     apply_quality();
-                } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST && mode == M_WALK) set_relative(false);
-                else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED && (mode == M_WALK || mode == M_SIT || mode == M_LIE)) set_relative(true);
+                } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) { has_focus = false; if (mode == M_WALK) set_relative(false); }
+                else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) { has_focus = true; last_input_ms = SDL_GetTicks(); if (mode == M_WALK || mode == M_SIT || mode == M_LIE) set_relative(true); }
                 break;
             }
         }
@@ -1624,7 +1735,7 @@ int main(int argc, char **argv)
         gfx_camera(eye, yaw, pitch);
         glEnable(GL_LIGHTING);
         gfx_brightness(mode == M_LIE && NOW_HOURS > 21 ? 0.7f : skyk);
-        glCallList(W.list);
+        world_draw_static();
         npc_draw(T);
         world_draw_dynamic(T, skyk);
         glDisable(GL_LIGHTING);
@@ -1672,11 +1783,21 @@ int main(int argc, char **argv)
         if (fade > 0) rect(0, 0, (float)WIN_W, (float)WIN_H, rgba(0, 0, 0, (int)(255 * fade)));
         glDisable(GL_BLEND);
         SDL_GL_SwapWindow(win);
-        if (CFG.quality == 0) {
-            /* low quality also caps the frame rate at 30 to leave the CPU for everything else */
-            Uint64 spent = SDL_GetPerformanceCounter() - nowc;
-            float ms = 1000.0f * spent / freq;
-            if (ms < 33) SDL_Delay((Uint32)(33 - ms));
+        {
+            /* Frame pacing keeps the GPU (and CPU) mostly idle: the chosen limit (Low quality: at most 30),
+             * and with "Save power when idle" a few frames a second in the background or after a minute
+             * without input (unless the TV is playing). */
+            int cap = fps_limit;
+            if (CFG.quality == 0 && (cap == 0 || cap > 30)) cap = 30;
+            if (idle_save) {
+                bool tv = video_active() && !video_paused();
+                if (!has_focus) cap = 5;
+                else if (!tv && SDL_GetTicks() - last_input_ms > 60000) cap = 10;
+            }
+            if (cap > 0) {
+                float ms = 1000.0f * (SDL_GetPerformanceCounter() - nowc) / freq, want = 1000.0f / cap;
+                if (ms < want) SDL_Delay((Uint32)(want - ms));
+            }
         }
     }
     if (exit_code != EXIT_TO_PC) save_state(false);
