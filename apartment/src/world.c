@@ -192,16 +192,25 @@ bool collide_circle(float *px, float *pz, float r)
     return hit;
 }
 
+/* True if no wall lies between the two points: an exact segment-vs-box test (slab method) against every wall,
+ * so thin walls can't slip between samples. */
 bool sight_clear(float ax, float az, float bx, float bz)
 {
-    float d = dist2(ax, az, bx, bz);
-    int n = (int)(d / 0.25f) + 1;
-    for (int i = 1; i < n; i++) {
-        float t = (float)i / n, x = lerpf(ax, bx, t), z = lerpf(az, bz, t);
-        for (int w = 0; w < W.nwalls; w++) {
-            const Rect *q = &W.walls[w];
-            if (x > q->x0 && x < q->x1 && z > q->z0 && z < q->z1) return false;
+    float dx = bx - ax, dz = bz - az;
+    for (int w = 0; w < W.nwalls; w++) {
+        const Rect *q = &W.walls[w];
+        float t0 = 0.001f, t1 = 0.999f;
+        float lo[2] = {q->x0, q->z0}, hi[2] = {q->x1, q->z1}, o[2] = {ax, az}, d[2] = {dx, dz};
+        bool hit = true;
+        for (int k = 0; k < 2 && hit; k++) {
+            if (fabsf(d[k]) < 1e-6f) { if (o[k] <= lo[k] || o[k] >= hi[k]) hit = false; continue; }
+            float ta = (lo[k] - o[k]) / d[k], tb = (hi[k] - o[k]) / d[k];
+            if (ta > tb) { float t = ta; ta = tb; tb = t; }
+            if (ta > t0) t0 = ta;
+            if (tb < t1) t1 = tb;
+            if (t0 > t1) hit = false;
         }
+        if (hit) return false;
     }
     return true;
 }
