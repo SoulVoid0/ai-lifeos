@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import config, db, permissions
+from . import cloud, config, db, permissions
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".cache", ".Trash", "$RECYCLE.BIN"}
 
@@ -167,7 +167,8 @@ def _index_folder(folder_id: int, root: Path) -> dict[str, int]:
         if existing.get(key) == (st.st_size, mtime):
             continue
         ext = path.suffix.lower().lstrip(".")
-        excerpt = extract_text(path) if st.st_size <= 200 * 1024 * 1024 else ""
+        # Reading an online-only cloud file would make OneDrive/Dropbox download it: index its name only.
+        excerpt = extract_text(path) if st.st_size <= 200 * 1024 * 1024 and not cloud.is_cloud_only(st) else ""
         category = categorize(path.name, ext, excerpt)
         batch.append((key, folder_id, path.name, ext, st.st_size, mtime, _iso(st.st_atime), category, excerpt, db.now()))
         if key in existing:
@@ -341,6 +342,8 @@ def duplicates(folder: str | None = None, limit: int = 50) -> list[dict[str, Any
         digest = r["sha256"]
         if not digest:
             try:
+                if cloud.is_cloud_only(os.stat(r["path"])):
+                    continue  # hashing would download it
                 digest = sha256(Path(r["path"]))
             except OSError:
                 continue
@@ -475,16 +478,21 @@ def _reindex(folder_ids: set[int]) -> None:
             index_folder(fid, roots[fid])
 
 
-def open_path(path: str) -> dict[str, Any]:
-    """Open a file with the OS default application (desktop only)."""
+def launch(resolved: Path) -> None:
+    """Open an already-authorized path with the OS default application."""
     import subprocess
     import sys
 
-    _, resolved = permissions.resolve_allowed(path)
     if sys.platform.startswith("win"):
         os.startfile(str(resolved))  # type: ignore[attr-defined]
     elif sys.platform == "darwin":
         subprocess.Popen(["open", str(resolved)])
     else:
         subprocess.Popen(["xdg-open", str(resolved)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def open_path(path: str) -> dict[str, Any]:
+    """Open a file with the OS default application (desktop only)."""
+    _, resolved = permissions.resolve_allowed(path)
+    launch(resolved)
     return {"opened": str(resolved)}

@@ -8,20 +8,28 @@ import threading
 import time
 from typing import Callable
 
-from . import activity, db, files, memory, tasks
+from . import activity, db, files, integrations, memory, projects, settings, tasks, workflows
 
 log = logging.getLogger("lifeos.scheduler")
 
 
 def fire_reminders() -> int:
     due = tasks.due_reminders()
+    notify = settings.get("notification_prefs").get("reminders", True)
     for t in due:
-        with db.session() as conn:
-            conn.execute("INSERT INTO notifications(title, body, task_id, created_at) VALUES (?,?,?,?)",
-                         (f"Reminder: {t['title']}", t.get("notes"), t["id"], db.now()))
+        if notify:
+            with db.session() as conn:
+                conn.execute("INSERT INTO notifications(title, body, task_id, kind, created_at) VALUES (?,?,?,?,?)",
+                             (f"Reminder: {t['title']}", t.get("notes"), t["id"], "reminder", db.now()))
         tasks.mark_reminded(t["id"])
         activity.log("reminder", f"Reminder sent: {t['title']}", details={"task_id": t["id"]})
     return len(due)
+
+
+def _daily_backup() -> object:
+    from . import backup
+
+    return backup.create() if backup.due() else None
 
 
 class Scheduler:
@@ -30,8 +38,12 @@ class Scheduler:
         self._thread: threading.Thread | None = None
         self._jobs: list[tuple[str, float, Callable[[], object]]] = [
             ("reminders", 20, fire_reminders),
+            ("workflows", 30, workflows.run_due),
             ("reindex", 30 * 60, files.index_all),
+            ("projects", 30 * 60, projects.detect),
+            ("calendars", 30 * 60, integrations.sync_all),
             ("embed-memories", 10 * 60, memory.reembed_missing),
+            ("backup", 30 * 60, _daily_backup),
         ]
         self._last: dict[str, float] = {}
 
@@ -90,6 +102,9 @@ def watch_parent() -> None:
         while _process_alive(int(pid)):
             time.sleep(2)
         log.info("Desktop shell %s exited; stopping backend", pid)
+        from . import services
+
+        services.stop_all()
         os._exit(0)
 
     threading.Thread(target=loop, name="lifeos-parent-watch", daemon=True).start()

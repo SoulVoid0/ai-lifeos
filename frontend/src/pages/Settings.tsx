@@ -4,6 +4,11 @@ import { api, type Settings as S } from "../lib/api";
 import { ago } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { ErrorBox, PageHeader, Section, Spinner, notifyChanged, useToast } from "../components/ui";
+import { OldDataSettings, UpdateSettings } from "../components/Updates";
+import { LowResource } from "../components/LowResource";
+import { GpuSettings } from "../components/GpuSettings";
+import { CloudSettings, CrewSettings, IntegrationSettings, NotificationSettings } from "../components/SettingsExtra";
+import { BackupSettings, CloudFolders, CustomToolsSettings, VoiceSettings } from "../components/SpecExtras";
 
 const ACCENTS = ["violet", "blue", "emerald", "cyan", "rose", "amber"];
 const ACCENT_HEX: Record<string, string> = { violet: "#8b5cf6", blue: "#3b82f6", emerald: "#10b981", rose: "#f43f5e", amber: "#f59e0b", cyan: "#06b6d4" };
@@ -64,6 +69,9 @@ export default function Settings() {
     <div className="mx-auto max-w-4xl space-y-4 p-6">
       <PageHeader title="Settings" subtitle="Models, permissions, privacy and personalization. Everything stays on this computer." />
 
+      <OldDataSettings />
+      <UpdateSettings />
+
       <Section title="Approved folders" icon={<FolderPlus size={15} className="text-accent" />}>
         <p className="mb-3 text-xs text-muted">
           LifeOS can only see and change files inside these folders. Your whole home folder or system folders can't be approved.
@@ -86,7 +94,10 @@ export default function Settings() {
             </li>
           ))}
         </ul>
+        <CloudFolders onApproved={() => { folders.reload(); notifyChanged(); }} />
       </Section>
+
+      <BackupSettings form={form} setForm={setForm} save={save} />
 
       <Section title="Local AI (Ollama)" icon={<Cpu size={15} className="text-accent" />}>
         <div className="grid gap-3 sm:grid-cols-3">
@@ -104,6 +115,38 @@ export default function Settings() {
           </div>
           <datalist id="models">{llm?.models.map((m) => <option key={m} value={m} />)}</datalist>
         </div>
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input type="checkbox" className="accent-[var(--color-accent)]" checked={form.auto_start_ollama ?? true}
+            onChange={(e) => save({ auto_start_ollama: e.target.checked })} />
+          Start Ollama in the background when LifeOS starts (if it isn't already running)
+        </label>
+        <label className="mt-2 flex items-center gap-2 text-sm">
+          <input type="checkbox" className="accent-[var(--color-accent)]" checked={form.ollama_one_model ?? true}
+            onChange={(e) => save({ ollama_one_model: e.target.checked })} />
+          One model at a time: agents on different models take turns instead of fighting over the GPU (recommended with one GPU)
+        </label>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <div>
+            <label className="label">Time limit per answer (seconds)</label>
+            <input className="input" type="number" min={30} max={3600} value={form.ollama_timeout_s ?? 600}
+              onChange={(e) => setForm({ ...form, ollama_timeout_s: Number(e.target.value) })}
+              onBlur={() => save({ ollama_timeout_s: Math.min(3600, Math.max(30, Number(form.ollama_timeout_s) || 600)) })} />
+          </div>
+          <div>
+            <label className="label" title="Ollama's default (2048-4096) cuts the start of long tasks, including the agent's instructions. More context uses more VRAM.">Context window (tokens)</label>
+            <input className="input" type="number" min={0} max={131072} step={1024} value={form.ollama_num_ctx ?? 16384}
+              onChange={(e) => setForm({ ...form, ollama_num_ctx: Number(e.target.value) })}
+              onBlur={() => { const v = Number(form.ollama_num_ctx) || 0; save({ ollama_num_ctx: v === 0 ? 0 : Math.min(131072, Math.max(2048, v)) }); }} />
+          </div>
+          <div>
+            <label className="label">Keep models loaded for</label>
+            <input className="input" value={form.ollama_keep_alive ?? "30m"} placeholder="30m"
+              onChange={(e) => setForm({ ...form, ollama_keep_alive: e.target.value })}
+              onBlur={() => save({ ollama_keep_alive: form.ollama_keep_alive || "30m" })} />
+          </div>
+        </div>
+        <LowResource form={form} save={save} reload={settings.reload} />
+        <GpuSettings form={form} setForm={setForm} save={save} />
         <div className="mt-3">
           <label className="label">Planner</label>
           <select className="input sm:w-96" value={form.planner} onChange={(e) => save({ planner: e.target.value as S["planner"] })}>
@@ -123,6 +166,12 @@ export default function Settings() {
           )}
         </div>
       </Section>
+
+      <CrewSettings form={form} setForm={setForm} save={save} />
+      <CloudSettings form={form} setForm={setForm} save={save} />
+      <IntegrationSettings />
+      <CustomToolsSettings />
+      <NotificationSettings form={form} setForm={setForm} save={save} />
 
       <Section title="Tool permissions" icon={<Shield size={15} className="text-accent" />}>
         <p className="mb-3 text-xs text-muted">
@@ -206,6 +255,7 @@ export default function Settings() {
             </div>
           </div>
         </div>
+        <VoiceSettings form={form} setForm={setForm} save={save} />
       </Section>
     </div>
   );

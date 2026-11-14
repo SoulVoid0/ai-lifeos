@@ -127,10 +127,138 @@ def _title(text: str) -> str:
     return (title[:1].upper() + title[1:])[:200] if title else "Reminder"
 
 
+_DEVICE = r"(?:my\s+|the\s+|this\s+)?(?:pc|computer|laptop|machine|system|device)"
+_NOT_APPS = {"it", "that", "this", "them", "file", "files", "folder", "folders", "the file", "my files", "a file", "up"}
+
+
+def _system_clause(c: str, low: str, plan: Plan) -> bool:
+    power = None
+    if re.search(rf"\block\s+(?:{_DEVICE}|(?:my\s+|the\s+)?screen)\b", low):
+        power = "lock"
+    elif re.search(rf"\b(?:restart|reboot)\s+{_DEVICE}\b", low) or low.strip(" .!") in ("restart", "reboot"):
+        power = "restart"
+    elif re.search(rf"\b(?:shut\s*down|turn\s+off|power\s+off)\s+{_DEVICE}\b", low) or low.strip(" .!") in ("shut down", "shutdown"):
+        power = "shutdown"
+    elif re.search(rf"\b(?:put\s+{_DEVICE}\s+to\s+sleep|sleep\s+{_DEVICE})\b", low):
+        power = "sleep"
+    elif re.search(r"\b(?:sign|log)\s+(?:me\s+)?out\b", low) and not re.search(r"\b(?:of|from)\b", low):
+        power = "sign_out"
+    if power:
+        plan.steps.append({"tool": "power_action", "args": {"action": power}})
+        return True
+
+    if re.search(r"\b(?:volume|sound|speakers?)\b", low) or re.fullmatch(r"(?:un)?mute(?: the sound| it| audio)?[.!]?", low.strip()):
+        m = re.search(r"\b(\d{1,3})\s*%?", low)
+        if re.search(r"\b(?:un)?mute\b", low):
+            plan.steps.append({"tool": "set_volume", "args": {"change": "mute"}})
+        elif m:
+            plan.steps.append({"tool": "set_volume", "args": {"level": min(100, int(m.group(1)))}})
+        elif re.search(r"\b(?:up|louder|increase|raise|higher)\b", low):
+            plan.steps.append({"tool": "set_volume", "args": {"change": "up"}})
+        elif re.search(r"\b(?:down|quieter|lower|decrease|reduce)\b", low):
+            plan.steps.append({"tool": "set_volume", "args": {"change": "down"}})
+        else:
+            return False
+        return True
+
+    if re.search(r"\b(?:wi-?fi|wireless|internet connection)\b", low):
+        m = re.search(r"\bconnect(?: me)? to\s+(?:the\s+)?(?:wi-?fi\s+)?[\"']?([^\"']+?)[\"']?(?:\s+wi-?fi)?(?:\s+(?:with\s+)?(?:the\s+)?password\s+(\S+))?[.!]?$", c, re.I)
+        if m and not re.fullmatch(r"(?:the\s+)?(?:wi-?fi|internet|network)", m.group(1).strip(), re.I):
+            plan.steps.append({"tool": "wifi", "args": {"action": "connect", "ssid": m.group(1).strip(),
+                                                         "password": m.group(2) or ""}})
+        elif re.search(r"\bturn\s+(?:the\s+)?wi-?fi\s+off\b|\bturn\s+off\s+(?:the\s+)?wi-?fi\b|\bdisable\s+wi-?fi\b", low):
+            plan.steps.append({"tool": "wifi", "args": {"action": "off"}})
+        elif re.search(r"\bturn\s+(?:the\s+)?wi-?fi\s+on\b|\bturn\s+on\s+(?:the\s+)?wi-?fi\b|\benable\s+wi-?fi\b", low):
+            plan.steps.append({"tool": "wifi", "args": {"action": "on"}})
+        elif re.search(r"\bdisconnect\b", low):
+            plan.steps.append({"tool": "wifi", "args": {"action": "disconnect"}})
+        elif re.search(r"\b(?:networks?|list|show|scan|available|nearby)\b", low):
+            plan.steps.append({"tool": "wifi", "args": {"action": "list"}})
+        elif re.search(r"\b(?:am i|connected|status|which|what)\b", low):
+            plan.steps.append({"tool": "wifi", "args": {"action": "status"}})
+        else:
+            return False
+        return True
+
+    if re.search(r"\bbluetooth\b|\b(?:headphones|earbuds|airpods|headset|controller)\b", low) and \
+            re.search(r"\b(?:bluetooth|connect|disconnect|pair)\b", low):
+        m = re.search(r"\b(connect|disconnect|pair|forget)\s+(?:to\s+|with\s+)?(?:my\s+|the\s+)?(.+?)(?:\s+(?:via|over|with)\s+bluetooth|\s+bluetooth)?[.!]?$", c, re.I)
+        if re.search(r"\bturn\s+(?:on\s+)?bluetooth(?:\s+on)?\b|\benable\s+bluetooth\b", low) and "off" not in low:
+            plan.steps.append({"tool": "bluetooth", "args": {"action": "on"}})
+        elif re.search(r"\bturn\s+(?:off\s+)?bluetooth(?:\s+off)?\b|\bdisable\s+bluetooth\b", low):
+            plan.steps.append({"tool": "bluetooth", "args": {"action": "off"}})
+        elif m and m.group(2).strip().lower() not in ("bluetooth", "a device", "devices"):
+            plan.steps.append({"tool": "bluetooth", "args": {"action": m.group(1).lower(), "device": m.group(2).strip()}})
+        elif re.search(r"\b(?:scan|search|find|nearby|pair)\b", low):
+            plan.steps.append({"tool": "bluetooth", "args": {"action": "scan"}})
+        else:
+            plan.steps.append({"tool": "bluetooth", "args": {"action": "list"}})
+        return True
+
+    if re.search(r"\bbrightness\b|\bscreen\s+(?:brighter|dimmer)\b", low):
+        m = re.search(r"\b(\d{1,3})\s*%?", low)
+        if not m:
+            return False
+        plan.steps.append({"tool": "set_brightness", "args": {"level": max(1, min(100, int(m.group(1))))}})
+        return True
+
+    if re.search(r"\b(?:what'?s|what is|which (?:apps?|programs?) (?:are|is))\s+(?:using|eating|hogging|slowing)\b", low) \
+            or re.search(r"\b(?:running programs|task manager|running apps|what'?s running)\b", low):
+        plan.steps.append({"tool": "list_programs", "args": {"sort": "cpu" if re.search(r"\bcpu|slow", low) else "memory"}})
+        return True
+    if re.search(r"\b(?:system status|pc status|computer status)\b", low) \
+            or re.search(rf"\bhow'?s\s+{_DEVICE}|\bhow is\s+{_DEVICE}", low) \
+            or (re.search(r"\b(?:battery|cpu|ram|disk space|free space|storage)\b", low)
+                and re.search(r"\b(?:how|what'?s|what is|check|show|status|usage|level|left|much)\b", low)
+                and not re.search(r"\b(?:find|search|files?|documents?|pdfs?)\b", low)):
+        plan.steps.append({"tool": "system_status", "args": {}})
+        return True
+
+    m = re.match(r"^(?:please\s+)?(?:kill|force[- ]?(?:close|quit)|end task(?: for)?|close|quit)\s+(?:the\s+)?(.+?)(?:\s+(?:app|program))?[.!]?$", c, re.I)
+    if m:
+        from . import system
+
+        name = m.group(1).strip()
+        if name.lower() not in _NOT_APPS and system._matching(name):
+            plan.steps.append({"tool": "end_program", "args": {"name": name}})
+            return True
+        return False
+
+    m = re.match(r"^(?:please\s+)?(?:open|launch|start|run)\s+(?:up\s+)?(?:the\s+)?(.+?)(?:\s+(?:app|application|program))?[.!]?$", c, re.I)
+    if m and not re.search(r"[\\/]|\b(?:file|files|folder|pdf|document|downloads|workspace|mission|task)\b", m.group(1), re.I):
+        from . import apps
+
+        name = m.group(1).strip()
+        if len(name) >= 3 and name.lower() not in _NOT_APPS:
+            app = apps.find(name)
+            if app:
+                plan.steps.append({"tool": "launch_app", "args": {"name": app["name"]}})
+                return True
+    return False
+
+
 def _clause(clause: str, plan: Plan, ctx: dict[str, Any]) -> bool:
     c = clause.strip()
     low = c.lower()
     refers_back = bool(re.search(r"\b(them|these|those|the ones|ones|it)\b", low))
+
+    # images and video ("make a picture of...", "generate a 5 second video of...")
+    m = re.match(r"^(?:please )?(?:can you |could you )?(?:generate|make|create|draw|paint|render|design)\s+(?:me\s+)?"
+                 r"(?:an?\s+|some\s+|\d+\s+)?(?:(\d+)[- ]?(?:s|sec|secs|second|seconds)\s+)?"
+                 r"(video|clip|animation|movie|image|picture|photo|illustration|poster|wallpaper|drawing|painting|art(?:work)?|logo)s?"
+                 r"\b(?:\s+(of|showing|with|for|about))?\s*(.*)$", c, re.I)
+    if m and len(m.group(4).strip()) >= 3:
+        noun = m.group(2).lower()
+        video = noun in ("video", "clip", "animation", "movie")
+        subject = m.group(4).strip().rstrip(".!")
+        # "a poster for my band" keeps the kind of picture; "an image of a cat" is just "a cat".
+        if noun not in ("video", "clip", "movie", "image", "picture", "photo"):
+            subject = " ".join(x for x in (noun, m.group(3), subject) if x)
+        args = {"prompt": subject}
+        if video and m.group(1):
+            args["seconds"] = max(1, min(int(m.group(1)), 10))
+        plan.steps.append({"tool": "generate_video" if video else "generate_image", "args": args})
+        return True
 
     # remember / forget
     m = re.match(r"^(?:please )?(?:remember|note|keep in mind)(?: that)?\s+(.+)$", c, re.I)
@@ -170,8 +298,51 @@ def _clause(clause: str, plan: Plan, ctx: dict[str, Any]) -> bool:
         plan.steps.append({"tool": "complete_task", "args": {"title": m.group(1)}})
         return True
 
+    # workspaces: "prepare my workspace for studying", "open my coding workspace"
+    m = re.search(r"\b(?:prepare|open|start|set up|load|launch)\s+(?!(?:my\s+|the\s+)?workspace\b)(?:my\s+|the\s+)?(.+?)\s+workspace\b", low) \
+        or re.search(r"\b(?:prepare|open|start|set up|setup|load|launch)\b.*?\bworkspace\b(?:\s+(?:for|to)\s+(.+))?", low)
+    if m:
+        from . import workspaces
+
+        wanted = (m.group(1) or "").strip(" .")
+        w = workspaces.find(wanted) if wanted else None
+        if w is None:
+            # "prepare my workspace for studying" matches a workspace named "study" or "studying".
+            stem = re.sub(r"(ing|y|ies)$", "", wanted)
+            w = next((x for x in workspaces.list_all() if stem and stem in x["name"].lower()), None)
+        if w is None:
+            return False  # no such workspace: let the model (or the help text) answer
+        plan.steps.append({"tool": "open_workspace", "args": {"name": w["name"]}})
+        return True
+
+    # renaming by content
+    if re.search(r"\brename\b", low) and re.search(r"\b(content|contents|what'?s in|based on|meaningful|properly|sensible|scans?|files)\b", low):
+        folder = _folder(c) or ctx.get("last_folder")
+        if folder:
+            args = {"folder": folder}
+            if _extensions(c):
+                args["extensions"] = _extensions(c)
+            plan.steps.append({"tool": "rename_by_content", "args": args})
+            return True
+
+    # breaking work down: "break my history essay into steps", "split the project into smaller tasks"
+    m = re.search(r"\b(?:break|split|divide)\s+(?:down\s+)?(?:my\s+|the\s+)?(.+?)\s+(?:down\s+)?into\s+(?:smaller\s+)?"
+                  r"(?:steps|tasks|parts|pieces|chunks)\b", low) or re.search(r"\bbreak down\s+(?:my\s+|the\s+)?(.+)$", low)
+    if m:
+        plan.steps.append({"tool": "break_down_task", "args": {"title": m.group(1).strip(" .")}})
+        return True
+    if re.search(r"\b(i'?m|i am|fell|falling|got)\s+behind\b", low):
+        m = re.search(r"\bbehind (?:on|with)\s+(?:my\s+|the\s+)?(.+)$", low)
+        if m:
+            plan.steps.append({"tool": "replan_task", "args": {"title": m.group(1).strip(" .")}})
+            return True
+
+    # the computer: power, volume, status, programs, apps
+    if _system_clause(c, low, plan):
+        return True
+
     # summaries and planning
-    if re.search(r"\b(summari[sz]e|summary|recap|brief)\b", low) and re.search(r"\b(today|day|important|everything|daily)\b", low):
+    if re.search(r"\b(summari[sz]e|summary|recap|brief)\b", low) and re.search(r"\b(today|day|important|everything|daily|tasks|completed|done)\b", low):
         plan.steps.append({"tool": "daily_summary", "args": {}})
         return True
     if re.search(r"\b(plan|schedule)\b.*\b(day|today|tasks|assignments|work|study)\b", low) or \

@@ -29,7 +29,7 @@ def _tool_catalog() -> str:
             + (f" ({v['description']})" if v.get("description") else "")
             for k, v in props.items())
         approval = " [needs user approval]" if t.prepare else ""
-        lines.append(f"- {t.name}({params}): {t.description}{approval}")
+        lines.append(f"- {t.name}({params}): {t.text()}{approval}")
     return "\n".join(lines)
 
 
@@ -121,7 +121,7 @@ def _use_llm(rule_plan: rules.Plan) -> bool:
         return False
     if mode == "auto" and rule_plan.complete:
         return False
-    return llm.status()["ok"]
+    return llm.model_available(settings.get("chat_model"))
 
 
 def _trim(result: Any) -> Any:

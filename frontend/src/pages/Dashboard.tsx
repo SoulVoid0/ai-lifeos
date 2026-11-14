@@ -1,17 +1,20 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Activity, AlertCircle, CalendarClock, Cpu, FileText, Lightbulb, ShieldCheck, Sparkles, X,
+  Activity, AlertCircle, CalendarClock, CalendarDays, Cpu, FileText, Lightbulb, Network, ShieldCheck, Sparkles, Workflow, X,
 } from "lucide-react";
+import { AgentAvatar, STATE_LABEL, STATE_TONE } from "../components/crew";
 import { api } from "../lib/api";
 import { ago, isOverdue, PRIORITY_LABEL, when } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { FileRow } from "../components/FileRow";
-import { Empty, ErrorBox, Section, Spinner, notifyChanged } from "../components/ui";
+import { Empty, ErrorBox, Section, Spinner, notifyChanged, useToast } from "../components/ui";
+import { WorkspacesCard } from "../components/SpecExtras";
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const toast = useToast();
   const { data, error, reload } = useAsync(api.dashboard, [], 60000);
 
   useEffect(() => {
@@ -72,6 +75,61 @@ export default function Dashboard() {
           </Section>
         )}
 
+        <Section title="Crew" icon={<Network size={15} className="text-accent" />} className="lg:col-span-2"
+          actions={<button className="btn-ghost text-xs" onClick={() => navigate("/crew")}>Open Control Center</button>}>
+          <div className="mb-3 flex flex-wrap gap-x-4 text-xs text-muted">
+            <span>{data.crew.active_missions} active mission(s)</span>
+            {data.crew.open_briefs > 0 && <span className="text-warn">{data.crew.open_briefs} question(s) for you</span>}
+            <span>{(data.crew.spend.tokens_in + data.crew.spend.tokens_out).toLocaleString()} tokens today</span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {data.crew.agents.map((a) => (
+              <button key={a.slug} onClick={() => navigate(a.current ? `/crew?mission=${a.current.mission_id}` : "/crew")}
+                className="flex items-center gap-2 rounded-lg border border-line p-2 text-left hover:border-accent">
+                <AgentAvatar icon={a.icon} color={a.color} state={a.state} size={30} />
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-semibold">{a.name}</div>
+                  <div className={`truncate text-[11px] ${STATE_TONE[a.state]}`}>{a.current?.title ?? STATE_LABEL[a.state]}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {["Plan my week around my deadlines", "Tidy my Downloads and tell me what's taking space"].map((g) => (
+              <button key={g} className="btn-outline text-xs" onClick={() => navigate(`/crew?goal=${encodeURIComponent(g)}`)}>{g}</button>
+            ))}
+          </div>
+        </Section>
+
+        <div className="space-y-4">
+          <Section title="Today" icon={<CalendarDays size={15} className="text-accent" />}>
+            {data.events_today.length === 0 ? <Empty>No events today.</Empty> : (
+              <ul className="space-y-1 text-sm">
+                {data.events_today.map((e) => (
+                  <li key={e.id} className="flex gap-2">
+                    <span className="w-14 shrink-0 text-xs text-muted">{e.all_day ? "all day" : new Date(e.start_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
+                    <span className="truncate">{e.title}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+          <Section title="Automations" icon={<Workflow size={15} className="text-accent" />}
+            actions={<button className="btn-ghost text-xs" onClick={() => navigate("/automations")}>Manage</button>}>
+            <div className="text-xs text-muted">{data.automations.enabled} of {data.automations.total} workflow(s) enabled{data.automation_paused ? " · paused" : ""}</div>
+            <ul className="mt-2 space-y-1 text-sm">
+              {data.automations.next.map((w) => (
+                <li key={w.id} className="flex justify-between gap-2"><span className="truncate">{w.name}</span><span className="shrink-0 text-xs text-muted">{when(w.next_run_at)}</span></li>
+              ))}
+            </ul>
+            {data.automations.recent_runs.slice(0, 3).map((r) => (
+              <div key={r.id} className="mt-1 truncate text-[11px] text-muted">
+                <span className={r.status === "failed" ? "text-danger" : r.status === "done" ? "text-ok" : ""}>{r.status}</span> · {r.name} · {ago(r.started_at)}
+              </div>
+            ))}
+          </Section>
+        </div>
+
         <Section title="Priorities" icon={<CalendarClock size={15} className="text-accent" />} className="lg:col-span-2"
           actions={<button className="btn-ghost text-xs" onClick={() => navigate("/calendar")}>All tasks</button>}>
           {data.priorities.length === 0 ? (
@@ -115,12 +173,23 @@ export default function Dashboard() {
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-medium">{s.title}</div>
                       <div className="text-xs text-muted">{s.detail}</div>
-                      {(s.command || s.link) && (
+                      {s.action && (
+                        <button className="btn-outline mt-1.5 text-xs" onClick={async () => {
+                          try {
+                            await api.suggestionAction(s.action!);
+                            toast("Done");
+                            notifyChanged();
+                          } catch (e) {
+                            toast((e as Error).message, "error");
+                          }
+                        }}>{s.action.label}</button>
+                      )}
+                      {!s.action && (s.command || s.link) && (
                         <button
                           className="mt-1.5 text-xs text-accent hover:underline"
                           onClick={() => (s.command ? run(s.command) : navigate(s.link!))}
                         >
-                          {s.command ? `Ask: “${s.command}”` : "Open settings"}
+                          {s.command ? `Ask: “${s.command}”` : "Open"}
                         </button>
                       )}
                     </div>
@@ -164,6 +233,8 @@ export default function Dashboard() {
             </ul>
           )}
         </Section>
+
+        <WorkspacesCard className="lg:col-span-3" />
       </div>
     </div>
   );

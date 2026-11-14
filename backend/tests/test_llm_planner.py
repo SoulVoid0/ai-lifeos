@@ -113,3 +113,135 @@ def test_ollama_client_payloads(env, monkeypatch):
     assert llm.embed(["a", "b"]) == [[0.1, 0.2], [0.1, 0.2]]
     v = llm.unpack(llm.pack([0.5, -1.0]))
     assert v == [0.5, -1.0] and round(llm.cosine(v, v), 6) == 1.0
+
+
+@pytest.mark.parametrize("first_chunk", [True, False])  # cut mid-answer, and while Ollama is still reading the prompt
+def test_stopping_a_mission_cuts_the_ollama_request(env, monkeypatch, first_chunk):
+    """Ollama keeps the GPU busy until a request finishes or its connection drops, so Stop must drop it."""
+    import http.server
+    import json as _json
+    import threading
+    import time
+
+    from lifeos import llm, settings
+
+    disconnected = threading.Event()
+
+    class Slow(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            try:
+                if first_chunk:
+                    self.wfile.write(_json.dumps({"message": {"content": "Hel"}, "done": False}).encode() + b"\n")
+                    self.wfile.flush()
+                for _ in range(100):  # "generating" for 10 s
+                    time.sleep(0.1)
+                    self.wfile.write(b"\n")
+                    self.wfile.flush()
+            except OSError:
+                disconnected.set()
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    settings.update({"ollama_url": f"http://127.0.0.1:{server.server_port}"})
+    stop = threading.Event()
+    monkeypatch.setattr(llm, "abort_for", lambda mid: stop)
+    out: dict = {}
+
+    def run():
+        try:
+            with llm.track(4242, "coder"):
+                llm.chat_text([{"role": "user", "content": "hi"}], model="m")
+        except Exception as exc:  # noqa: BLE001
+            out["exc"] = exc
+
+    t = threading.Thread(target=run)
+    t.start()
+    time.sleep(0.6)
+    started = time.monotonic()
+    stop.set()
+    t.join(5)
+    assert not t.is_alive() and isinstance(out.get("exc"), llm.Aborted)
+    assert time.monotonic() - started < 2
+    assert disconnected.wait(3)
+    server.shutdown()
+
+
+def test_mission_requests_stream_and_collect_the_answer(env, monkeypatch):
+    import http.server
+    import json as _json
+    import threading
+
+    from lifeos import llm, settings
+
+    seen = {}
+
+    class Ok(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen["body"] = _json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200)
+            self.end_headers()
+            for c in ({"message": {"content": "Hel"}, "done": False},
+                      {"message": {"content": "lo"}, "done": True, "prompt_eval_count": 7, "eval_count": 2}):
+                self.wfile.write(_json.dumps(c).encode() + b"\n")
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Ok)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    settings.update({"ollama_url": f"http://127.0.0.1:{server.server_port}"})
+    monkeypatch.setattr(llm, "abort_for", lambda mid: threading.Event())
+    with llm.track(None, "coder"):  # no mission: a plain request (no stream)
+        pass
+    with llm.track(7, "coder"):
+        assert llm.chat_text([{"role": "user", "content": "hi"}], model="m") == "Hello"
+    assert seen["body"]["stream"] is True and seen["body"]["options"]["num_ctx"] == 16384
+    server.shutdown()
+
+
+def test_model_options_for_big_models_and_gpu_budget(env, monkeypatch):
+    from lifeos import llm, settings
+
+    cfg = {**settings.get_all(), "ollama_cpu_threads": 6}
+    assert llm.model_options("qwen3:14b", cfg) == {"num_ctx": 16384, "num_thread": 6}
+    assert llm.model_options("qwen3-coder:30b", cfg)["num_ctx"] == 8192  # 30B+ gets a smaller cache by default
+    assert llm.model_options("qwen3-coder:30b", {**cfg, "ollama_model_options": {"qwen3-coder:30b": {"num_ctx": 12288, "num_gpu": 28}}}) \
+        == {"num_ctx": 12288, "num_gpu": 28, "num_thread": 6}
+    # qwen3-coder:30b: 18.6 GB, 48 layers, 4 KV heads of 128: about 31 layers fit in 13.5 GB with an 8k context
+    monkeypatch.setitem(llm._info_cache, "qwen3-coder:30b", (9e18, {"size": int(18.6 * 1024 ** 3), "layers": 48,
+                                                                    "kv_heads": 4, "key_len": 128}))
+    assert llm.model_options("qwen3-coder:30b", {**cfg, "ollama_gpu_gb": 13.5})["num_gpu"] == 31
+    monkeypatch.setitem(llm._info_cache, "qwen3:8b", (9e18, {"size": int(5.2 * 1024 ** 3), "layers": 36,
+                                                             "kv_heads": 8, "key_len": 128}))
+    assert "num_gpu" not in llm.model_options("qwen3:8b", {**cfg, "ollama_gpu_gb": 13.5})  # fits: Ollama decides
+    assert llm.default_threads() >= 1
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        settings.update({"ollama_model_options": {"x": {"num_gpu": "lots"}}})
+
+
+def test_stop_restarts_ollama_only_if_it_keeps_working(client, monkeypatch):
+    import time
+
+    from lifeos import llm, missions, services
+
+    restarted = []
+    monkeypatch.setattr(missions.time, "sleep", lambda s: None)
+    monkeypatch.setattr(services, "restart_ollama", lambda: restarted.append(1) or True)
+    monkeypatch.setattr(services, "ollama_busy", lambda seconds=2.0: True)
+    llm.last_abort["at"] = 0.0
+    missions._settle_ollama(1)
+    assert restarted == []  # nothing was cut off: leave Ollama alone
+    llm.last_abort["at"] = time.time()
+    missions._settle_ollama(1)
+    assert restarted == [1]
+    monkeypatch.setattr(services, "ollama_busy", lambda seconds=2.0: False)
+    missions._settle_ollama(1)
+    assert restarted == [1]

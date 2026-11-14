@@ -29,7 +29,7 @@ def suggestions() -> list[dict[str, Any]]:
         out.append({"id": "setup-folders", "kind": "setup", "priority": 3, "title": "Approve a folder",
                     "detail": "Choose folders LifeOS may index (for example Downloads and Documents).",
                     "link": "/settings"})
-    if cfg["planner"] != "rules" and not llm.status()["ok"]:
+    if cfg["planner"] != "rules" and not llm.model_available(cfg["chat_model"]):
         out.append({"id": "setup-ollama", "kind": "setup", "priority": 1, "title": "Connect a local model",
                     "detail": f"Ollama isn't reachable at {cfg['ollama_url']}. Install Ollama and run "
                               f"`ollama pull {cfg['chat_model']}` for free-form requests.", "link": "/settings"})
@@ -75,6 +75,37 @@ def suggestions() -> list[dict[str, Any]]:
                     "title": "Large unused files", "detail": f"{len(big_old)} files ({size:.1f} GB) untouched for "
                                                             f"{cfg['stale_days']}+ days could be archived.",
                     "command": "Find large files I haven't used recently"})
+    from . import integrations, projects as project_store, workflows
+
+    for p in project_store.resume_candidates()[:2]:
+        detail = f"Last edited {p['last_activity_at'][:10]}" + (f", {p['open_tasks']} open task(s)" if p["open_tasks"] else "")
+        out.append({"id": f"resume-{p['id']}-{p['last_activity_at'][:10]}", "kind": "project", "priority": 2,
+                    "title": f"Continue {p['name']}", "detail": detail + ".",
+                    "command": f"Show me where I left off in my {p['name']} project", "link": "/projects"})
+    clashes = integrations.overlaps()
+    if clashes:
+        a, b = clashes[0]["a"], clashes[0]["b"]
+        out.append({"id": f"overlap-{a['id']}-{b['id']}", "kind": "deadline", "priority": 4,
+                    "title": f"{len(clashes)} calendar conflict{'s' if len(clashes) > 1 else ''}",
+                    "detail": f"\"{a['title']}\" overlaps \"{b['title']}\" on {a['start_at'][:10]}.", "link": "/calendar"})
+    out.extend(workflows.suggestions())
+    from . import cloud, workspaces
+
+    out.extend(workspaces.suggestions())
+    behind = tasks.behind_schedule()
+    for parent_id in dict.fromkeys(t["parent_id"] for t in behind):
+        parent = tasks.get(parent_id)
+        late = [t for t in behind if t["parent_id"] == parent_id]
+        out.append({"id": f"behind-{parent_id}-{len(late)}", "kind": "deadline", "priority": 4,
+                    "title": f"Behind on \"{parent['title']}\"",
+                    "detail": f"{len(late)} step(s) are past their date. LifeOS can spread the rest over the time left.",
+                    "action": {"label": "Update the plan", "method": "POST", "path": f"/api/tasks/{parent_id}/replan",
+                               "body": {}}})
+    for c in cloud.folders():
+        if not c["approved"]:
+            out.append({"id": f"cloud-{c['path']}", "kind": "setup", "priority": 1, "title": f"Use your {c['provider']} files",
+                        "detail": f"Approve {c['path']} so LifeOS can search and organize it. Online-only files "
+                                  "aren't downloaded.", "link": "/settings"})
     projects = memory.list_all("project")
     for p in projects[:3]:
         open_in_project = [t for t in open_tasks if t.get("project") and t["project"].lower() in p["content"].lower()]
@@ -118,6 +149,12 @@ def daily_summary() -> dict[str, Any]:
     lines.append(f"• Completed today: {done_today} task(s); {actions_today} action(s) carried out.")
     if pending:
         lines.append(f"• {len(pending)} action(s) waiting for your approval.")
+    from . import integrations
+
+    events_today = integrations.events(start, end, 20)
+    if events_today:
+        lines.insert(1, "• Calendar: " + ", ".join(
+            f"{e['title']} ({datetime.fromisoformat(e['start_at']).astimezone():%H:%M})" for e in events_today[:6]) + ".")
     useful = [s for s in sugg if s["kind"] != "setup"]
     if useful:
         lines.append("• Suggested: " + "; ".join(s["title"] for s in useful[:3]) + ".")
@@ -152,4 +189,33 @@ def dashboard() -> dict[str, Any]:
         "counts": counts,
         "automation_paused": cfg["automation_paused"],
         "llm": llm.status(),
+        "crew": _crew_overview(),
+        "automations": _automation_overview(),
+        "events_today": _events_today(),
     }
+
+
+def _crew_overview() -> dict[str, Any]:
+    from . import missions
+
+    agents = missions.crew_status()
+    return {"agents": [{k: a[k] for k in ("slug", "name", "role", "color", "icon", "state", "current")} for a in agents],
+            "active_missions": len(missions.list_missions(50, "active")),
+            "open_briefs": len(missions.open_briefs()), "spend": llm.spend_today()}
+
+
+def _automation_overview() -> dict[str, Any]:
+    from . import workflows
+
+    flows = workflows.list_workflows()
+    upcoming = sorted((w for w in flows if w["enabled"] and w["next_run_at"]), key=lambda w: w["next_run_at"])
+    return {"enabled": len([w for w in flows if w["enabled"]]), "total": len(flows),
+            "next": [{"id": w["id"], "name": w["name"], "next_run_at": w["next_run_at"]} for w in upcoming[:3]],
+            "recent_runs": workflows.runs(limit=5)}
+
+
+def _events_today() -> list[dict[str, Any]]:
+    from . import integrations
+
+    start, end = _local_day_bounds()
+    return integrations.events(start, end, 20)

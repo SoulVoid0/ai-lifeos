@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=AI LifeOS
+Comment=LifeOS as your desktop
+Exec=/usr/bin/lifeos-session
+Type=Application
+DesktopNames=LifeOS;wlroots

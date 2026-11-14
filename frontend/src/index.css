@@ -29,3 +29,7 @@ body { @apply bg-bg text-text font-sans antialiased; }
 @utility input { @apply w-full rounded-lg border border-line bg-panel-2 px-3 py-2 text-sm text-text placeholder:text-muted/70 outline-none focus:border-accent; }
 @utility label { @apply mb-1 block text-xs font-medium uppercase tracking-wide text-muted; }
 @utility chip { @apply inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-xs text-muted; }
+
+/* Control Center: work flowing along the links between the Overseer and specialists. */
+@keyframes station-flow { to { stroke-dashoffset: -12; } }
+.station-flow { animation: station-flow 0.8s linear infinite; }

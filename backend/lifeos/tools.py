@@ -9,7 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Literal
+from types import UnionType
+from typing import Any, Callable, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -110,7 +111,138 @@ class NoArgs(BaseModel):
     pass
 
 
+class WebSearchArgs(BaseModel):
+    query: str = Field(..., min_length=1, max_length=300)
+    limit: int = Field(8, ge=1, le=20)
+
+
+class FetchUrlArgs(BaseModel):
+    url: str = Field(..., description="http(s) URL")
+
+
+class WriteFileArgs(BaseModel):
+    path: str = Field(..., description="Path inside an approved folder, e.g. 'Documents/notes/plan.md'")
+    content: str = Field(..., max_length=500_000)
+    overwrite: bool = False
+
+
+class OutboxArgs(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=120, description="e.g. 'weekly-plan.md'")
+    content: str = Field(..., max_length=500_000)
+
+
+class ProjectArgs(BaseModel):
+    name: str = Field(..., description="Project name or part of its path")
+
+
+class EventsArgs(BaseModel):
+    days_ahead: int = Field(7, ge=0, le=365)
+
+
+class EmailArgs(BaseModel):
+    limit: int = Field(10, ge=1, le=50)
+    unread_only: bool = True
+
+
+class CreateEventArgs(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+    start: str = Field(..., description="Natural language or ISO date-time")
+    end: str | None = None
+    location: str | None = None
+
+
+class ImageArgs(BaseModel):
+    prompt: str = Field(..., min_length=3, max_length=2000, description="Detailed visual description: subject, style, "
+                        "lighting, composition")
+    negative: str | None = Field(None, max_length=500, description="Things to avoid")
+    size: Literal["square", "portrait", "landscape", "wide"] = "square"
+    seed: int | None = None
+
+
+class VideoArgs(BaseModel):
+    prompt: str = Field(..., min_length=3, max_length=2000, description="What happens in the clip, camera motion, style")
+    negative: str | None = Field(None, max_length=500)
+    size: Literal["landscape", "portrait", "square", "wide"] = "landscape"
+    seconds: int = Field(4, ge=1, le=10, description="Clip length in seconds (24 fps)")
+
+
+class ListMediaArgs(BaseModel):
+    kind: Literal["image", "video"] | None = None
+    limit: int = Field(10, ge=1, le=50)
+
+
 # ---------------------------------------------------------------- registry
+
+class LaunchAppArgs(BaseModel):
+    name: str = Field(..., description="App name as installed, e.g. 'Spotify', 'Visual Studio Code', 'Steam'")
+
+
+class ListAppsArgs(BaseModel):
+    query: str | None = Field(None, description="Part of the name; leave empty for the most used apps")
+
+
+class NoArgs(BaseModel):
+    pass
+
+
+class ProcessArgs(BaseModel):
+    sort: Literal["memory", "cpu"] = "memory"
+    limit: int = Field(15, ge=1, le=50)
+
+
+class EndProgramArgs(BaseModel):
+    name: str = Field(..., description="Program name from list_programs, e.g. 'chrome.exe'")
+
+
+class VolumeArgs(BaseModel):
+    level: int | None = Field(None, ge=0, le=100, description="Volume 0-100")
+    change: Literal["up", "down", "mute"] | None = Field(None, description="Instead of a level: up, down or mute (toggle)")
+
+
+class PowerArgs(BaseModel):
+    action: Literal["lock", "sleep", "restart", "shutdown", "sign_out"]
+
+
+class WifiArgs(BaseModel):
+    action: Literal["list", "status", "connect", "disconnect", "on", "off"] = "list"
+    ssid: str = Field("", description="Network name, for connect")
+    password: str = Field("", description="Wi-Fi password for a new network (leave empty for saved or open ones)")
+
+
+class BluetoothArgs(BaseModel):
+    action: Literal["list", "scan", "connect", "disconnect", "pair", "forget", "on", "off"] = "list"
+    device: str = Field("", description="Device name or address, for connect/disconnect/pair/forget")
+
+
+class BrightnessArgs(BaseModel):
+    level: int = Field(ge=1, le=100, description="Screen brightness 1-100")
+
+
+class WorkspaceArgs(BaseModel):
+    name: str = Field(..., description="Workspace name, e.g. 'study'")
+
+
+class CustomToolArgs(BaseModel):
+    name: str = Field(..., description="Name of the custom tool")
+    input: str = Field("", description="Text to pass to the tool")
+
+
+class RenameArgs(BaseModel):
+    folder: str = Field(..., description="Approved folder name or path")
+    extensions: list[str] | None = Field(None, description="Only these extensions, e.g. ['pdf']")
+    include_named: bool = Field(False, description="Also rename files that already have a real name")
+
+
+class BreakDownArgs(BaseModel):
+    task_id: int | None = Field(None, description="Task id")
+    title: str | None = Field(None, description="Task title when the id isn't known")
+    parts: int | None = Field(None, ge=2, le=10, description="How many steps (default: let the model decide)")
+
+
+class ReplanArgs(BaseModel):
+    task_id: int | None = Field(None, description="Task id of the parent task")
+    title: str | None = Field(None, description="Title of the parent task")
+
 
 @dataclass
 class Tool:
@@ -125,6 +257,16 @@ class Tool:
     execute: Callable[[dict[str, Any], dict[str, Any], dict[str, Any]], dict[str, Any]] | None = None
     undo: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     examples: list[str] = field(default_factory=list)
+    # Appends what's available right now (workspace or custom tool names) to the description.
+    extra: Callable[[], str] | None = None
+
+    def text(self) -> str:
+        if self.extra is None:
+            return self.description
+        try:
+            return self.description + self.extra()
+        except Exception:  # noqa: BLE001 - a description must never break a prompt
+            return self.description
 
 
 def _file_list_summary(found: list[dict[str, Any]], what: str = "file") -> str:
@@ -266,6 +408,163 @@ def _daily_summary(a: NoArgs, ctx: dict[str, Any]) -> dict[str, Any]:
     return {"summary": data["text"], "data": data}
 
 
+def _web_search(a: WebSearchArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import web
+
+    try:
+        results = web.search(a.query, a.limit)
+    except web.WebError as exc:
+        raise ToolError(str(exc)) from exc
+    lines = "; ".join(r["title"] for r in results[:5])
+    return {"summary": f"{len(results)} web result(s) for \"{a.query}\"" + (f": {lines}" if results else "."),
+            "results": results}
+
+
+def _fetch_url(a: FetchUrlArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import web
+
+    try:
+        page = web.fetch(a.url)
+    except web.WebError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Fetched {page['title'] or page['url']} ({len(page['text'])} characters).", "page": page}
+
+
+def outbox_dir() -> Path:
+    from . import config
+
+    d = config.data_dir() / "outbox"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def safe_filename(name: str) -> str:
+    import re
+
+    stem = re.sub(r"[^A-Za-z0-9._ -]+", "-", Path(name).name).strip(" .-") or "output.md"
+    return stem[:120] if "." in stem else stem[:116] + ".md"
+
+
+def write_outbox(filename: str, content: str) -> Path:
+    target = outbox_dir() / safe_filename(filename)
+    n = 1
+    while target.exists():
+        target = target.with_name(f"{Path(safe_filename(filename)).stem} ({n}){target.suffix}")
+        n += 1
+    target.write_text(content, encoding="utf-8")
+    return target
+
+
+def _save_outbox(a: OutboxArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    path = write_outbox(a.filename, a.content)
+    ctx.setdefault("outbox", []).append(str(path))
+    return {"summary": f"Saved {path.name} to the outbox.", "path": str(path)}
+
+
+def _undo_outbox(result: dict[str, Any]) -> dict[str, Any]:
+    p = Path(result["path"])
+    if p.is_file() and p.parent == outbox_dir():
+        p.unlink()
+    return {"summary": f"Removed {p.name} from the outbox."}
+
+
+def _generate(kind: str, a: ImageArgs | VideoArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import llm, media
+
+    _, agent = getattr(llm._local, "attr", None) or (None, None)
+    frames = (getattr(a, "seconds", 4) * 24) + 1
+    try:
+        m = media.generate(kind, a.prompt, negative=a.negative or "", size=a.size, seed=getattr(a, "seed", None),
+                           frames=frames, mission_id=ctx.get("mission_id"), agent=agent)
+    except media.MediaError as exc:
+        raise ToolError(str(exc)) from exc
+    if m["status"] != "done":
+        raise ToolError(f"{kind.capitalize()} generation failed: {m.get('error') or m['status']}")
+    ctx.setdefault("media", []).append(m["id"])
+    return {"summary": f"Generated {kind} #{m['id']} ({m['name']}, {m['seconds']}s with {m['model']}).",
+            "media_id": m["id"], "path": m["path"]}
+
+
+def _generate_image(a: ImageArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    return _generate("image", a, ctx)
+
+
+def _generate_video(a: VideoArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    return _generate("video", a, ctx)
+
+
+def _undo_media(result: dict[str, Any]) -> dict[str, Any]:
+    from . import media
+
+    media.delete(result["media_id"])
+    return {"summary": f"Deleted generated media #{result['media_id']}."}
+
+
+def _list_media(a: ListMediaArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import media
+
+    items = [{k: m[k] for k in ("id", "kind", "prompt", "status", "name", "created_at")}
+             for m in media.list_media(a.limit, a.kind)]
+    return {"summary": f"{len(items)} generated item(s).", "media": items}
+
+
+def _list_projects(a: NoArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import projects
+
+    items = projects.list_projects()
+    names = "; ".join(f"{p['name']} ({p['kind']}, {p['open_tasks']} open tasks)" for p in items[:12])
+    return {"summary": f"{len(items)} project(s)" + (f": {names}" if items else "."), "projects": items}
+
+
+def _project_context(a: ProjectArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import projects
+
+    p = projects.find(a.name)
+    if not p:
+        raise ToolError(f"No project matching '{a.name}'")
+    data = projects.context(p["id"])
+    ctx.setdefault("found_files", []).extend(data["recent_files"])
+    recent = ", ".join(f["name"] for f in data["recent_files"][:6])
+    return {"summary": f"{p['name']} at {p['path']}: {data['file_count']} files, {len(data['open_tasks'])} open task(s)"
+                       + (f"; recently edited {recent}" if recent else "") + ".", "context": data}
+
+
+def _list_events(a: EventsArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import integrations
+
+    end = (datetime.now(timezone.utc) + timedelta(days=a.days_ahead + 1)).isoformat(timespec="seconds")
+    items = integrations.events(datetime.now(timezone.utc).isoformat(timespec="seconds"), end)
+    names = "; ".join(f"{e['title']} ({e['start_at'][:16].replace('T', ' ')} UTC)" for e in items[:10])
+    return {"summary": f"{len(items)} event(s) in the next {a.days_ahead} day(s)" + (f": {names}" if items else "."),
+            "events": items}
+
+
+def _create_event(a: CreateEventArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import integrations
+
+    e = integrations.add_event(a.title, a.start, a.end, a.location)
+    return {"summary": f"Added event \"{e['title']}\" at {e['start_at']}.", "event": e}
+
+
+def _undo_create_event(result: dict[str, Any]) -> dict[str, Any]:
+    from . import integrations
+
+    integrations.delete_event(result["event"]["id"])
+    return {"summary": f"Removed event \"{result['event']['title']}\"."}
+
+
+def _check_email(a: EmailArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import integrations
+
+    try:
+        msgs = integrations.check_email(a.limit, a.unread_only)
+    except Exception as exc:  # imaplib, socket and configuration errors
+        raise ToolError(f"Email check failed: {exc}") from exc
+    lines = "; ".join(f"{m['subject']} — {m['from']}" for m in msgs[:8])
+    return {"summary": f"{len(msgs)} {'unread ' if a.unread_only else ''}message(s)" + (f": {lines}" if msgs else "."),
+            "messages": msgs}
+
+
 # confirm-able tools -------------------------------------------------------------
 
 def _prepare_organize(a: OrganizeArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -338,6 +637,251 @@ def _undo_delete_memory(result: dict[str, Any]) -> dict[str, Any]:
     return {"summary": f"Restored memory: {restored['content']}", "memory": restored}
 
 
+def _prepare_write_file(a: WriteFileArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    _, target = permissions.resolve_allowed(a.path, must_exist=False)
+    permissions.resolve_allowed(target.parent)  # the containing folder must already exist inside an approved folder
+    if target.exists() and not a.overwrite:
+        raise ToolError(f"{target.name} already exists; set overwrite to replace it")
+    if target.exists() and not target.is_file():
+        raise ToolError(f"{target} is not a file")
+    verb = "Overwrite" if target.exists() else "Create"
+    return (f"{verb} {target} ({len(a.content)} characters)",
+            {"path": str(target), "content": a.content, "exists": target.exists(), "excerpt": a.content[:1500]})
+
+
+def _execute_write_file(args: dict[str, Any], preview: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    _, target = permissions.resolve_allowed(preview["path"], must_exist=False)
+    previous = None
+    if target.exists():
+        if target.stat().st_size > 2 * 1024 * 1024:
+            raise ToolError("Refusing to overwrite a file larger than 2 MB")
+        previous = target.read_text(encoding="utf-8", errors="replace")
+    target.write_text(preview["content"], encoding="utf-8")
+    files._reindex({permissions.resolve_allowed(target)[0]})
+    return {"summary": f"Wrote {target.name}.", "path": str(target), "previous": previous}
+
+
+def _undo_write_file(result: dict[str, Any]) -> dict[str, Any]:
+    _, target = permissions.resolve_allowed(result["path"], must_exist=False)
+    if result.get("previous") is not None:
+        target.write_text(result["previous"], encoding="utf-8")
+        return {"summary": f"Restored the previous contents of {target.name}."}
+    if target.exists():
+        target.unlink()
+    return {"summary": f"Deleted {target.name}."}
+
+
+# ---------------------------------------------------------------- workspaces, custom tools, renames, breakdowns
+
+def _workspace_names() -> str:
+    from . import workspaces
+
+    names = [w["name"] for w in workspaces.list_all()]
+    return f" Saved workspaces: {', '.join(names)}." if names else " No workspaces saved yet (the user adds them on the Dashboard)."
+
+
+def _open_workspace(a: WorkspaceArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import workspaces
+
+    w = workspaces.find(a.name)
+    if not w:
+        raise ToolError(f"No workspace named {a.name!r}.{_workspace_names()}")
+    out = workspaces.open_workspace(w["id"], by="workflow" if ctx.get("workflow_run_id") else "assistant")
+    failed = f" {len(out['failed'])} item(s) couldn't be opened." if out["failed"] else ""
+    return {"summary": f"Opened the {w['name']} workspace: {', '.join(out['opened']) or 'nothing'}.{failed}", **out}
+
+
+def _launch_app(a: LaunchAppArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import apps
+
+    try:
+        out = apps.launch(name=a.name, by="workflow" if ctx.get("workflow_run_id") else "assistant")
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Opened {out['opened']}.", **out}
+
+
+def _list_apps(a: ListAppsArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import apps
+
+    found = apps.search(a.query or "", 25)
+    names = ", ".join(x["name"] for x in found) or "none"
+    return {"summary": f"{len(found)} app(s): {names}", "apps": [{"name": x["name"], "launches": x["launches"]} for x in found]}
+
+
+def _system_status(a: NoArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import system
+
+    s = system.status()
+    return {"summary": system.summary(s), **s}
+
+
+def _list_programs(a: ProcessArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import system
+
+    rows = system.processes(a.limit, a.sort)
+    top = "; ".join(f"{r['name']} {r['memory_mb']} MB" + (f" ({r['count']}x)" if r["count"] > 1 else "") for r in rows[:8])
+    return {"summary": f"Heaviest running programs by {a.sort}: {top}", "programs": rows}
+
+
+def _end_program(a: EndProgramArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import system
+
+    try:
+        out = system.end_program(a.name)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Ended {out['ended']} ({out['processes']} process(es)).", **out}
+
+
+def _set_volume(a: VolumeArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import system
+
+    try:
+        out = system.set_volume(a.level, a.change)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    what = "Toggled mute" if a.change == "mute" else f"Turned the volume {a.change}" if a.change else f"Set the volume to {out['volume']}%"
+    return {"summary": what + ".", **out}
+
+
+def _wifi(a: WifiArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import devices
+
+    try:
+        if a.action == "status":
+            st = devices.wifi_status()
+            return {"summary": f"Wi-Fi is connected to {st['connected']}." if st["connected"] else
+                    "Wi-Fi is not connected." if st["available"] else "This computer has no Wi-Fi.", **st}
+        if a.action == "list":
+            nets = devices.wifi_networks()
+            shown = ", ".join(f"{n['ssid']} ({n['signal']}%{', connected' if n['connected'] else ''})" for n in nets[:10])
+            return {"summary": f"Wi-Fi networks: {shown}" if nets else "No Wi-Fi networks found.", "networks": nets}
+        if a.action == "connect":
+            out = devices.wifi_connect(a.ssid, a.password)
+            return {"summary": f"Connected to {out['connected']}.", **out}
+        if a.action == "disconnect":
+            out = devices.wifi_disconnect()
+            return {"summary": "Disconnected from Wi-Fi." if out["disconnected"] else "Wi-Fi wasn't connected.", **out}
+        out = devices.wifi_power(a.action == "on")
+        return {"summary": "Opened Wi-Fi settings." if out.get("opened_settings") else f"Wi-Fi turned {a.action}.", **out}
+    except devices.DeviceError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def _bluetooth(a: BluetoothArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import devices
+
+    try:
+        if a.action in ("list", "scan"):
+            rows = devices.bluetooth_devices(8 if a.action == "scan" else 0)
+            shown = ", ".join(d["name"] + (" (connected)" if d["connected"] else "" if d["paired"] else " (not paired)")
+                              for d in rows[:12])
+            return {"summary": f"Bluetooth devices: {shown}" if rows else "No Bluetooth devices found.", "devices": rows}
+        action = {"on": "power_on", "off": "power_off"}.get(a.action, a.action)
+        return devices.bluetooth_action(action, a.device)  # type: ignore[arg-type]
+    except devices.DeviceError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def _brightness(a: BrightnessArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import devices
+
+    try:
+        out = devices.set_brightness(a.level)
+    except devices.DeviceError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Set the screen brightness to {out['brightness']}%.", **out}
+
+
+def _power(a: PowerArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import system
+
+    try:
+        return system.power(a.action)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def _custom_names(kind: str) -> Callable[[], str]:
+    def names() -> str:
+        from . import custom_tools
+
+        found = [f"{t['name']} ({t['description'] or 'no description'})" for t in custom_tools.list_all(True)
+                 if t["kind"] == kind]
+        return f" Available: {'; '.join(found)}." if found else " None defined yet (Settings → Custom tools)."
+    return names
+
+
+def _prepare_webhook(a: CustomToolArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    from . import custom_tools
+
+    t = custom_tools.find(a.name, "webhook")
+    req = custom_tools.describe_request(t, a.input)
+    return f"Call {t['name']}: {req['method']} {req['url']}", {"tool": t["name"], "input": a.input, "request": req}
+
+
+def _execute_webhook(args: dict[str, Any], preview: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    from . import custom_tools
+
+    t = custom_tools.find(preview["tool"], "webhook")
+    out = custom_tools.call_webhook(t, preview["input"])
+    return {"summary": f"{t['name']} answered (HTTP {out['status']}): {out['response'][:300]}", **out}
+
+
+def _custom_prompt(a: CustomToolArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import custom_tools
+
+    t = custom_tools.find(a.name, "prompt")
+    text = custom_tools.run_prompt(t, a.input)
+    return {"summary": text[:1500], "text": text}
+
+
+def _prepare_rename(a: RenameArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    from . import renamer
+
+    plan = renamer.plan(a.folder, extensions=a.extensions, include_named=a.include_named)
+    if not plan["moves"]:
+        return "No files with meaningless names to rename (files need readable text).", plan
+    sample = "; ".join(f"{Path(m['src']).name} → {Path(m['dest']).name}" for m in plan["moves"][:3])
+    return f"Rename {len(plan['moves'])} file(s) in {plan['folder']} after their content: {sample}", plan
+
+
+def _find_task(task_id: int | None, title: str | None) -> dict[str, Any]:
+    task = tasks.get(task_id) if task_id else (tasks.find(title) if title else None)
+    if not task:
+        raise ToolError("No matching open task found; give its id or exact title")
+    return task
+
+
+def _break_down(a: BreakDownArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    task = _find_task(a.task_id, a.title)
+    out = tasks.break_down(task["id"], a.parts)
+    steps = "; ".join(f"{s['title']} ({s['estimate_minutes']} min)" for s in out["subtasks"])
+    hours = out["total_minutes"] / 60
+    return {"summary": f"Split \"{task['title']}\" into {len(out['subtasks'])} steps, about {hours:.1f} h in total: {steps}",
+            **out}
+
+
+def _undo_break_down(result: dict[str, Any]) -> dict[str, Any]:
+    for t in result.get("subtasks", []):
+        try:
+            tasks.delete(t["id"])
+        except KeyError:
+            pass
+    return {"summary": f"Removed {len(result.get('subtasks', []))} step(s)."}
+
+
+def _replan(a: ReplanArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    task = _find_task(a.task_id, a.title)
+    out = tasks.replan(task["id"])
+    if not out["moved"]:
+        return {"summary": f"\"{task['title']}\" has no open steps to reschedule.", **out}
+    first = out["moved"][0]
+    return {"summary": f"Rescheduled {len(out['moved'])} open step(s) of \"{task['title']}\"; next: "
+                       f"\"{first['title']}\" by {first['due_at']}.", **out}
+
+
 TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("search_files", "Search indexed files in approved folders by topic, name, type, folder or date.",
          SearchFilesArgs, "read", "auto", run=_search_files),
@@ -372,6 +916,65 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          undo=_undo_create_folder),
     Tool("delete_memory", "Forget a stored memory. Requires approval.", DeleteMemoryArgs, "destructive", "confirm",
          prepare=_prepare_delete_memory, execute=_execute_delete_memory, undo=_undo_delete_memory),
+    Tool("web_search", "Search the web (only when the user enabled web access).", WebSearchArgs, "read", "auto",
+         run=_web_search),
+    Tool("fetch_url", "Read a web page as text (only when the user enabled web access).", FetchUrlArgs, "read",
+         "confirm", run=_fetch_url),
+    Tool("save_to_outbox", "Save a deliverable (report, plan, draft, code) as a file in the LifeOS outbox.",
+         OutboxArgs, "write", "auto", run=_save_outbox, undo=_undo_outbox),
+    Tool("write_file", "Create or overwrite a text file inside an approved folder. Requires approval.",
+         WriteFileArgs, "write", "confirm", prepare=_prepare_write_file, execute=_execute_write_file,
+         undo=_undo_write_file),
+    Tool("list_projects", "List the user's tracked projects with open task counts.", NoArgs, "read", "auto",
+         run=_list_projects),
+    Tool("project_context", "Get a project's location, recent files, open tasks, notes and README.", ProjectArgs,
+         "read", "auto", run=_project_context),
+    Tool("list_events", "List calendar events for the next N days.", EventsArgs, "read", "auto", run=_list_events),
+    Tool("create_event", "Add an event to the LifeOS calendar.", CreateEventArgs, "write", "auto", run=_create_event,
+         undo=_undo_create_event),
+    Tool("check_email", "Read recent email headers and snippets (read-only; needs an account in Settings).",
+         EmailArgs, "read", "auto", run=_check_email),
+    Tool("generate_image", "Generate an image from a text prompt with the configured image backend (local ComfyUI or "
+         "WebUI by default). Saved to the gallery.", ImageArgs, "write", "auto", run=_generate_image, undo=_undo_media),
+    Tool("generate_video", "Generate a short video clip (a few seconds) from a text prompt with ComfyUI + LTX-Video. "
+         "Slow: minutes per clip.", VideoArgs, "write", "auto", run=_generate_video, undo=_undo_media),
+    Tool("list_media", "List recently generated images and videos.", ListMediaArgs, "read", "auto", run=_list_media),
+    Tool("open_workspace", "Open one of the user's saved workspaces (its files, folders, web pages and apps), e.g. "
+         "for 'prepare my workspace for studying'.", WorkspaceArgs, "read", "auto", run=_open_workspace,
+         extra=_workspace_names),
+    Tool("custom_webhook", "Call one of the user's own web tools (webhook) with some text. Requires approval.",
+         CustomToolArgs, "write", "confirm", prepare=_prepare_webhook, execute=_execute_webhook,
+         extra=_custom_names("webhook")),
+    Tool("custom_prompt", "Run one of the user's saved instructions on some text with the local model.",
+         CustomToolArgs, "read", "auto", run=_custom_prompt, extra=_custom_names("prompt")),
+    Tool("rename_by_content", "Propose renaming files with meaningless names (scan001.pdf, IMG_2041.jpg) in an "
+         "approved folder after their content. Requires approval; undoable.", RenameArgs, "write", "confirm",
+         prepare=_prepare_rename, execute=_execute_moves, undo=_undo_moves),
+    Tool("launch_app", "Open an installed app by name (Start menu / applications list), e.g. 'open Spotify'.",
+         LaunchAppArgs, "write", "auto", run=_launch_app),
+    Tool("list_apps", "List installed apps, optionally matching part of a name.", ListAppsArgs, "read", "auto",
+         run=_list_apps),
+    Tool("system_status", "This computer's CPU, memory, disk space, battery and uptime.", NoArgs, "read", "auto",
+         run=_system_status),
+    Tool("list_programs", "Running programs using the most memory or CPU.", ProcessArgs, "read", "auto",
+         run=_list_programs),
+    Tool("end_program", "Close a running program by name (all its processes). Requires approval.", EndProgramArgs,
+         "destructive", "confirm", run=_end_program),
+    Tool("set_volume", "Set the speaker volume (0-100), turn it up or down, or toggle mute.", VolumeArgs, "write",
+         "auto", run=_set_volume),
+    Tool("power_action", "Lock the screen, sleep, restart, shut down or sign out. Requires approval.", PowerArgs,
+         "destructive", "confirm", run=_power),
+    Tool("wifi", "Wi-Fi: list nearby networks, show status, connect (with a password for a new network), disconnect, "
+         "or turn Wi-Fi on/off.", WifiArgs, "write", "auto", run=_wifi),
+    Tool("bluetooth", "Bluetooth: list or scan for devices, connect, disconnect, pair, forget a device, or turn "
+         "Bluetooth on/off.", BluetoothArgs, "write", "auto", run=_bluetooth),
+    Tool("set_brightness", "Set the screen brightness (laptops and supported monitors).", BrightnessArgs, "write",
+         "auto", run=_brightness),
+    Tool("break_down_task", "Split a big task (assignment, project) into ordered steps with time estimates and "
+         "due dates spread before its deadline.", BreakDownArgs, "write", "auto", run=_break_down,
+         undo=_undo_break_down),
+    Tool("replan_task", "Reschedule the open steps of a broken-down task over the time left (when behind).",
+         ReplanArgs, "write", "auto", run=_replan),
 ]}
 
 
@@ -383,6 +986,12 @@ def describe_call(name: str, args: dict[str, Any]) -> str:
         return f"Mark task {args.get('task_id') or args.get('title')!r} as done"
     if name == "save_memory":
         return f"Remember: {args['content']}"
+    if name == "end_program":
+        return f"Close {args['name']}"
+    if name == "power_action":
+        from .system import POWER_LABEL
+
+        return POWER_LABEL.get(args.get("action", ""), f"Power: {args.get('action')}")
     shown = ", ".join(f"{k}={v!r}" for k, v in args.items() if v not in (None, [], ""))
     return f"Run {name}({shown})"
 
@@ -412,26 +1021,122 @@ def policy_for(tool: Tool) -> str:
 def describe() -> list[dict[str, Any]]:
     out = []
     for t in TOOLS.values():
-        out.append({"name": t.name, "description": t.description, "risk": t.risk,
+        out.append({"name": t.name, "description": t.text(), "risk": t.risk,
                     "default_policy": t.default_policy, "policy": policy_for(t),
                     "parameters": t.args.model_json_schema()})
     return out
 
 
+_NULLISH = {"null", "none", "undefined", "n/a", "na", "nil", ""}
+
+
+def _base_types(annotation: Any) -> set[Any]:
+    """The plain types a field accepts, e.g. {str} for `str | None`, {list} for `list[str]`, {"literal"} for Literal."""
+    origin = get_origin(annotation)
+    if origin in (Union, UnionType):
+        out: set[Any] = set()
+        for a in get_args(annotation):
+            if a is not type(None):
+                out |= _base_types(a)
+        return out
+    if origin is Literal:
+        return {"literal"}
+    if origin in (list, tuple, set):
+        return {list}
+    return {annotation}
+
+
+def _coerce(value: Any, types: set[Any]) -> Any:
+    """Fix the usual small-model mistakes: numbers as strings, a string where a list goes, and the reverse."""
+    if isinstance(value, str) and value.strip().lower() in _NULLISH:
+        return None
+    if isinstance(value, dict) and not value:
+        return None
+    if list in types and isinstance(value, str):
+        return [v.strip() for v in value.split(",") if v.strip()]
+    if str in types and isinstance(value, list):
+        return ", ".join(str(v) for v in value)
+    if str in types and isinstance(value, (int, float)) and not isinstance(value, bool) and int not in types:
+        return str(value)
+    if int in types and isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    if int in types and isinstance(value, float) and value.is_integer():
+        return int(value)
+    if float in types and isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    if bool in types and isinstance(value, str) and value.strip().lower() in ("true", "false", "yes", "no"):
+        return value.strip().lower() in ("true", "yes")
+    if "literal" in types and isinstance(value, str):
+        return value.strip().lower()
+    return value
+
+
+def _describe_args(model: type[BaseModel]) -> str:
+    parts = []
+    for key, f in model.model_fields.items():
+        kinds = "/".join(sorted(getattr(t, "__name__", str(t)) for t in _base_types(f.annotation)))
+        parts.append(f"{key} ({kinds}{', required' if f.is_required() else ''})")
+    return ", ".join(parts) or "none"
+
+
+def clean_args(model: type[BaseModel], args: Any) -> dict[str, Any]:
+    """Keep known arguments, drop empty/null ones, and coerce simple type mistakes."""
+    if isinstance(args, str):
+        try:
+            import json
+
+            args = json.loads(args)
+        except ValueError:
+            args = {}
+    if not isinstance(args, dict):
+        return {}
+    fields = model.model_fields
+    lower = {k.lower(): k for k in fields}
+    out: dict[str, Any] = {}
+    for key, value in args.items():
+        name = key if key in fields else lower.get(str(key).lower())
+        if name is None:
+            continue
+        value = _coerce(value, _base_types(fields[name].annotation))
+        if value is not None:
+            out[name] = value
+    return out
+
+
 def validate(name: str, args: dict[str, Any]) -> tuple[Tool, BaseModel]:
-    tool = TOOLS.get(name)
+    """Validate a call. Bad optional arguments are dropped (their defaults are used); bad required ones are errors."""
+    tool = TOOLS.get(str(name or ""))
     if tool is None:
         raise ToolError(f"Unknown tool '{name}'")
-    try:
-        return tool, tool.args.model_validate(args or {})
-    except ValidationError as exc:
-        raise ToolError(f"Invalid arguments for {name}: {exc.errors(include_url=False)}") from exc
+    fields = tool.args.model_fields
+    data = clean_args(tool.args, args)
+    for _ in range(2):
+        try:
+            return tool, tool.args.model_validate(data)
+        except ValidationError as exc:
+            # Wrong types or unknown choices in optional arguments fall back to defaults; out-of-range values stay errors.
+            range_errors = ("greater", "less", "too_", "string_too", "multiple_of")
+            if any(e["type"].startswith(range_errors) for e in exc.errors()):
+                bad: set[str] = set()
+            else:
+                bad = {str(e["loc"][0]) for e in exc.errors() if e.get("loc")}
+            optional = [k for k in bad if k in data and k in fields and not fields[k].is_required()]
+            if not optional:
+                problems = "; ".join(f"{'.'.join(map(str, e['loc'])) or 'arguments'}: {e['msg']}" for e in exc.errors())
+                raise ToolError(f"Invalid arguments for {name}: {problems}. Arguments: {_describe_args(tool.args)}") from exc
+            for k in optional:
+                data.pop(k)
+    raise ToolError(f"Invalid arguments for {name}. Arguments: {_describe_args(tool.args)}")
 
 
 def invoke(name: str, args: dict[str, Any], ctx: dict[str, Any], conversation_id: int | None = None) -> dict[str, Any]:
     """Validate, authorize, then run or queue a tool call. Never raises for tool failures."""
     from . import actions
 
+    mission_id = ctx.get("mission_id")
     try:
         tool, parsed = validate(name, args)
     except ToolError as exc:
@@ -449,9 +1154,9 @@ def invoke(name: str, args: dict[str, Any], ctx: dict[str, Any], conversation_id
             if not preview.get("moves", True) and "moves" in preview:
                 return {"tool": name, "status": "done", "summary": summary, "result": preview}
             if policy == "confirm":
-                action = actions.create(name, parsed.model_dump(), summary, preview, conversation_id)
+                action = actions.create(name, parsed.model_dump(), summary, preview, conversation_id, mission_id)
                 return {"tool": name, "status": "pending", "summary": summary, "action": action}
-            action = actions.create(name, parsed.model_dump(), summary, preview, conversation_id)
+            action = actions.create(name, parsed.model_dump(), summary, preview, conversation_id, mission_id)
             action = actions.approve(action["id"], auto=True)
             return {"tool": name, "status": action["status"], "summary": (action.get("result") or {}).get("summary", summary),
                     "action": action}
@@ -459,7 +1164,7 @@ def invoke(name: str, args: dict[str, Any], ctx: dict[str, Any], conversation_id
         if policy == "confirm":
             summary = describe_call(name, parsed.model_dump())
             action = actions.create(name, parsed.model_dump(), summary, {"args": parsed.model_dump(), "ctx": _ctx_snapshot(ctx)},
-                                    conversation_id)
+                                    conversation_id, mission_id)
             return {"tool": name, "status": "pending", "summary": summary, "action": action}
         result = tool.run(parsed, ctx)
     except (ToolError, permissions.PermissionDenied, FileNotFoundError, KeyError, ValueError) as exc:

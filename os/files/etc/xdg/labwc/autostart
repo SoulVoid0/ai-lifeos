@@ -1,0 +1,2 @@
+swaybg -c '#0b0d12' >/dev/null 2>&1 &
+lifeos-ui >/dev/null 2>&1 &

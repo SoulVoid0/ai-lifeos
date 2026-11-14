@@ -3,18 +3,21 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (__version__, actions, activity, agent, config, conversations, files, llm, memory, permissions,
-               proactive, scheduler, search, settings, tasks, tools)
+from . import (__version__, actions, activity, agent, config, conversations, db, crew, files, integrations, lean, learning, llm, mailer, media, memory,
+               missions, permissions, proactive, projects, scheduler, search, services, settings, tasks, tools, vault,
+               updates, workflows)
+from . import apps, backup, cloud, custom_tools, devices, notify_bus, renamer, system, workspaces
 
 log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
@@ -22,11 +25,21 @@ _scheduler = scheduler.Scheduler()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    crew.ensure_seeded()
+    interrupted = missions.recover()
+    if interrupted:
+        activity.log("crew", f"Marked {interrupted} interrupted mission(s) as failed after a restart", status="error")
     if not os.environ.get("LIFEOS_NO_SCHEDULER"):
         _scheduler.start()
+        workflows.run_startup()
     scheduler.watch_parent()
+    if not os.environ.get("LIFEOS_NO_SERVICES"):
+        services.start_background()
+        threading.Thread(target=apps.list_apps, daemon=True, name="apps-preload").start()
+        notify_bus.start()
     yield
     _scheduler.stop()
+    services.stop_all()
 
 
 app = FastAPI(title="AI LifeOS", version=__version__, lifespan=lifespan)
@@ -130,6 +143,149 @@ class PauseIn(BaseModel):
 
 class RenameIn(BaseModel):
     title: str = Field(..., min_length=1, max_length=80)
+
+
+class AgentIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=40)
+    slug: str | None = None
+    role: str = "Specialist"
+    description: str = ""
+    persona: str = ""
+    model: str = ""
+    tools: list[str] = []
+    color: str = "slate"
+    icon: str = "bot"
+    max_steps: int = 10
+    candidates: list[str] = []
+    voice: str = ""
+    quirks: str = ""
+    catchphrases: list[str] = []
+    idle_lines: list[str] = []
+
+
+class AgentPatch(BaseModel):
+    name: str | None = None
+    role: str | None = None
+    description: str | None = None
+    persona: str | None = None
+    model: str | None = None
+    tools: list[str] | None = None
+    color: str | None = None
+    icon: str | None = None
+    max_steps: int | None = None
+    enabled: bool | None = None
+    candidates: list[str] | None = None
+    voice: str | None = None
+    quirks: str | None = None
+    catchphrases: list[str] | None = None
+    idle_lines: list[str] | None = None
+
+
+class LessonIn(BaseModel):
+    agent: str = Field(..., min_length=1, max_length=40)
+    text: str = Field(..., min_length=1, max_length=400)
+    pinned: bool = False
+
+
+class LessonPatch(BaseModel):
+    text: str | None = Field(None, max_length=400)
+    pinned: bool | None = None
+    agent: str | None = None
+
+
+class RatingIn(BaseModel):
+    rating: int
+    note: str = Field("", max_length=400)
+
+
+class ChatTurn(BaseModel):
+    role: str
+    content: str = Field(..., max_length=4000)
+
+
+class AgentChatIn(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    history: list[ChatTurn] = []
+
+
+class MissionIn(BaseModel):
+    goal: str = Field(..., min_length=1, max_length=8000)
+    agent: str | None = None
+
+
+class AnswerIn(BaseModel):
+    answer: str = Field(..., min_length=1, max_length=2000)
+
+
+class ModelIn(BaseModel):
+    model: str
+
+
+class KeyIn(BaseModel):
+    key: str = Field(..., min_length=1, max_length=500)
+
+
+class TextIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+
+
+class WorkflowIn(BaseModel):
+    name: str
+    description: str = ""
+    enabled: bool = True
+    trigger: dict[str, Any] = {"type": "manual"}
+    conditions: list[dict[str, Any]] = []
+    steps: list[dict[str, Any]]
+    source_text: str | None = None
+
+
+class ProjectIn(BaseModel):
+    path: str
+    name: str | None = None
+    description: str = ""
+
+
+class ProjectPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    status: str | None = None
+    pinned: bool | None = None
+
+
+class SourceIn(BaseModel):
+    location: str
+    label: str | None = None
+
+
+class EventIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=300)
+    start: str
+    end: str | None = None
+    location: str | None = None
+    description: str | None = None
+
+
+class EmailIn(BaseModel):
+    host: str
+    port: int = 993
+    username: str
+    folder: str = "INBOX"
+    password: str | None = None
+
+
+class EmailAlertsIn(BaseModel):
+    enabled: bool | None = None
+    to: str | None = None
+    host: str | None = None
+    port: int | None = None
+    username: str | None = None
+    security: str | None = None
+    events: dict[str, bool] | None = None
+    password: str | None = None
+
+
+class NameIn(BaseModel):
+    name: str
 
 
 # ---------------------------------------------------------------- routes
@@ -356,6 +512,303 @@ def llm_status() -> dict[str, Any]:
     return llm.status(force=True)
 
 
+# ---------------------------------------------------------------- cloud folders, workspaces, custom tools, backups
+
+@app.get("/api/folders/cloud")
+def cloud_folders() -> list[dict[str, Any]]:
+    return cloud.folders()
+
+
+# ---------------------------------------------------------------- the computer (launcher, status, power)
+
+class LaunchIn(BaseModel):
+    id: str = Field(max_length=2000)
+
+
+class VolumeIn(BaseModel):
+    level: int | None = Field(default=None, ge=0, le=100)
+    change: str | None = None
+
+
+class EndProgramIn(BaseModel):
+    name: str = Field(max_length=260)
+
+
+class PowerIn(BaseModel):
+    action: str
+
+
+@app.get("/api/apps")
+def list_apps(q: str = "", refresh: bool = False, limit: int = 500) -> list[dict[str, Any]]:
+    if refresh:
+        apps.list_apps(refresh=True)
+    return apps.search(q, limit) if q else apps.list_apps()[:limit]
+
+
+@app.post("/api/apps/launch")
+def launch_app(body: LaunchIn) -> dict[str, Any]:
+    return apps.launch(app_id=body.id)
+
+
+@app.get("/api/system/status")
+def system_status() -> dict[str, Any]:
+    return system.status()
+
+
+@app.get("/api/system/programs")
+def system_programs(sort: str = "memory", limit: int = 25) -> list[dict[str, Any]]:
+    return system.processes(min(limit, 100), "cpu" if sort == "cpu" else "memory")
+
+
+@app.post("/api/system/programs/end")
+def end_program(body: EndProgramIn) -> dict[str, Any]:
+    """The user pressed End in the app, which is the confirmation; the assistant's end_program tool asks first."""
+    return system.end_program(body.name)
+
+
+@app.post("/api/system/volume")
+def set_volume(body: VolumeIn) -> dict[str, Any]:
+    if body.change not in (None, "up", "down", "mute"):
+        raise ValueError("change must be up, down or mute")
+    return system.set_volume(body.level, body.change)  # type: ignore[arg-type]
+
+
+@app.post("/api/system/power")
+def power(body: PowerIn) -> dict[str, Any]:
+    return system.power(body.action)  # type: ignore[arg-type]
+
+
+class WifiIn(BaseModel):
+    ssid: str = Field(max_length=64)
+    password: str = Field(default="", max_length=128)
+
+
+class OnOffIn(BaseModel):
+    on: bool
+
+
+class BluetoothIn(BaseModel):
+    action: str
+    device: str = Field(default="", max_length=120)
+
+
+class DisplayIn(BaseModel):
+    name: str = Field(max_length=60)
+    mode: str = ""
+    scale: float | None = None
+    enabled: bool | None = None
+
+
+class BrightnessIn(BaseModel):
+    level: int = Field(ge=1, le=100)
+
+
+@app.get("/api/devices")
+def devices_overview() -> dict[str, Any]:
+    return {**devices.overview(), "notifications": notify_bus.status()}
+
+
+@app.get("/api/devices/wifi")
+def wifi_networks(rescan: bool = False) -> list[dict[str, Any]]:
+    return devices.wifi_networks(rescan)
+
+
+@app.post("/api/devices/wifi/connect")
+def wifi_connect(body: WifiIn) -> dict[str, Any]:
+    return devices.wifi_connect(body.ssid, body.password)
+
+
+@app.post("/api/devices/wifi/disconnect")
+def wifi_disconnect() -> dict[str, Any]:
+    return devices.wifi_disconnect()
+
+
+@app.post("/api/devices/wifi/power")
+def wifi_power(body: OnOffIn) -> dict[str, Any]:
+    return devices.wifi_power(body.on)
+
+
+@app.get("/api/devices/bluetooth")
+def bluetooth_devices(scan: int = 0) -> list[dict[str, Any]]:
+    return devices.bluetooth_devices(scan)
+
+
+@app.post("/api/devices/bluetooth")
+def bluetooth_action(body: BluetoothIn) -> dict[str, Any]:
+    if body.action not in ("connect", "disconnect", "pair", "forget", "power_on", "power_off"):
+        raise ValueError("Unknown Bluetooth action")
+    return devices.bluetooth_action(body.action, body.device)  # type: ignore[arg-type]
+
+
+@app.post("/api/devices/display")
+def set_display(body: DisplayIn) -> dict[str, Any]:
+    return devices.set_display(body.name, body.mode, body.scale, body.enabled)
+
+
+@app.post("/api/devices/brightness")
+def set_brightness(body: BrightnessIn) -> dict[str, Any]:
+    return devices.set_brightness(body.level)
+
+
+@app.post("/api/devices/open-settings/{page}")
+def open_os_settings(page: str) -> dict[str, Any]:
+    if page not in ("wifi", "bluetooth", "display", "sound"):
+        raise KeyError(page)
+    return devices.open_settings(page)  # type: ignore[arg-type]
+
+
+@app.get("/api/setup")
+def setup_state() -> dict[str, Any]:
+    """Whether to show the first-start setup screen: never once it's done, and not for people who already use LifeOS."""
+    with db.session() as conn:
+        used = conn.execute("SELECT (SELECT COUNT(*) FROM conversations) + (SELECT COUNT(*) FROM tasks)"
+                            " + (SELECT COUNT(*) FROM approved_folders)").fetchone()[0]
+    done = bool(settings.get("setup_done"))
+    home = Path.home()
+    suggested = [str(home / d) for d in ("Documents", "Downloads", "Desktop", "Pictures", "Videos", "Music")
+                 if (home / d).is_dir()]
+    return {"needed": not done and not used, "done": done, "user_name": settings.get("user_name"),
+            "suggested_folders": suggested, "platform": devices.overview()["platform"]}
+
+
+@app.post("/api/setup/done")
+def setup_finish() -> dict[str, Any]:
+    settings.update({"setup_done": True})
+    return {"done": True}
+
+
+class WorkspaceItemIn(BaseModel):
+    kind: str
+    target: str = Field(max_length=2000)
+    label: str = Field(default="", max_length=80)
+
+
+class WorkspaceIn(BaseModel):
+    name: str = Field(max_length=60)
+    items: list[WorkspaceItemIn] = Field(max_length=20)
+
+
+class AutomateIn(BaseModel):
+    time: str = "08:00"
+    days: list[str] = ["mon", "tue", "wed", "thu", "fri"]
+
+
+@app.get("/api/workspaces")
+def list_workspaces() -> list[dict[str, Any]]:
+    return workspaces.list_all()
+
+
+@app.post("/api/workspaces")
+def create_workspace(body: WorkspaceIn) -> dict[str, Any]:
+    return workspaces.save(body.model_dump())
+
+
+@app.put("/api/workspaces/{wid}")
+def update_workspace(wid: int, body: WorkspaceIn) -> dict[str, Any]:
+    workspaces.get(wid)
+    return workspaces.save(body.model_dump(), wid)
+
+
+@app.delete("/api/workspaces/{wid}")
+def delete_workspace(wid: int) -> dict[str, Any]:
+    return workspaces.delete(wid)
+
+
+@app.post("/api/workspaces/{wid}/open")
+def open_workspace(wid: int) -> dict[str, Any]:
+    return workspaces.open_workspace(wid)
+
+
+@app.post("/api/workspaces/{wid}/automate")
+def automate_workspace(wid: int, body: AutomateIn) -> dict[str, Any]:
+    return workspaces.automate(wid, body.time, body.days)
+
+
+class CustomToolIn(BaseModel):
+    name: str = Field(max_length=40)
+    kind: str
+    description: str = Field(default="", max_length=300)
+    config: dict[str, Any] = {}
+    enabled: bool = True
+    secret: str | None = Field(default=None, max_length=2000)
+
+
+class CustomToolTestIn(BaseModel):
+    input: str = Field(default="", max_length=4000)
+
+
+@app.get("/api/custom-tools")
+def list_custom_tools() -> list[dict[str, Any]]:
+    return custom_tools.list_all()
+
+
+@app.post("/api/custom-tools")
+def create_custom_tool(body: CustomToolIn) -> dict[str, Any]:
+    return custom_tools.save(body.model_dump())
+
+
+@app.put("/api/custom-tools/{tid}")
+def update_custom_tool(tid: int, body: CustomToolIn) -> dict[str, Any]:
+    return custom_tools.save(body.model_dump(), tid)
+
+
+@app.delete("/api/custom-tools/{tid}")
+def delete_custom_tool(tid: int) -> dict[str, Any]:
+    return custom_tools.delete(tid)
+
+
+@app.get("/api/custom-tools/{tid}/export")
+def export_custom_tool(tid: int) -> dict[str, Any]:
+    return custom_tools.export(tid)
+
+
+@app.post("/api/custom-tools/import")
+def import_custom_tool(body: dict[str, Any]) -> dict[str, Any]:
+    return custom_tools.import_tool(body)
+
+
+@app.post("/api/custom-tools/{tid}/test")
+def test_custom_tool(tid: int, body: CustomToolTestIn) -> dict[str, Any]:
+    """Run a tool once from Settings (the user is pressing the button, so no approval step)."""
+    t = custom_tools.get(tid)
+    if t["kind"] == "webhook":
+        return custom_tools.call_webhook(t, body.input)
+    return {"response": custom_tools.run_prompt(t, body.input)}
+
+
+class BackupIn(BaseModel):
+    include_media: bool | None = None
+
+
+class RestoreIn(BaseModel):
+    path: str = Field(max_length=2000)
+
+
+@app.get("/api/backups")
+def list_backups() -> dict[str, Any]:
+    return {"backups": backup.list_backups(), "pending_restore": backup.pending_restore()}
+
+
+@app.post("/api/backups")
+def create_backup(body: BackupIn) -> dict[str, Any]:
+    return backup.create(body.include_media)
+
+
+@app.post("/api/backups/restore")
+def restore_backup(body: RestoreIn) -> dict[str, Any]:
+    return backup.request_restore(body.path)
+
+
+@app.post("/api/tasks/{task_id}/breakdown")
+def break_down_task(task_id: int) -> dict[str, Any]:
+    return tasks.break_down(task_id)
+
+
+@app.post("/api/tasks/{task_id}/replan")
+def replan_task(task_id: int) -> dict[str, Any]:
+    return tasks.replan(task_id)
+
+
 @app.get("/api/suggestions")
 def get_suggestions() -> list[dict[str, Any]]:
     return proactive.suggestions()
@@ -376,6 +829,589 @@ def get_notifications(all: bool = False) -> list[dict[str, Any]]:
 def read_notifications(notification_id: int | None = None) -> dict[str, Any]:
     scheduler.mark_read(notification_id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------- crew and missions
+
+@app.get("/api/crew/agents")
+def list_agents() -> list[dict[str, Any]]:
+    return crew.list_agents()
+
+
+@app.post("/api/crew/agents")
+def create_agent(body: AgentIn) -> dict[str, Any]:
+    return crew.create(body.model_dump())
+
+
+@app.patch("/api/crew/agents/{slug}")
+def patch_agent(slug: str, body: AgentPatch) -> dict[str, Any]:
+    return crew.update(slug, body.model_dump(exclude_unset=True))
+
+
+@app.delete("/api/crew/agents/{slug}")
+def delete_agent(slug: str) -> dict[str, Any]:
+    return crew.delete(slug)
+
+
+@app.post("/api/crew/reset")
+def reset_crew() -> list[dict[str, Any]]:
+    return crew.reset_defaults()
+
+
+@app.get("/api/crew/status")
+def crew_status() -> dict[str, Any]:
+    return {"agents": missions.crew_status(), "briefs": missions.open_briefs(),
+            "active": missions.list_missions(20, "active"), "spend": llm.spend_today(),
+            "pending_actions": actions.list_actions("pending", 50)}
+
+
+@app.get("/api/crew/models")
+def crew_models() -> dict[str, Any]:
+    st = llm.status()
+    return {"local": st["models"], "ollama_ok": st["ok"], "providers": llm.providers(),
+            "cloud_enabled": settings.get("cloud_enabled"), "default": settings.get("chat_model"),
+            "recommended": crew.RECOMMENDED}
+
+
+@app.post("/api/crew/test-model")
+def crew_test_model(body: ModelIn) -> dict[str, Any]:
+    return llm.test_model(body.model)
+
+
+@app.get("/api/crew/pack")
+def export_pack() -> dict[str, Any]:
+    return crew.export_pack()
+
+
+@app.post("/api/crew/pack")
+def import_pack(body: dict[str, Any]) -> dict[str, Any]:
+    return crew.import_pack(body)
+
+
+@app.get("/api/missions")
+def list_missions(status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    return missions.list_missions(min(limit, 200), status)
+
+
+@app.post("/api/missions")
+def start_mission(body: MissionIn) -> dict[str, Any]:
+    return missions.start(body.goal, body.agent or None)
+
+
+@app.get("/api/missions/events")
+def mission_events(after: int = 0, mission_id: int | None = None, limit: int = 200) -> list[dict[str, Any]]:
+    return missions.events(after, mission_id, min(limit, 1000))
+
+
+@app.post("/api/missions/stop-all")
+def stop_all_missions() -> dict[str, Any]:
+    return {"stopped": missions.stop_all()}
+
+
+@app.get("/api/missions/{mid}")
+def get_mission(mid: int) -> dict[str, Any]:
+    return missions.get(mid)
+
+
+@app.post("/api/missions/{mid}/cancel")
+def cancel_mission(mid: int) -> dict[str, Any]:
+    return missions.cancel(mid)
+
+
+@app.post("/api/missions/tasks/{task_id}/rate")
+def rate_task(task_id: int, body: RatingIn) -> dict[str, Any]:
+    return learning.rate_task(task_id, body.rating, body.note)
+
+
+@app.post("/api/crew/agents/{slug}/chat")
+def chat_with_agent(slug: str, body: AgentChatIn) -> dict[str, Any]:
+    return missions.talk(slug, body.message, [t.model_dump() for t in body.history])
+
+
+@app.get("/api/crew/agents/{slug}/activity")
+def agent_activity(slug: str) -> dict[str, Any]:
+    return missions.agent_activity(slug)
+
+
+class MediaIn(BaseModel):
+    kind: str = "image"
+    prompt: str = Field(..., min_length=3, max_length=2000)
+    negative: str = Field("", max_length=500)
+    size: str = "square"
+    seconds: int = Field(4, ge=1, le=10)
+    seed: int | None = None
+
+
+@app.get("/api/system/gpu")
+def gpu_status() -> dict[str, Any]:
+    """What is using the GPU: models Ollama has loaded, and whether an image/video job is running."""
+    models = llm.loaded_models()
+    return {"models": models, "vram": sum(m["vram"] for m in models), "media_busy": media.gpu_busy()}
+
+
+@app.get("/api/system/services")
+def services_status() -> dict[str, Any]:
+    return services.status()
+
+
+@app.post("/api/system/services/{name}/start")
+def start_service(name: str) -> dict[str, Any]:
+    if name not in ("ollama", "comfyui"):
+        raise KeyError(f"Unknown service {name}")
+    ok = services.ensure_ollama() if name == "ollama" else services.ensure_comfy()
+    return {"ok": ok, **services.status()}
+
+
+class PullIn(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
+class LeanIn(BaseModel):
+    download: bool = True
+
+
+@app.get("/api/system/lean")
+def lean_status() -> dict[str, Any]:
+    return lean.status()
+
+
+@app.post("/api/system/lean")
+def lean_apply(body: LeanIn | None = None) -> dict[str, Any]:
+    return lean.apply(download=(body or LeanIn()).download)
+
+
+@app.post("/api/system/ollama/tuning")
+def ollama_tuning_apply() -> dict[str, Any]:
+    return {**services.apply_tuning(restart=True), **services.tuning_status()}
+
+
+@app.get("/api/system/models")
+def models_installed() -> dict[str, Any]:
+    return {"models": lean.installed(), "pulls": lean.pulls()}
+
+
+@app.post("/api/system/models/pull")
+def models_pull(body: PullIn) -> dict[str, Any]:
+    return lean.pull(body.model)
+
+
+@app.delete("/api/system/models/{name:path}")
+def models_remove(name: str) -> dict[str, Any]:
+    return lean.remove(name)
+
+
+@app.post("/api/system/shutdown")
+def shutdown() -> dict[str, Any]:
+    """Used by the desktop app on Quit: stop helper programs LifeOS started, then exit."""
+    import threading
+
+    services.stop_all()
+    threading.Timer(0.3, lambda: os._exit(0)).start()
+    return {"ok": True}
+
+
+class UpdateCfgIn(BaseModel):
+    repo: str | None = Field(default=None, max_length=200)
+    token: str | None = Field(default=None, max_length=500)
+
+
+@app.get("/api/system/old-data")
+def old_data() -> dict[str, Any]:
+    return config.store_python_data()
+
+
+@app.post("/api/system/old-data/import")
+def import_old_data() -> dict[str, Any]:
+    return config.request_store_python_import()
+
+
+@app.get("/api/system/update/config")
+def update_config() -> dict[str, Any]:
+    return updates.cfg()
+
+
+@app.patch("/api/system/update/config")
+def set_update_config(body: UpdateCfgIn) -> dict[str, Any]:
+    return updates.set_cfg(body.repo, body.token)
+
+
+@app.get("/api/system/update/manifest")
+def update_manifest() -> Response:
+    """latest.json for the desktop app's updater (204 when there's no release yet)."""
+    try:
+        data = updates.manifest()
+    except updates.UpdateError as e:
+        return JSONResponse({"detail": str(e)}, status_code=502)
+    return Response(status_code=204) if data is None else JSONResponse(data)
+
+
+@app.get("/api/system/update/asset/{asset_id}")
+def update_asset(asset_id: int) -> Response:
+    try:
+        client, r = updates.open_asset(asset_id)
+    except updates.UpdateError as e:
+        return JSONResponse({"detail": str(e)}, status_code=502)
+    headers = {k: r.headers[k] for k in ("content-length",) if k in r.headers}
+    return StreamingResponse(updates.iter_asset(client, r), media_type="application/octet-stream", headers=headers)
+
+
+@app.get("/api/media/status")
+def media_status() -> dict[str, Any]:
+    return {**media.status(), "settings": media.cfg()}
+
+
+@app.patch("/api/media/settings")
+def media_settings(body: dict[str, Any]) -> dict[str, Any]:
+    out = media.update_cfg(body)
+    activity.log("settings", "Updated media settings: " + ", ".join(sorted(body)))
+    return out
+
+
+@app.get("/api/media")
+def list_media(kind: str | None = None, agent: str | None = None, since: str | None = None,
+               limit: int = 60) -> list[dict[str, Any]]:
+    return media.list_media(min(limit, 500), kind, agent or None, since or None)
+
+
+@app.post("/api/media")
+def generate_media(body: MediaIn) -> dict[str, Any]:
+    try:
+        return media.generate(body.kind, body.prompt, negative=body.negative, size=body.size, seed=body.seed,
+                              frames=body.seconds * 24 + 1, wait=False)
+    except media.MediaError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+@app.get("/api/media/{media_id}")
+def get_media(media_id: int) -> dict[str, Any]:
+    return media.get(media_id)
+
+
+@app.get("/api/media/{media_id}/file")
+def media_file(media_id: int) -> FileResponse:
+    path, mime = media.file_for(media_id)
+    return FileResponse(path, media_type=mime)
+
+
+@app.post("/api/media/{media_id}/open")
+def open_media(media_id: int) -> dict[str, Any]:
+    path, _ = media.file_for(media_id)
+    files.launch(path)
+    return {"ok": True}
+
+
+@app.delete("/api/media/{media_id}")
+def delete_media(media_id: int) -> dict[str, Any]:
+    return media.delete(media_id)
+
+
+@app.get("/api/learning")
+def learning_overview() -> dict[str, Any]:
+    return learning.overview()
+
+
+@app.get("/api/learning/lessons")
+def list_lessons(agent: str | None = None) -> list[dict[str, Any]]:
+    return learning.list_lessons(agent)
+
+
+@app.post("/api/learning/lessons")
+def add_lesson(body: LessonIn) -> dict[str, Any]:
+    lesson = learning.add_lesson(body.agent, body.text, "user", pinned=body.pinned)
+    if lesson is None:
+        raise ValueError("A very similar lesson already exists for this agent")
+    return lesson
+
+
+@app.patch("/api/learning/lessons/{lesson_id}")
+def patch_lesson(lesson_id: int, body: LessonPatch) -> dict[str, Any]:
+    return learning.update_lesson(lesson_id, body.text, body.pinned, body.agent)
+
+
+@app.delete("/api/learning/lessons/{lesson_id}")
+def delete_lesson(lesson_id: int) -> dict[str, Any]:
+    return learning.delete_lesson(lesson_id)
+
+
+@app.get("/api/learning/scorecard")
+def scorecard() -> list[dict[str, Any]]:
+    return learning.scorecard()
+
+
+@app.get("/api/learning/export.jsonl")
+def export_training(min_score: float = 4.0, agent: str | None = None) -> Response:
+    return Response(learning.export_training(min_score, agent), media_type="application/jsonl",
+                    headers={"Content-Disposition": "attachment; filename=lifeos-training.jsonl"})
+
+
+@app.post("/api/missions/{mid}/retry")
+def retry_mission(mid: int) -> dict[str, Any]:
+    m = missions.get(mid)
+    return missions.start(m["goal"], m["target_agent"])
+
+
+@app.get("/api/briefs")
+def list_briefs() -> list[dict[str, Any]]:
+    return missions.open_briefs()
+
+
+@app.post("/api/briefs/{bid}/answer")
+def answer_brief(bid: int, body: AnswerIn) -> dict[str, Any]:
+    return missions.answer_brief(bid, body.answer)
+
+
+def _outbox_file(name: str) -> Path:
+    folder = tools.outbox_dir()
+    target = (folder / Path(name).name).resolve()
+    if target.parent != folder.resolve() or not target.is_file():
+        raise KeyError(f"No outbox file named {name}")
+    return target
+
+
+@app.get("/api/outbox")
+def list_outbox() -> list[dict[str, Any]]:
+    folder = tools.outbox_dir()
+    items = []
+    for p in sorted(folder.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+        if p.is_file():
+            st = p.stat()
+            items.append({"name": p.name, "path": str(p), "size": st.st_size,
+                          "modified_at": files._iso(st.st_mtime)})
+    return items
+
+
+@app.get("/api/outbox/file")
+def read_outbox(name: str) -> dict[str, Any]:
+    target = _outbox_file(name)
+    return {"name": target.name, "path": str(target), "text": target.read_text(encoding="utf-8", errors="replace")[:500_000]}
+
+
+@app.post("/api/outbox/open")
+def open_outbox(body: NameIn) -> dict[str, Any]:
+    target = _outbox_file(body.name)
+    files.launch(target)
+    return {"opened": str(target)}
+
+
+@app.delete("/api/outbox/{name}")
+def delete_outbox(name: str) -> dict[str, Any]:
+    target = _outbox_file(name)
+    target.unlink()
+    activity.log("data", f"Deleted outbox file {target.name}")
+    return {"ok": True}
+
+
+@app.get("/api/ledger")
+def get_ledger(days: int = 7) -> dict[str, Any]:
+    return llm.ledger(max(1, min(days, 365)))
+
+
+# ---------------------------------------------------------------- providers and credentials
+
+@app.get("/api/providers")
+def list_providers() -> dict[str, Any]:
+    return {"providers": llm.providers(), "vault": vault.backend(), "cloud_enabled": settings.get("cloud_enabled")}
+
+
+@app.put("/api/providers/{provider}/key")
+def set_provider_key(provider: str, body: KeyIn) -> dict[str, Any]:
+    if provider not in llm.PROVIDERS or provider == "ollama":
+        raise KeyError(f"Unknown provider {provider}")
+    vault.set_secret(llm.key_name(provider), body.key.strip())
+    activity.log("settings", f"Stored an API key for {provider}")
+    return {"ok": True}
+
+
+@app.delete("/api/providers/{provider}/key")
+def delete_provider_key(provider: str) -> dict[str, Any]:
+    if provider not in llm.PROVIDERS:
+        raise KeyError(f"Unknown provider {provider}")
+    vault.delete_secret(llm.key_name(provider))
+    activity.log("settings", f"Removed the API key for {provider}")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- workflows
+
+@app.get("/api/workflows")
+def list_workflows() -> list[dict[str, Any]]:
+    return workflows.list_workflows()
+
+
+@app.post("/api/workflows")
+def create_workflow(body: WorkflowIn) -> dict[str, Any]:
+    return workflows.create(body.model_dump())
+
+
+@app.get("/api/workflows/meta")
+def workflow_meta() -> dict[str, Any]:
+    return {"triggers": list(workflows.TRIGGERS), "metrics": workflows.METRICS, "ops": list(workflows.OPS),
+            "step_types": list(workflows.STEP_TYPES), "days": workflows.DAYS}
+
+
+@app.get("/api/workflows/templates")
+def workflow_templates() -> list[dict[str, Any]]:
+    return workflows.templates()
+
+
+@app.post("/api/workflows/draft")
+def draft_workflow(body: TextIn) -> dict[str, Any]:
+    return workflows.draft_from_text(body.text)
+
+
+@app.get("/api/workflow-runs")
+def all_workflow_runs(limit: int = 50) -> list[dict[str, Any]]:
+    return workflows.runs(None, min(limit, 500))
+
+
+@app.get("/api/workflows/{wid}")
+def get_workflow(wid: int) -> dict[str, Any]:
+    return workflows.get(wid)
+
+
+@app.patch("/api/workflows/{wid}")
+def patch_workflow(wid: int, body: dict[str, Any]) -> dict[str, Any]:
+    return workflows.update(wid, body)
+
+
+@app.delete("/api/workflows/{wid}")
+def delete_workflow(wid: int) -> dict[str, Any]:
+    return workflows.delete(wid)
+
+
+@app.post("/api/workflows/{wid}/run")
+def run_workflow(wid: int) -> dict[str, Any]:
+    workflows.run_async(wid, "manual")
+    return {"started": True}
+
+
+@app.get("/api/workflows/{wid}/runs")
+def workflow_runs(wid: int, limit: int = 30) -> list[dict[str, Any]]:
+    return workflows.runs(wid, min(limit, 500))
+
+
+# ---------------------------------------------------------------- projects
+
+@app.get("/api/projects")
+def list_projects(status: str | None = None) -> list[dict[str, Any]]:
+    return projects.list_projects(status)
+
+
+@app.post("/api/projects")
+def add_project(body: ProjectIn) -> dict[str, Any]:
+    return projects.add(body.path, body.name, body.description)
+
+
+@app.post("/api/projects/detect")
+def detect_projects() -> dict[str, Any]:
+    return projects.detect()
+
+
+@app.get("/api/projects/{pid}")
+def project_context(pid: int) -> dict[str, Any]:
+    return projects.context(pid)
+
+
+@app.patch("/api/projects/{pid}")
+def patch_project(pid: int, body: ProjectPatch) -> dict[str, Any]:
+    return projects.update(pid, body.model_dump(exclude_unset=True))
+
+
+@app.delete("/api/projects/{pid}")
+def delete_project(pid: int) -> dict[str, Any]:
+    return projects.delete(pid)
+
+
+# ---------------------------------------------------------------- calendar and email
+
+@app.get("/api/calendar/sources")
+def calendar_sources() -> list[dict[str, Any]]:
+    return integrations.list_sources()
+
+
+@app.post("/api/calendar/sources")
+def add_calendar_source(body: SourceIn) -> dict[str, Any]:
+    return integrations.add_source(body.location, body.label)
+
+
+@app.delete("/api/calendar/sources/{sid}")
+def remove_calendar_source(sid: int) -> dict[str, Any]:
+    integrations.remove_source(sid)
+    return {"ok": True}
+
+
+@app.post("/api/calendar/sources/{sid}/sync")
+def sync_calendar_source(sid: int) -> dict[str, Any]:
+    return integrations.sync_source(sid)
+
+
+@app.get("/api/calendar/overlaps")
+def calendar_overlaps(days: int = 14) -> list[dict[str, Any]]:
+    return integrations.overlaps(days)
+
+
+@app.get("/api/calendar/export.ics")
+def export_calendar() -> Response:
+    return Response(integrations.export_ics(), media_type="text/calendar",
+                    headers={"Content-Disposition": "attachment; filename=lifeos.ics"})
+
+
+@app.get("/api/events")
+def list_events(start: str | None = None, end: str | None = None) -> list[dict[str, Any]]:
+    return integrations.events(start, end)
+
+
+@app.post("/api/events")
+def create_event(body: EventIn) -> dict[str, Any]:
+    return integrations.add_event(body.title, body.start, body.end, body.location, body.description)
+
+
+@app.delete("/api/events/{eid}")
+def delete_event(eid: int) -> dict[str, Any]:
+    integrations.delete_event(eid)
+    return {"ok": True}
+
+
+@app.get("/api/email/status")
+def email_status() -> dict[str, Any]:
+    return integrations.email_status()
+
+
+@app.put("/api/email")
+def set_email(body: EmailIn) -> dict[str, Any]:
+    settings.update({"email": {"host": body.host.strip(), "port": body.port, "username": body.username.strip(),
+                               "folder": body.folder.strip() or "INBOX"}})
+    if body.password is not None:
+        integrations.set_email_password(body.password)
+    activity.log("settings", f"Email account set to {body.username}@{body.host}")
+    return integrations.email_status()
+
+
+@app.post("/api/email/test")
+def test_email() -> dict[str, Any]:
+    return integrations.test_email()
+
+
+@app.get("/api/email-alerts")
+def email_alerts() -> dict[str, Any]:
+    return mailer.status()
+
+
+@app.put("/api/email-alerts")
+def set_email_alerts(body: EmailAlertsIn) -> dict[str, Any]:
+    out = mailer.configure(body.model_dump(exclude={"password"}), body.password)
+    activity.log("settings", f"Email alerts {'on' if out['enabled'] else 'off'}" + (f", sent to {out['to']}" if out["to"] else ""))
+    return out
+
+
+@app.post("/api/email-alerts/test")
+def test_email_alerts() -> dict[str, Any]:
+    return mailer.test()
+
+
+@app.get("/api/email/messages")
+def email_messages(limit: int = 15, unread: bool = True) -> list[dict[str, Any]]:
+    return integrations.check_email(limit, unread)
 
 
 # Serve the built web UI when present (browser mode without Tauri).

@@ -1,16 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
-  Activity, Bell, Bot, Brain, CalendarDays, FolderOpen, LayoutDashboard, Pause, Play, Search, Settings as Cog,
+  Activity, Bell, Bot, Brain, CalendarDays, FolderGit2, FolderOpen, Gamepad2, Images, LayoutDashboard, Monitor, Network, Pause, Play, Search,
+  Settings as Cog, Workflow,
 } from "lucide-react";
 import { api, type Notification } from "../lib/api";
 import { ago } from "../lib/format";
 import { useAsync } from "../lib/hooks";
 import { notifyChanged, useToast } from "./ui";
+import logo from "../assets/logo.svg";
+import { UpdateBanner } from "./Updates";
+import { isDesktop } from "../lib/desktop";
+import { CommandPalette } from "./CommandPalette";
+import { StatusBar } from "./StatusBar";
+import { SetupScreen } from "./Devices";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
+  { to: "/computer", label: "Computer", icon: Monitor },
+  { to: "/crew", label: "Control Center", icon: Network },
+  { to: "/station", label: "Station", icon: Gamepad2 },
+  { to: "/gallery", label: "Gallery", icon: Images },
   { to: "/assistant", label: "Assistant", icon: Bot },
+  { to: "/automations", label: "Automations", icon: Workflow },
+  { to: "/projects", label: "Projects", icon: FolderGit2 },
   { to: "/memory", label: "Memory", icon: Brain },
   { to: "/files", label: "Files", icon: FolderOpen },
   { to: "/calendar", label: "Calendar", icon: CalendarDays },
@@ -24,19 +37,26 @@ export function Layout() {
   const [q, setQ] = useState("");
   const [bellOpen, setBellOpen] = useState(false);
   const settings = useAsync(api.settings, []);
-  const notes = useAsync(api.notifications, [], 20000);
+  const notes = useAsync(api.notifications, [], 8000);
+  const crew = useAsync(api.crewStatus, [], 5000);
   const health = useAsync(api.health, [], 15000);
   const seen = useRef<Set<number>>(new Set());
+  const primed = useRef(false);
 
-  // Surface new reminders as toasts and OS notifications.
+  // Surface new reminders, crew questions and workflow summaries as toasts and OS notifications.
   useEffect(() => {
+    if (!notes.data) return;
+    const quiet = inQuietHours(settings.data?.quiet_hours);
+    const first = !primed.current;
+    primed.current = true;
     for (const n of notes.data ?? []) {
       if (seen.current.has(n.id)) continue;
       seen.current.add(n.id);
-      toast(n.title + (n.body ? `\n${n.body}` : ""), "info");
-      if ("Notification" in window && Notification.permission === "granted") new Notification(n.title, { body: n.body ?? "" });
+      if (first) continue; // already waiting in the bell; only pop up what arrives while the app is open
+      toast(n.title + (n.body ? `\n${n.body.slice(0, 300)}` : ""), "info");
+      if (!quiet && "Notification" in window && Notification.permission === "granted") new Notification(n.title, { body: (n.body ?? "").slice(0, 300) });
     }
-  }, [notes.data, toast]);
+  }, [notes.data, toast, settings.data?.quiet_hours]);
 
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
@@ -60,12 +80,14 @@ export function Layout() {
   };
 
   const unread: Notification[] = notes.data ?? [];
+  const working = (crew.data?.agents ?? []).filter((a) => a.state === "working").length;
+  const needsYou = (crew.data?.briefs.length ?? 0) + (crew.data?.pending_actions.length ?? 0);
 
   return (
     <div className="flex h-full">
       <aside className="flex w-56 shrink-0 flex-col border-r border-line bg-panel">
         <div className="flex items-center gap-2 px-4 py-4">
-          <div className="grid h-8 w-8 place-items-center rounded-lg bg-accent text-sm font-bold text-white">L</div>
+          <img src={logo} alt="" className="h-8 w-8" />
           <div>
             <div className="text-sm font-semibold">AI LifeOS</div>
             <div className="flex items-center gap-1 text-[11px] text-muted">
@@ -87,6 +109,12 @@ export function Layout() {
               }
             >
               <Icon size={16} /> {label}
+              {to === "/crew" && (working > 0 || needsYou > 0) && (
+                <span className={`ml-auto rounded-full px-1.5 text-[10px] ${needsYou ? "bg-warn/20 text-warn" : "bg-ok/15 text-ok"}`}
+                  title={needsYou ? `${needsYou} waiting for you` : `${working} agent(s) working`}>
+                  {needsYou || working}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
@@ -113,13 +141,14 @@ export function Layout() {
             <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
             <input
               className="input pl-9"
-              placeholder="Search files, memories, tasks and conversations…"
+              placeholder="Search files, memories, tasks and conversations… (Ctrl+K: apps and commands)"
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
           </form>
           {paused && <span className="chip border-warn/40 text-warn">Automation paused</span>}
-          <div className="relative ml-auto">
+          <div className="ml-auto"><StatusBar /></div>
+          <div className="relative">
             <button className="btn-ghost relative" onClick={() => setBellOpen((o) => !o)} aria-label="Notifications">
               <Bell size={17} />
               {unread.length > 0 && (
@@ -131,7 +160,7 @@ export function Layout() {
             {bellOpen && (
               <div className="card absolute right-0 z-40 mt-2 w-80 p-2 shadow-xl">
                 <div className="flex items-center justify-between px-2 py-1">
-                  <span className="text-sm font-semibold">Reminders</span>
+                  <span className="text-sm font-semibold">Notifications</span>
                   {unread.length > 0 && (
                     <button
                       className="text-xs text-muted hover:text-text"
@@ -157,14 +186,26 @@ export function Layout() {
           </div>
         </header>
         <main className="min-h-0 flex-1 overflow-y-auto">
+          <UpdateBanner />
           {health.error && (
             <div className="border-b border-danger/30 bg-danger/10 px-6 py-2 text-sm text-danger">
-              {health.error} Start it with <code>python -m lifeos</code> in <code>backend/</code>.
+              {health.error} {isDesktop ? "It's starting; if this stays, quit AI LifeOS from the tray and open it again." : <>Start it with <code>python -m lifeos</code> in <code>backend/</code>.</>}
             </div>
           )}
           <Outlet />
         </main>
+        <CommandPalette nav={NAV} />
+        <SetupScreen />
       </div>
     </div>
   );
+}
+
+function inQuietHours(q?: { enabled: boolean; start: string; end: string }): boolean {
+  if (!q?.enabled) return false;
+  const now = new Date();
+  const mins = now.getHours() * 60 + now.getMinutes();
+  const toMin = (t: string) => { const [h, m] = t.split(":").map(Number); return h * 60 + (m || 0); };
+  const s = toMin(q.start), e = toMin(q.end);
+  return s <= e ? mins >= s && mins < e : mins >= s || mins < e;
 }

@@ -1,0 +1,23 @@
+# LifeOS as an Arch package: the backend, the web UI, Ollama (Vulkan) and the desktop session.
+# Built by .github/workflows/os-image.yml, which stages the sources in src-stage/ first.
+pkgname=lifeos
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="AI LifeOS: local AI assistant and crew as your desktop"
+arch=(x86_64)
+license=(custom)
+depends=(python labwc sddm xorg-server firefox foot swaybg xdg-desktop-portal-wlr wlr-randr brightnessctl
+         pipewire pipewire-pulse wireplumber networkmanager bluez bluez-utils
+         mesa vulkan-radeon vulkan-icd-loader curl git noto-fonts noto-fonts-emoji polkit)
+install=lifeos.install
+options=(!strip !debug)
+
+package() {
+  stage="$startdir/src-stage"
+  install -d "$pkgdir/usr/lib/lifeos" "$pkgdir/usr/share/lifeos"
+  cp -a "$stage/site" "$pkgdir/usr/lib/lifeos/site"
+  cp -a "$stage/web" "$pkgdir/usr/share/lifeos/web"
+  cp -a "$stage/ollama/." "$pkgdir/usr/"
+  cp -a "$stage/files/." "$pkgdir/"
+  chmod 755 "$pkgdir"/usr/bin/lifeos-* "$pkgdir"/usr/libexec/lifeos-firstuser
+}
