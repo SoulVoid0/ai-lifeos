@@ -1,0 +1,42 @@
+# LSIW (Linux Subsystem for Improved Wine, github.com/SoulVoid0/LSIW) built into LifeOS.
+# LifeOS change: the C: drive is the root of the file system (/) instead of ~/.cdrive, so C:\home\you is
+# /home/you, C:\windows is /windows and C:\Program Files is /Program Files for every user and every engine.
+# Built by .github/workflows/os-image.yml (makepkg fetches the pinned LSIW commit).
+pkgname=lsiw
+pkgver=1.11.0
+pkgrel=1
+_commit=24af5ab899fdea6545b5f7401cace4c224602f81
+pkgdesc="Run Windows programs with LSIW's own engine (Wine as fallback); C: is / on LifeOS"
+arch=(x86_64)
+url="https://github.com/SoulVoid0/LSIW"
+license=(AGPL-3.0-or-later)
+depends=(glibc gtk4 desktop-file-utils shared-mime-info)
+makedepends=(git gtk4 pkgconf)
+optdepends=('wine: fallback engine for windowed, 32-bit and installer programs (lifeos-enable-wine installs it)')
+backup=(etc/lsiw/lsiw.conf)
+install=lsiw.install
+options=(!lto !debug)
+source=("lsiw::git+https://github.com/SoulVoid0/LSIW.git#commit=$_commit"
+        lifeos-root-cdrive.patch
+        lsiw.conf
+        lifeos-lsiw-tmpfiles.conf
+        lifeos-enable-wine)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP)
+
+prepare() {
+  cd lsiw
+  patch -Np1 -i "$srcdir/lifeos-root-cdrive.patch"
+}
+
+build() {
+  cd lsiw
+  make PREFIX=/usr LIBEXECDIR=/usr/lib GUI=yes
+}
+
+package() {
+  cd lsiw
+  make PREFIX=/usr LIBEXECDIR=/usr/lib GUI=yes DESTDIR="$pkgdir" install
+  install -Dm644 "$srcdir/lsiw.conf" "$pkgdir/etc/lsiw/lsiw.conf"
+  install -Dm644 "$srcdir/lifeos-lsiw-tmpfiles.conf" "$pkgdir/usr/lib/tmpfiles.d/lifeos-lsiw.conf"
+  install -Dm755 "$srcdir/lifeos-enable-wine" "$pkgdir/usr/bin/lifeos-enable-wine"
+}

@@ -1,0 +1,89 @@
+diff --git a/src/common/paths.c b/src/common/paths.c
+index 4c7824f..9d95113 100644
+--- a/src/common/paths.c
++++ b/src/common/paths.c
+@@ -306,12 +306,17 @@ int lsiw_sync_root(int verbose)
+         if (!t[i].anchor) continue;
+         const char *loc = lsiw_var_linux(t[i].name);
+         if (!loc) continue;
+-        char *link = lsiw_strdup_printf("%s/%s", root, t[i].anchor);
++        char *link = lsiw_strdup_printf("%s/%s", strcmp(root, "/") ? root : "", t[i].anchor);
+         if (strcmp(link, loc)) ensure_symlink(link, loc, verbose);
+         else lsiw_mkdirs(loc, 0755);
+         free(link);
+     }
+ 
++    /* LifeOS: the C: drive can be the Linux root itself ([drive] c_drive = /). Then every top-level
++     * folder already is C:\<name>: there is nothing to link (and linking "/bin" onto itself would
++     * replace the real /bin link), and nothing of LSIW's own to clean up. */
++    if (!strcmp(root, "/")) goto profiles;
++
+     /* One entry per top-level Linux directory. */
+     DIR *d = opendir("/");
+     if (d) {
+@@ -352,6 +357,7 @@ int lsiw_sync_root(int verbose)
+         closedir(d);
+     }
+ 
++profiles:;
+     /* Inside the profiles folder, the standard names must lead to the
+      * configured profile locations (C:\users\<me>, Public, Default). */
+     const char *profiles = lsiw_var_linux("PROFILESFOLDER");
+@@ -369,7 +375,7 @@ int lsiw_sync_root(int verbose)
+         /* Proton runs every program as "steamuser"; in LSIW's own users
+          * folder that is you as well, so games under Proton and programs
+          * under Wine share one profile. */
+-        size_t rl = strlen(root);
++        size_t rl = strcmp(root, "/") ? strlen(root) : 0;
+         const char *me = lsiw_var_linux("CSIDL_PROFILE");
+         if (me && !strncmp(profiles, root, rl) && profiles[rl] == '/' && strcmp(lsiw_user_name(), "steamuser")) {
+             char *su = lsiw_strdup_printf("%s/steamuser", profiles);
+diff --git a/src/common/prefix.c b/src/common/prefix.c
+index 555a96c..b861031 100644
+--- a/src/common/prefix.c
++++ b/src/common/prefix.c
+@@ -37,7 +37,7 @@
+ #include <time.h>
+ #include <unistd.h>
+ 
+-#define DEFAULT_CDRIVE "${HOME}/.cdrive"
++#define DEFAULT_CDRIVE "/"   /* LifeOS: C: is the root of the file system */
+ #define OLD_DEFAULT_CDRIVE "${HOME}/c_drive"   /* the default until 1.7.0 */
+ #define DEFAULT_SHARED "${DATA}/shared"
+ 
+@@ -341,6 +341,7 @@ static void drop_own_links(const char *root)
+ int lsiw_cdrive_migrate(int verbose)
+ {
+     if (lsiw_cdrive_setting()) return 0;          /* a location the user chose */
++    if (!strcmp(lsiw_root_dir(), "/")) return 0;  /* LifeOS: C: is the file system root */
+     char *old = folder_value(OLD_DEFAULT_CDRIVE);
+     char *to = folder_value(DEFAULT_CDRIVE);
+     struct stat st;
+@@ -375,6 +376,14 @@ int lsiw_cdrive_move(const char *path, int folders, int verbose)
+         return -1;
+     }
+     lsiw_cdrive_migrate(verbose);
++    if (!strcmp(lsiw_root_dir(), "/")) {
++        /* LifeOS: C: is the whole Linux file system. Moving it would move the operating system, so only
++         * an administrator can point C: elsewhere, by editing /etc/lsiw/lsiw.conf. */
++        lsiw_log("C: is the root of the file system (/) on this system and cannot be moved; "
++                 "an administrator can change [drive] c_drive in /etc/lsiw/lsiw.conf\n");
++        free(to);
++        return -1;
++    }
+     char *from = strdup(lsiw_root_dir());
+     char *real_from = realpath(from, NULL);
+     size_t fl = strlen(from), tl = strlen(to);
+diff --git a/src/gui/page_drive.c b/src/gui/page_drive.c
+index cb637ae..632c05d 100644
+--- a/src/gui/page_drive.c
++++ b/src/gui/page_drive.c
+@@ -568,7 +568,7 @@ GtkWidget *lsiw_page_drive_new(void)
+                                         "c_drive folder inside). What C: holds moves along, and the old "
+                                         "place becomes a link to the new one.");
+     lsiw_gui_wrap_row_append(row, change);
+-    lsiw_gui_wrap_row_append(row, lsiw_gui_action_button("_Default (~/.cdrive)", "drive.reset"));
++    lsiw_gui_wrap_row_append(row, lsiw_gui_action_button("_Default (/)", "drive.reset"));
+     lsiw_gui_wrap_row_append(row, lsiw_gui_action_button("_Open in file manager", "drive.open"));
+     lsiw_gui_wrap_row_append(row, lsiw_gui_action_button("_Rebuild C: drive", "drive.rebuild"));
+     gtk_box_append(GTK_BOX(page), row);
