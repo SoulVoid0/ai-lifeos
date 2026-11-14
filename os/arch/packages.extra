@@ -1,5 +1,14 @@
 lifeos
 lsiw
-archinstall
 sudo
 virtualbox-guest-utils
+python-gobject
+grub
+efibootmgr
+os-prober
+rsync
+parted
+gptfdisk
+dosfstools
+ntfs-3g
+arch-install-scripts

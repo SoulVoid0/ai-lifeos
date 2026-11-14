@@ -1,9 +1,4 @@
 #!/bin/sh
-# Installs LifeOS from this USB stick to a disk, using archinstall with the LifeOS package set.
-# archinstall asks for the disk (which is ERASED), your user name and password, language and time zone.
-set -e
-if ! grep -q '^\[lifeos\]' /etc/pacman.conf; then
-  printf '\n[lifeos]\nSigLevel = Optional TrustAll\nServer = file:///opt/lifeos-repo\n' | sudo tee -a /etc/pacman.conf >/dev/null
-fi
-sudo pacman -Sy --noconfirm >/dev/null
-exec sudo archinstall --config /usr/share/lifeos/archinstall.json
+# Installs LifeOS from this USB stick onto a disk: opens the LifeOS installer window (language, keyboard, time zone,
+# disk, your account, LSIW). Same as the "Install AI LifeOS" icon.
+exec /usr/bin/python3 /usr/lib/lifeos-installer/installer.py "$@"

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Install AI LifeOS
+Comment=Install LifeOS from this USB stick onto this computer's disk
+Exec=/usr/local/bin/lifeos-install
+Icon=system-software-install
+Terminal=false
+Categories=System;

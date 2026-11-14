@@ -1,0 +1,8 @@
+[Desktop Entry]
+# The apartment program itself (started by lifeos-apartment). KWin only lets programs listed here capture windows:
+# the PC monitor in the master bedroom shows the live KDE desktop through KWin's ScreenShot2 interface.
+Type=Application
+Name=LifeOS Apartment (engine)
+Exec=/usr/lib/lifeos/lifeos-apartment-bin
+NoDisplay=true
+X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2

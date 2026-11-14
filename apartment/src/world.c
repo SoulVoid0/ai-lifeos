@@ -646,7 +646,12 @@ static void master_bedroom(void)
     box(0.62f, 0.55f, 1.0f, 2.58f, 0.66f, 2.38f, blanket);
     add_collider(0.6f, 0.1f, 2.6f, 2.4f, false);
     W.master_bed_lie = v3(1.6f, 0.9f, 1.5f);
-    add_inter(I_BED, 1.6f, 0.6f, 1.6f, 2.2f, 0, "Lie down");
+    add_inter(I_BED, 1.3f, 0.6f, 1.2f, 2.2f, 0, "Lie down");
+    /* the tablet on the bed: LSIW Control (Windows programs) */
+    box(1.93f, 0.66f, 1.77f, 2.19f, 0.672f, 1.95f, rgb(28, 30, 36));
+    W.tablet = v3(2.06f, 0.673f, 1.86f);
+    W.tablet_eye = v3(2.95f, 1.2f, 1.86f);
+    add_inter(I_TABLET, 2.06f, 0.7f, 1.86f, 1.7f, 0, "Use the tablet (LSIW: Windows programs)");
     /* nightstand + lamp */
     box(2.75f, 0, 0.15f + HT, 3.25f, 0.55f, 0.6f + HT, C_WOOD);
     prism(3.0f, 0.55f, 0.45f, 0.05f, 0.05f, 0.25f, 6, C_METAL);
@@ -899,6 +904,7 @@ extern int npc_desk_working(int desk_owner);   /* npc.c */
 extern const char *npc_bed_name(int bed_owner);
 extern void draw_tv_screen(V3 c, float w, float h);   /* main.c */
 extern void draw_pc_screen(V3 c, float w, float h);
+extern void draw_tablet_screen(V3 c);
 extern void draw_whiteboard(V3 o);
 extern int g_points_balance;
 
@@ -990,6 +996,7 @@ void world_draw_dynamic(float t, float sky_k)
     windows(sky);
     draw_tv_screen(W.tv_center, W.tv_w, W.tv_h);
     draw_pc_screen(W.pc_screen, 1.04f, 0.56f);
+    draw_tablet_screen(W.tablet);
     draw_whiteboard(W.whiteboard);
     desk_screens(t);
     clock_and_kiosk();

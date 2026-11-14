@@ -113,7 +113,7 @@ typedef struct {
     int pose;        /* 0 stand, 1 sit, 2 lie */
 } Spot;
 
-enum { I_NONE, I_AGENT, I_COUCH, I_TV, I_PC, I_BED, I_SHOP, I_FRIDGE, I_SINK, I_WHITEBOARD, I_PIANO, I_ARCADE, I_LIGHT };
+enum { I_NONE, I_AGENT, I_COUCH, I_TV, I_PC, I_BED, I_SHOP, I_FRIDGE, I_SINK, I_WHITEBOARD, I_PIANO, I_ARCADE, I_LIGHT, I_TABLET };
 typedef struct { int kind; V3 pos; float reach; int ref; const char *label; } Inter;
 
 #define MAX_COLLIDERS 256
@@ -130,6 +130,7 @@ typedef struct {
     V3 pc_screen; V3 pc_view_eye; V3 pc_stand;
     V3 whiteboard;
     V3 master_bed_lie; V3 spawn;
+    V3 tablet; V3 tablet_eye;                      /* the tablet on the master bed and where you look at it from */
     int couch_seats[3];
 } World;
 extern World W;
@@ -191,6 +192,7 @@ void npc_draw(float t);
 const char *npc_status_text(const Agent *a);
 void npc_face(Agent *a, float x, float z);
 void npc_say(Agent *a, const char *s);
+Col crew_color(const char *name);          /* a crew color name (violet, amber...) as RGB */
 
 /* ------------------------------------------------------------------ video.c */
 #define MAX_VIDEOS 200
@@ -208,6 +210,12 @@ void video_set_volume(int v);
 void video_set_quality(int q);
 GLuint video_texture(float *u, float *v);  /* uploads the newest frame; 0 if nothing to show */
 void video_poll(void);                     /* notices the end of a file */
+
+/* ------------------------------------------------------------------ pccap.c */
+void pccap_set(bool on, bool low_power);   /* capture the live KDE desktop for the PC monitor (worker thread) */
+GLuint pccap_texture(float *u, float *v);  /* the newest picture; 0 while there is none */
+bool pccap_failed(void);                   /* KWin refused or isn't there: show the drawn picture */
+void pccap_shutdown(void);
 
 /* ------------------------------------------------------------------ main.c (shared state) */
 typedef struct {

@@ -3,6 +3,7 @@
 # Shift+F4 on the KDE desktop (the PC in the master bedroom) to go back into the apartment.
 #   --autostart  only start in the AI LifeOS session (not in a plain Plasma session)
 #   --from-pc    start at the PC desk, standing up from the computer
+#   --from-tablet  start beside the bed, putting the tablet down
 BIN=/usr/lib/lifeos/lifeos-apartment-bin
 RUN=${XDG_RUNTIME_DIR:-/tmp}
 if [ "$1" = "--autostart" ]; then
@@ -27,7 +28,14 @@ while :; do
   started=$(date +%s)
   "$BIN" $args >>"$log/apartment.log" 2>&1
   code=$?
-  # 0: closed or logged out, 10: the user went to the PC (KDE desktop). Anything else is a crash.
+  # 0: closed or logged out, 10: the user went to the PC (KDE desktop), 11: the tablet on the bed (LSIW Control,
+  # then back to the apartment when it closes). Anything else is a crash.
+  if [ "$code" -eq 11 ]; then
+    lsiw-control >>"$log/lsiw-control.log" 2>&1
+    args="--from-tablet"
+    crashes=0
+    continue
+  fi
   [ "$code" -eq 0 ] || [ "$code" -eq 10 ] && exit 0  # the EXIT trap gives the Meta key back to KDE
   [ $(( $(date +%s) - started )) -lt 30 ] && crashes=$((crashes + 1)) || crashes=0
   if [ "$crashes" -ge 3 ]; then

@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #define EXIT_TO_PC 10
+#define EXIT_TO_TABLET 11   /* the wrapper opens LSIW Control and brings the apartment back when it closes */
 
 Settings CFG = {1, 1.0f, false, 75, 70, false, true, 0};
 float NOW_HOURS;
@@ -23,7 +24,7 @@ static SDL_Window *win;
 static bool running = true;
 static int exit_code;
 static float T;                  /* seconds since start */
-static bool from_pc, windowed;
+static bool from_pc, from_tablet, windowed;
 static bool quality_saved;
 
 /* ------------------------------------------------------------------ player */
@@ -46,11 +47,20 @@ static bool idle_save = true;     /* drop to a few frames per second when idle o
 static Uint32 last_input_ms;
 static bool has_focus = true;
 static int rebinding = -1;       /* the key row waiting for a key press, or -1 */
-/* Some VMs (Hyper-V, VirtualBox with mouse integration) only have an absolute pointer, which gives no motion while
- * the mouse is captured. "Drag" look mode leaves the cursor free and looks around while the right button is held. */
-static bool drag_look;
+/* Mouse look. Locked: the cursor is hidden and held in the middle (relative mouse), the normal case.
+ * Some VMs (Hyper-V, VirtualBox and QEMU with mouse integration) only have an absolute pointer: the host decides
+ * where the cursor is, so it can't be held in the middle and gives no motion while locked. There the cursor is
+ * hidden and its movement turns the view; pushing against an edge of the screen keeps turning that way, so the
+ * mouse never has to be brought back. Drag: the cursor stays visible and the view turns while the right button
+ * is held. Auto picks Locked or Virtual machine from the input devices. */
+enum { LOOK_AUTO, LOOK_LOCKED, LOOK_VM, LOOK_DRAG, NLOOK };
+static int look_mode = LOOK_AUTO;
+static bool abs_pointer;          /* detected at start: the only pointer is an absolute one (a VM tablet) */
+static bool live_pc = true;       /* the PC monitor shows the live KDE desktop */
 
-enum { M_WALK, M_CHAT, M_MENU, M_SHOP, M_DECOR, M_VIDEOS, M_SETTINGS, M_SIT, M_LIE, M_PC_IN, M_PC_OUT, M_HELP, M_BOARD, M_QUIT };
+enum { M_WALK, M_CHAT, M_MENU, M_SHOP, M_DECOR, M_VIDEOS, M_SETTINGS, M_SIT, M_LIE, M_PC_IN, M_PC_OUT, M_HELP, M_BOARD, M_QUIT,
+       M_TAB_IN, M_TAB_OUT, M_CREW, M_AGENT };
+static bool in_transition(int m) { return m == M_PC_IN || m == M_PC_OUT || m == M_TAB_IN || m == M_TAB_OUT; }
 static int mode = M_WALK, back_mode = M_WALK;
 static float anim_t;
 static V3 anim_from; static float anim_yaw0, anim_pitch0;
@@ -121,7 +131,7 @@ static void save_state(bool at_pc)
              "fps=%d\nnames=%d\ndisplay=%d\nat_pc=%d\n",
              P.x, P.z, P.yaw, P.pitch, CFG.quality, CFG.sens, CFG.invert, CFG.fov, CFG.volume, CFG.show_fps,
              CFG.show_names, CFG.display, at_pc);
-    n += snprintf(buf + n, sizeof buf - n, "walk=%.2f\nturn=%.2f\ndrag=%d\nfps_limit=%d\nidle_save=%d\nui_scale=%.3f\n", walk_speed, turn_speed, drag_look, fps_limit, idle_save, g_ui_scale);
+    n += snprintf(buf + n, sizeof buf - n, "walk=%.2f\nturn=%.2f\nlook=%d\nfps_limit=%d\nidle_save=%d\nui_scale=%.3f\nlive_pc=%d\n", walk_speed, turn_speed, look_mode, fps_limit, idle_save, g_ui_scale, live_pc);
     for (int i = 0; i < NKEYS && n < (int)sizeof buf - 40; i++) n += snprintf(buf + n, sizeof buf - n, "key_%s=%d\n", KEY_IDS[i], (int)KEYS[i]);
     write_file(path, buf);
 }
@@ -151,7 +161,8 @@ static void load_state(void)
         else if (!strcmp(k, "display")) CFG.display = atoi(v);
         else if (!strcmp(k, "walk")) walk_speed = clampf((float)atof(v), 0.5f, 2.0f);
         else if (!strcmp(k, "turn")) turn_speed = clampf((float)atof(v), 0.3f, 3.0f);
-        else if (!strcmp(k, "drag")) drag_look = atoi(v);
+        else if (!strcmp(k, "look")) { look_mode = atoi(v); if (look_mode < 0 || look_mode >= NLOOK) look_mode = LOOK_AUTO; }
+        else if (!strcmp(k, "live_pc")) live_pc = atoi(v);
         else if (!strcmp(k, "fps_limit")) fps_limit = atoi(v);
         else if (!strcmp(k, "idle_save")) idle_save = atoi(v);
         else if (!strcmp(k, "ui_scale")) g_ui_scale = clampf((float)atof(v), 0.75f, 2.0f);
@@ -585,6 +596,11 @@ void draw_pc_screen(V3 c, float w, float h)
 {
     /* faces south (+z); seen from the chair, left is -x */
     float x0 = c.x - w / 2, x1 = c.x + w / 2, y0 = c.y - h / 2, y1 = c.y + h / 2, z = c.z + 0.002f;
+    if (live_pc) {
+        float u, v;
+        GLuint tex = pccap_texture(&u, &v);
+        if (tex) { tex_quad(tex, u, v, v3(x0, y1, z), v3(x1, y1, z), v3(x1, y0, z), v3(x0, y0, z)); return; }
+    }
     glow_quad(v3(x0, y1, z), v3(x1, y1, z), v3(x1, y0, z), v3(x0, y0, z), rgb(30, 60, 120));
     glow_quad(v3(x0, y1, z + 0.001f), v3(x1, y1, z + 0.001f), v3(x1, (y0 + y1) / 2, z + 0.001f), v3(x0, (y0 + y1) / 2, z + 0.001f), rgb(50, 90, 160));
     /* taskbar */
@@ -601,6 +617,22 @@ void draw_pc_screen(V3 c, float w, float h)
     text3d(F_TITLE, v3(x0 + 0.05f, y1 - 0.06f, z + 0.004f), v3(1, 0, 0), v3(0, -1, 0), px2, "KDE Plasma", rgb(240, 240, 250));
     float px3 = 0.028f / text_h(F_BODY);
     text3d(F_BODY, v3(x0 + 0.05f, y1 - 0.13f, z + 0.004f), v3(1, 0, 0), v3(0, -1, 0), px3, "Press E to use the computer", rgb(210, 220, 240));
+}
+
+void draw_tablet_screen(V3 c)
+{
+    /* lies flat on the bed; read from the side of the bed (+x), so the top of the screen is -x and right is -z */
+    float y = c.y + 0.001f, xa = c.x - 0.115f, xb = c.x + 0.115f, za = c.z - 0.075f, zb = c.z + 0.075f;
+    glow_quad(v3(xa, y, zb), v3(xa, y, za), v3(xb, y, za), v3(xb, y, zb), rgb(22, 34, 62));
+    float px = 0.026f / text_h(F_TITLE);
+    text3d(F_TITLE, v3(xa + 0.014f, y + 0.001f, zb - 0.012f), v3(0, 0, -1), v3(1, 0, 0), px, "LSIW", rgb(240, 240, 250));
+    float px2 = 0.012f / text_h(F_BODY);
+    text3d(F_BODY, v3(xa + 0.048f, y + 0.001f, zb - 0.012f), v3(0, 0, -1), v3(1, 0, 0), px2, "Windows programs", rgb(170, 190, 230));
+    for (int i = 0; i < 6; i++) {
+        float tx = xa + 0.085f + (i / 3) * 0.06f, tz = zb - 0.016f - (i % 3) * 0.045f;
+        Col tc = i % 3 == 0 ? rgb(60, 140, 230) : i % 3 == 1 ? rgb(90, 180, 120) : rgb(230, 160, 60);
+        glow_quad(v3(tx, y + 0.001f, tz), v3(tx, y + 0.001f, tz - 0.03f), v3(tx + 0.035f, y + 0.001f, tz - 0.03f), v3(tx + 0.035f, y + 0.001f, tz), tc);
+    }
 }
 
 void draw_whiteboard(V3 o)
@@ -670,9 +702,66 @@ static void find_target(void)
 /* Some VMs (Hyper-V, VirtualBox with mouse integration) only have an absolute pointer, which gives no motion while
  * the mouse is captured. Right-drag looks around with plain cursor positions instead; once used, the apartment stops
  * capturing the mouse so the cursor stays visible. Arrow keys turn too. */
-static bool dragging;
+static bool dragging, look_active, vm_armed;
 static int drag_x, drag_y;
-static void set_relative(bool on) { SDL_SetRelativeMouseMode(on && !drag_look ? SDL_TRUE : SDL_FALSE); }
+static int eff_look(void) { return look_mode == LOOK_AUTO ? (abs_pointer ? LOOK_VM : LOOK_LOCKED) : look_mode; }
+static void set_relative(bool on)
+{
+    int m = eff_look();
+    if (on && !look_active) vm_armed = false;   /* the cursor may sit at an edge: wait until it moves */
+    look_active = on;
+    SDL_SetRelativeMouseMode(on && m == LOOK_LOCKED ? SDL_TRUE : SDL_FALSE);
+    SDL_ShowCursor(on && m == LOOK_VM ? SDL_DISABLE : SDL_ENABLE);
+    if (win && !windowed) SDL_SetWindowMouseGrab(win, on && m == LOOK_VM ? SDL_TRUE : SDL_FALSE);
+}
+
+/* An absolute pointing device that is not a touchpad, touch screen or pen: the "tablet" a VM gives its guest. */
+static bool detect_abs_pointer(void)
+{
+    FILE *f = fopen("/proc/bus/input/devices", "r");
+    if (!f) return false;
+    char line[1024], name[256] = "";
+    bool mouse = false, abs = false, found = false;
+    for (;;) {
+        bool eof = !fgets(line, sizeof line, f);
+        if (eof || line[0] == '\n') {
+            if (mouse && abs && !strstr(name, "touch") && !strstr(name, "pen") && !strstr(name, "stylus") && !strstr(name, "wacom") && !strstr(name, "finger"))
+                found = true;
+            name[0] = 0; mouse = abs = false;
+            if (eof) break;
+            continue;
+        }
+        if (!strncmp(line, "N: Name=", 8)) {
+            snprintf(name, sizeof name, "%s", line + 8);
+            for (char *p = name; *p; p++) if (*p >= 'A' && *p <= 'Z') *p += 32;
+        } else if (!strncmp(line, "H: Handlers=", 12)) mouse = strstr(line, "mouse") != NULL;
+        else if (!strncmp(line, "B: ABS=", 7)) {
+            char *last = strrchr(line, ' ');
+            unsigned long v = strtoul(last ? last + 1 : line + 7, NULL, 16);
+            abs = (v & 3) == 3;
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+/* Virtual machine look: holding the cursor against an edge keeps turning that way. */
+static void edge_turn(float dt)
+{
+    if (!look_active || !vm_armed || !has_focus || eff_look() != LOOK_VM) return;
+    if (!(mode == M_WALK || mode == M_SIT || mode == M_LIE)) return;
+    int mx, my, ww, wh;
+    SDL_GetMouseState(&mx, &my);
+    SDL_GetWindowSize(win, &ww, &wh);
+    float bx = fmaxf(ww * 0.05f, 16), by = fmaxf(wh * 0.05f, 16), kx = 0, ky = 0;
+    if (mx < bx) kx = (bx - mx) / bx;
+    else if (mx > ww - 1 - bx) kx = -(mx - (ww - 1 - bx)) / bx;
+    if (my < by) ky = (by - my) / by;
+    else if (my > wh - 1 - by) ky = -(my - (wh - 1 - by)) / by;
+    P.yaw += clampf(kx, -1, 1) * 2.6f * CFG.sens * dt;
+    P.pitch = clampf(P.pitch + clampf(ky, -1, 1) * (CFG.invert ? -1.3f : 1.3f) * CFG.sens * dt, -1.45f, 1.45f);
+    if (mode == M_SIT) P.yaw = clampf(wrap_angle(P.yaw), -1.6f, 1.6f);
+}
 
 static void open_mode(int m)
 {
@@ -691,6 +780,8 @@ static void close_panel(void)
     set_relative(true);
 }
 
+static void stand_up_bed(void) { P.x = 3.2f; P.z = 1.9f; P.yaw = PI_F / 2; P.pitch = 0; mode = M_WALK; }
+
 static int menu_sel;
 static VideoFile videos[MAX_VIDEOS];
 static int nvideos;
@@ -698,6 +789,19 @@ static int nvideos;
 static void enter_pc(void)
 {
     mode = M_PC_IN;
+    anim_t = 0;
+    anim_from = v3(P.x, P.eye, P.z);
+    anim_yaw0 = P.yaw; anim_pitch0 = P.pitch;
+    set_relative(false);
+}
+
+/* The tablet on the bed opens LSIW Control (Windows programs) on the KDE desktop; the apartment comes back when
+ * it closes. */
+static void enter_tablet(void)
+{
+    if (access("/usr/bin/lsiw-control", X_OK) != 0) { toast("LSIW isn't installed on this system"); return; }
+    if (mode == M_LIE) stand_up_bed();
+    mode = M_TAB_IN;
     anim_t = 0;
     anim_from = v3(P.x, P.eye, P.z);
     anim_yaw0 = P.yaw; anim_pitch0 = P.pitch;
@@ -739,6 +843,7 @@ static void interact(void)
         open_mode(M_VIDEOS);
         break;
     case I_PC: enter_pc(); break;
+    case I_TABLET: enter_tablet(); break;
     case I_BED:
         mode = M_LIE;
         P.x = W.master_bed_lie.x; P.z = W.master_bed_lie.z; P.yaw = PI_F; P.pitch = 1.1f;
@@ -761,7 +866,7 @@ static void stand_up(void)
         P.z = 12.9f;
         sit_seat = -1;
     } else if (mode == M_LIE) {
-        P.x = 3.2f; P.z = 1.9f; P.yaw = PI_F / 2; P.pitch = 0;
+        stand_up_bed();
     }
     mode = M_WALK;
 }
@@ -905,8 +1010,9 @@ static void screen_mode_set(int i)
 }
 
 /* --- the pause menu */
-static const char *MENU[] = {"Return to the PC", "Settings", "Quit"};
-#define NMENU 3
+static const char *MENU[] = {"Return to the PC", "AI crew (add, remove, change)", "Settings", "Quit"};
+#define NMENU 4
+static void crew_open(void);
 static const char *QUIT[] = {"Log out", "Sleep", "Hibernate", "Restart", "Shut down", "Back"};
 #define NQUIT 6
 static bool from_menu;   /* Settings / Quit were opened from the Esc menu: Esc goes back to it */
@@ -941,8 +1047,9 @@ static void menu_activate(int i)
 {
     switch (i) {
     case 0: mode = back_mode = M_WALK; P.x = W.pc_stand.x; P.z = W.pc_stand.z; enter_pc(); break;
-    case 1: menu_sel = 0; from_menu = true; screen_modes_load(); mode = M_SETTINGS; break;
-    case 2: menu_sel = 0; from_menu = true; mode = M_QUIT; break;
+    case 1: from_menu = true; crew_open(); break;
+    case 2: menu_sel = 0; from_menu = true; screen_modes_load(); mode = M_SETTINGS; break;
+    case 3: menu_sel = 0; from_menu = true; mode = M_QUIT; break;
     }
 }
 
@@ -954,7 +1061,7 @@ static void quit_activate(int i)
     case 2: power("hibernate"); break;
     case 3: power("reboot"); break;
     case 4: power("poweroff"); break;
-    default: menu_sel = 2; mode = M_MENU; from_menu = false; break;
+    default: menu_sel = 3; mode = M_MENU; from_menu = false; break;
     }
 }
 
@@ -1085,8 +1192,8 @@ static void video_pick(int r)
 }
 
 /* --- settings */
-#define NSET (15 + NKEYS + 1)
-#define KROW 15   /* first key row */
+#define NSET (16 + NKEYS + 1)
+#define KROW 16   /* first key row */
 static void apply_quality(void);
 
 static void setting_row(int r, float x, float y, float w, float rh, bool on)
@@ -1096,8 +1203,9 @@ static void setting_row(int r, float x, float y, float w, float rh, bool on)
                                       "Show names over the crew", "Show FPS", "Screen (display number)"};
     char v[64];
     static const char *q[3] = {"Low (fastest)", "Medium", "High"};
-    static const char *more[8] = {"Mouse look", "Walking speed", "Turn speed (keys)", "Frame rate limit", "Save power when idle",
-                                  "Screen resolution", "Text and menu size", "Reset keys to default"};
+    static const char *more[9] = {"Mouse look", "Walking speed", "Turn speed (keys)", "Frame rate limit", "Save power when idle",
+                                  "Screen resolution", "Text and menu size", "PC screen in the bedroom", "Reset keys to default"};
+    static const char *looks[NLOOK] = {"Auto", "Hidden, locked in the middle", "Hidden; push an edge to keep turning (VMs)", "Hold right button + drag"};
     if (r >= 8) {
         const char *name;
         if (r >= KROW && r < KROW + NKEYS) {
@@ -1106,15 +1214,19 @@ static void setting_row(int r, float x, float y, float w, float rh, bool on)
             if (rebinding == k) snprintf(v, sizeof v, "Press a key (Esc cancels)");
             else snprintf(v, sizeof v, "%s", SDL_GetScancodeName(KEYS[k]));
         } else {
-            int m = r < KROW ? r - 8 : 7;
+            int m = r < KROW ? r - 8 : 8;
             name = more[m];
-            if (m == 0) snprintf(v, sizeof v, "%s", drag_look ? "Hold right button + drag" : "Mouse captured");
+            if (m == 0) {
+                if (look_mode == LOOK_AUTO) snprintf(v, sizeof v, "Auto: %s", abs_pointer ? "edge turning (VM mouse found)" : "locked in the middle");
+                else snprintf(v, sizeof v, "%s", looks[look_mode]);
+            }
             else if (m == 1) snprintf(v, sizeof v, "%.0f%%", walk_speed * 100);
             else if (m == 2) snprintf(v, sizeof v, "%.0f%%", turn_speed * 100);
             else if (m == 3) { if (fps_limit) snprintf(v, sizeof v, "%d fps", fps_limit); else snprintf(v, sizeof v, "No limit"); }
             else if (m == 4) snprintf(v, sizeof v, "%s", idle_save ? "On" : "Off");
             else if (m == 5) { if (scr_cur >= 0) snprintf(v, sizeof v, "%d x %d", scr_modes[scr_cur].w, scr_modes[scr_cur].h); else snprintf(v, sizeof v, "%d x %d (fixed)", WIN_W, WIN_H); }
             else if (m == 6) snprintf(v, sizeof v, "%.0f%%", g_ui_scale * 100);
+            else if (m == 7) snprintf(v, sizeof v, "%s", !live_pc ? "Picture" : pccap_failed() ? "Live (not available here)" : "Live desktop and programs");
             else v[0] = 0;
         }
         text(F_BODY, x, y, name, on ? C_ACCENT : C_TXT);
@@ -1162,7 +1274,7 @@ static void setting_change(int r, int dir)
     case 5: CFG.show_names = !CFG.show_names; break;
     case 6: CFG.show_fps = !CFG.show_fps; break;
     case 7: { int n = SDL_GetNumVideoDisplays(); CFG.display = (CFG.display + dir + n) % (n ? n : 1); move_to_display(); break; }
-    case 8: drag_look = !drag_look; break;
+    case 8: look_mode = (look_mode + dir + NLOOK) % NLOOK; break;
     case 9: walk_speed = clampf(walk_speed + dir * 0.1f, 0.5f, 2.0f); break;
     case 10: turn_speed = clampf(turn_speed + dir * 0.1f, 0.3f, 3.0f); break;
     case 11: { static const int L[4] = {30, 45, 60, 0}; int i = 0; while (i < 4 && L[i] != fps_limit) i++;
@@ -1173,11 +1285,287 @@ static void setting_change(int r, int dir)
         else toast("This screen offers no other resolutions");
         break;
     case 14: g_ui_scale = clampf(g_ui_scale + dir * 0.125f, 0.75f, 2.0f); gfx_resize(WIN_H); break;
+    case 15: live_pc = !live_pc; break;
     default:
         if (r >= KROW && r < KROW + NKEYS) { rebinding = r - KROW; return; }
         memcpy(KEYS, KEY_DEF, sizeof KEYS); toast("Keys reset"); break;
     }
     save_state(false);
+}
+
+
+/* --- the AI crew control panel: add, remove and change the crew (the backend's /api/crew/agents) */
+#define MAX_CREW 32
+typedef struct {
+    char slug[40], name[48], role[64], model[96], color[16];
+    char description[400], persona[1600], voice[300], quirks[400];
+    int max_steps;
+    bool enabled, builtin;
+} AgentCfg;
+static AgentCfg crew_cfg[MAX_CREW], ed;
+static int ncrew;
+static bool crew_loaded, ed_new;
+static int ed_field = -1;            /* the text field being typed into, or -1 */
+static char ed_buf[1600];
+static int del_armed = -1;           /* delete needs a second Enter */
+static char models[32][96];
+static int nmodels;
+static const char *CREW_COLORS[] = {"violet", "amber", "cyan", "emerald", "rose", "blue", "orange", "pink", "lime", "teal", "slate"};
+#define NCOLORS 11
+enum { E_NAME, E_ROLE, E_MODEL, E_COLOR, E_ENABLED, E_STEPS, E_DESC, E_PERSONA, E_VOICE, E_QUIRKS, E_SAVE, E_DELETE, E_BACK, NE };
+static const char *E_NAMES[NE] = {"Name", "Job title", "AI model", "Color", "Active", "Max steps per task", "What it does",
+                                  "Personality (instructions)", "Speaking style", "Quirks", "Save", "Remove this AI", "Back"};
+
+static void cfg_from_json(AgentCfg *a, J *j)
+{
+    memset(a, 0, sizeof *a);
+    snprintf(a->slug, sizeof a->slug, "%s", jstr(j, "slug", ""));
+    snprintf(a->name, sizeof a->name, "%s", jstr(j, "name", ""));
+    snprintf(a->role, sizeof a->role, "%s", jstr(j, "role", ""));
+    snprintf(a->model, sizeof a->model, "%s", jstr(j, "model", ""));
+    snprintf(a->color, sizeof a->color, "%s", jstr(j, "color", "slate"));
+    snprintf(a->description, sizeof a->description, "%s", jstr(j, "description", ""));
+    snprintf(a->persona, sizeof a->persona, "%s", jstr(j, "persona", ""));
+    snprintf(a->voice, sizeof a->voice, "%s", jstr(j, "voice", ""));
+    snprintf(a->quirks, sizeof a->quirks, "%s", jstr(j, "quirks", ""));
+    a->max_steps = (int)jnum(j, "max_steps", 10);
+    a->enabled = jbool(j, "enabled", true);
+    a->builtin = jbool(j, "builtin", false);
+}
+
+static void on_crew_list(int status, const char *body, void *user)
+{
+    (void)user;
+    J *j = json_parse(body);
+    if (status == 200 && j && j->t == J_ARR) {
+        ncrew = 0;
+        for (int i = 0; i < j->count && ncrew < MAX_CREW; i++) cfg_from_json(&crew_cfg[ncrew++], jat(j, i));
+        crew_loaded = true;
+    } else if (!status) toast("LifeOS isn't answering, so the crew can't be changed right now");
+    json_free(j);
+}
+
+static void on_models(int status, const char *body, void *user)
+{
+    (void)user;
+    if (status != 200) return;
+    J *j = json_parse(body), *loc = jget(j, "local");
+    nmodels = 0;
+    for (int i = 0; loc && loc->t == J_ARR && i < loc->count && nmodels < 32; i++)
+        snprintf(models[nmodels++], sizeof models[0], "%s", jstr(jat(loc, i), NULL, ""));
+    json_free(j);
+}
+
+static void crew_reload(void)
+{
+    net_request("GET", "/api/crew/agents", NULL, 0, on_crew_list, NULL);
+    net_request("GET", "/api/crew/models", NULL, 0, on_models, NULL);
+}
+
+static void crew_open(void)
+{
+    menu_sel = 0;
+    ed_field = -1; del_armed = -1;
+    mode = M_CREW;
+    crew_reload();
+}
+
+static void on_crew_saved(int status, const char *body, void *user)
+{
+    const char *what = user;
+    J *j = json_parse(body);
+    if (status == 200) {
+        toast("%s", what);
+        if (mode == M_AGENT) { mode = M_CREW; menu_sel = 0; }
+        crew_reload();
+        net_request("GET", "/api/crew/status", NULL, 0, on_crew, NULL);   /* the apartment's crew follows at once */
+    } else toast("Couldn't save: %s", status ? jstr(j, "detail", "error") : "LifeOS isn't answering");
+    json_free(j);
+}
+
+static void crew_toggle(int i)
+{
+    if (i < 0 || i >= ncrew) return;
+    AgentCfg *a = &crew_cfg[i];
+    if (!strcmp(a->slug, "overseer") && a->enabled) { toast("Atlas coordinates the crew and stays active"); return; }
+    a->enabled = !a->enabled;
+    char path[120];
+    snprintf(path, sizeof path, "/api/crew/agents/%s", a->slug);
+    net_request("PATCH", path, a->enabled ? "{\"enabled\":true}" : "{\"enabled\":false}", 0, on_crew_saved,
+                a->enabled ? "Switched on" : "Switched off");
+}
+
+static void crew_edit(int row)
+{
+    ed_field = -1; del_armed = -1;
+    if (row == 0) {
+        memset(&ed, 0, sizeof ed);
+        snprintf(ed.name, sizeof ed.name, "New AI");
+        snprintf(ed.role, sizeof ed.role, "Specialist");
+        snprintf(ed.color, sizeof ed.color, "%s", CREW_COLORS[(ncrew + 3) % NCOLORS]);
+        ed.max_steps = 10; ed.enabled = true;
+        ed_new = true;
+        menu_sel = E_NAME;
+    } else {
+        if (row - 1 >= ncrew) return;
+        ed = crew_cfg[row - 1];
+        ed_new = false;
+        menu_sel = 0;
+    }
+    mode = M_AGENT;
+}
+
+static char *ed_text(int f, size_t *cap)
+{
+    switch (f) {
+    case E_NAME: *cap = sizeof ed.name; return ed.name;
+    case E_ROLE: *cap = sizeof ed.role; return ed.role;
+    case E_DESC: *cap = sizeof ed.description; return ed.description;
+    case E_PERSONA: *cap = sizeof ed.persona; return ed.persona;
+    case E_VOICE: *cap = sizeof ed.voice; return ed.voice;
+    case E_QUIRKS: *cap = sizeof ed.quirks; return ed.quirks;
+    }
+    return NULL;
+}
+
+static void agent_save(void)
+{
+    if (!ed.name[0]) { toast("Give the AI a name first"); return; }
+    static char body[8192];
+    char n[200], r[300], m[300], d[1000], p[3600], v[700], q[900];
+    json_escape(n, sizeof n, ed.name); json_escape(r, sizeof r, ed.role); json_escape(m, sizeof m, ed.model);
+    json_escape(d, sizeof d, ed.description); json_escape(p, sizeof p, ed.persona);
+    json_escape(v, sizeof v, ed.voice); json_escape(q, sizeof q, ed.quirks);
+    snprintf(body, sizeof body, "{\"name\":%s,\"role\":%s,\"model\":%s,\"color\":\"%s\",\"max_steps\":%d,\"description\":%s,"
+             "\"persona\":%s,\"voice\":%s,\"quirks\":%s%s}", n, r, m, ed.color, ed.max_steps, d, p, v, q,
+             ed_new ? "" : (ed.enabled ? ",\"enabled\":true" : ",\"enabled\":false"));
+    if (ed_new) net_request("POST", "/api/crew/agents", body, 0, on_crew_saved, "Added to the crew. They'll move in shortly.");
+    else {
+        char path[120];
+        snprintf(path, sizeof path, "/api/crew/agents/%s", ed.slug);
+        net_request("PATCH", path, body, 0, on_crew_saved, "Saved");
+    }
+}
+
+static void agent_change(int f, int dir)
+{
+    del_armed = f == E_DELETE ? del_armed : -1;
+    switch (f) {
+    case E_MODEL: {
+        /* "" = the LifeOS default model, then every installed model */
+        int cur = -1;
+        for (int i = 0; i < nmodels; i++) if (!strcmp(models[i], ed.model)) cur = i;
+        if (!ed.model[0]) cur = -1;
+        int next = cur + dir;
+        if (next < -1) next = nmodels - 1;
+        if (next >= nmodels) next = -1;
+        snprintf(ed.model, sizeof ed.model, "%s", next < 0 ? "" : models[next]);
+        if (!nmodels) toast("No models found: LifeOS or Ollama isn't running, or none are downloaded");
+        break;
+    }
+    case E_COLOR: {
+        int cur = 0;
+        for (int i = 0; i < NCOLORS; i++) if (!strcmp(CREW_COLORS[i], ed.color)) cur = i;
+        snprintf(ed.color, sizeof ed.color, "%s", CREW_COLORS[(cur + dir + NCOLORS) % NCOLORS]);
+        break;
+    }
+    case E_ENABLED:
+        if (!strcmp(ed.slug, "overseer")) toast("Atlas coordinates the crew and stays active");
+        else if (!ed_new) ed.enabled = !ed.enabled;
+        break;
+    case E_STEPS: ed.max_steps = (int)clampf((float)(ed.max_steps + dir), 1, 50); break;
+    default: break;
+    }
+}
+
+static void agent_activate(int f)
+{
+    size_t cap;
+    char *t = ed_text(f, &cap);
+    if (t) {
+        snprintf(ed_buf, sizeof ed_buf, "%s", t);
+        ed_field = f;
+        SDL_StartTextInput();
+        return;
+    }
+    switch (f) {
+    case E_SAVE: agent_save(); break;
+    case E_DELETE:
+        if (ed_new) { mode = M_CREW; menu_sel = 0; break; }
+        if (ed.builtin) { toast("%s is built in: switch it off (Active) instead", ed.name); break; }
+        if (del_armed != 1) { del_armed = 1; toast("Press Enter again to remove %s", ed.name); break; }
+        {
+            char path[120];
+            snprintf(path, sizeof path, "/api/crew/agents/%s", ed.slug);
+            net_request("DELETE", path, NULL, 0, on_crew_saved, "Removed from the crew");
+        }
+        break;
+    case E_BACK: mode = M_CREW; menu_sel = 0; break;
+    default: agent_change(f, 1); break;
+    }
+}
+
+static void ed_commit(bool keep)
+{
+    size_t cap;
+    char *t = ed_text(ed_field, &cap);
+    if (keep && t) snprintf(t, cap, "%s", ed_buf);
+    ed_field = -1;
+    SDL_StopTextInput();
+}
+
+static void crew_row(int r, float x, float y, float w, float rh, bool on)
+{
+    (void)rh;
+    if (r == 0) { text(F_BODY, x, y, ncrew < MAX_CREW ? "+  Add an AI" : "(the crew is full)", on ? C_ACCENT : rgb(140, 230, 160)); return; }
+    AgentCfg *a = &crew_cfg[r - 1];
+    char l[200], v[160];
+    snprintf(l, sizeof l, "%s  ·  %s", a->name, a->role);
+    text(F_BODY, x, y, l, on ? C_ACCENT : a->enabled ? C_TXT : C_DIM);
+    snprintf(v, sizeof v, "%s   %s", a->model[0] ? a->model : "default model", a->enabled ? "[ on ]" : "[ off ]");
+    text(F_BODY, x + w - text_w(F_BODY, v) - 16, y, v, a->enabled ? rgb(140, 230, 160) : C_DIM);
+}
+
+static void agent_row(int r, float x, float y, float w, float rh, bool on)
+{
+    (void)rh;
+    Col c = on ? C_ACCENT : C_TXT;
+    if (r == E_DELETE) {
+        const char *d = ed_new ? "Cancel" : ed.builtin ? "Remove (built-in AIs can only be switched off)" : del_armed == 1 ? "Press Enter again to remove" : E_NAMES[r];
+        text(F_BODY, x, y, d, on ? C_ACCENT : ed.builtin ? C_DIM : rgb(255, 150, 140));
+        return;
+    }
+    if (r == E_SAVE) { text(F_BODY, x, y, ed_new ? "Add to the crew" : "Save changes", on ? C_ACCENT : rgb(140, 230, 160)); return; }
+    if (r == E_BACK) { text(F_BODY, x, y, E_NAMES[r], c); return; }
+    text(F_BODY, x, y, E_NAMES[r], c);
+    char v[1700];
+    size_t cap;
+    const char *t = ed_text(r, &cap);
+    if (ed_field == r) snprintf(v, sizeof v, "%s%s", ed_buf, fmodf(T, 1) < 0.5f ? "|" : " ");
+    else if (t) snprintf(v, sizeof v, "%s", t[0] ? t : "(empty: Enter to type)");
+    else if (r == E_MODEL) snprintf(v, sizeof v, "<  %s  >", ed.model[0] ? ed.model : "LifeOS default");
+    else if (r == E_COLOR) snprintf(v, sizeof v, "<  %s  >", ed.color);
+    else if (r == E_ENABLED) snprintf(v, sizeof v, "<  %s  >", ed.enabled ? "On" : "Off");
+    else if (r == E_STEPS) snprintf(v, sizeof v, "<  %d  >", ed.max_steps);
+    float vx = x + w * 0.36f, vw = w * 0.62f;
+    /* long text: show the end while typing, the start otherwise */
+    const char *vis = v;
+    if (text_w(F_BODY, v) > vw) {
+        if (ed_field == r) { while (*vis && text_w(F_BODY, vis) > vw) { vis++; while ((*vis & 0xC0) == 0x80) vis++; } }
+        else {
+            static char cut[400];
+            size_t n = 0;
+            while (vis[n] && n < sizeof cut - 4) n++;
+            snprintf(cut, sizeof cut, "%.*s", (int)n, vis);
+            while (n > 0 && text_w(F_BODY, cut) > vw) { n--; while (n > 0 && (cut[n] & 0xC0) == 0x80) n--; snprintf(cut + n, sizeof cut - n, "..."); }
+            vis = cut;
+        }
+    }
+    if (r == E_COLOR) {
+        float s = text_h(F_BODY) * 0.8f;
+        rect(vx - s - 8, y + 2, s, s, crew_color(ed.color));
+    }
+    text(F_BODY, vx, y, vis, ed_field == r ? C_ACCENT : (t && !t[0]) ? C_DIM : C_TXT);
 }
 
 /* ------------------------------------------------------------------ render scale (low quality) */
@@ -1337,7 +1725,7 @@ static void draw_hud(float fps)
         } else snprintf(s, sizeof s, "V choose a video  ·  E stand up");
         text_center(F_SMALL, WIN_W / 2.0f, WIN_H - text_h(F_SMALL) - 20.0f, s, C_TXT);
     }
-    if (mode == M_LIE) text_center(F_BODY, WIN_W / 2.0f, WIN_H - text_h(F_BODY) - 24.0f, "E  get up", C_TXT);
+    if (mode == M_LIE) text_center(F_BODY, WIN_W / 2.0f, WIN_H - text_h(F_BODY) - 24.0f, "E  get up   ·   T  tablet (LSIW)", C_TXT);
     /* toasts */
     float ty = WIN_H - 40.0f - (mode == M_SIT ? text_h(F_SMALL) + 20 : 0);
     for (int i = 0; i < 5; i++) {
@@ -1372,7 +1760,7 @@ static void draw_panels(void)
         x = (WIN_W - w) / 2; y = (WIN_H - h) / 2;
         panel(x, y, w, h, "LifeOS");
         list_rows(NMENU, &menu_sel, x + 20, y + 30 + text_h(F_TITLE), w - 40, h, menu_row);
-        foot = "Esc resume  ·  P shop  ·  C decorate  ·  F1 help";
+        foot = "Esc resume  ·  K crew  ·  P shop  ·  C decorate  ·  F1 help";
         break;
     case M_QUIT:
         h = text_h(F_BODY) * 1.7f * NQUIT + text_h(F_TITLE) + 80; w = fminf(WIN_W * 0.4f, 520);
@@ -1412,6 +1800,25 @@ static void draw_panels(void)
         list_rows(n, &menu_sel, lx, ly, lw, lh, video_row);
         break;
     }
+    case M_CREW: {
+        panel(x, y, w, h, "AI crew");
+        const char *intro = "Add, remove and change the AIs that live here. Enter opens one, Left/Right switches it on or off.";
+        int ih = text_wrap(F_SMALL, lx, ly, (int)lw, intro, C_DIM);
+        if (!crew_loaded) text(F_BODY, lx, ly + ih + 20, net_online() ? "Loading the crew..." : "The crew can be changed while LifeOS is running.", C_DIM);
+        else list_rows(ncrew + 1, &menu_sel, lx, ly + ih + 12, lw, lh - ih - 12, crew_row);
+        if (!crew_loaded) nrows = 0;
+        foot = "Enter open  ·  Left/Right on/off  ·  Esc back";
+        break;
+    }
+    case M_AGENT: {
+        char t[120];
+        snprintf(t, sizeof t, "%s", ed_new ? "New AI" : ed.name);
+        panel(x, y, w, h, t);
+        rect(x, y, w, 5, crew_color(ed.color));
+        list_rows(NE, &menu_sel, lx, ly, lw, lh, agent_row);
+        foot = ed_field >= 0 ? "Type  ·  Enter done  ·  Ctrl+V paste  ·  Esc cancel" : "Enter edit  ·  Left/Right change  ·  Esc back (unsaved changes are dropped)";
+        break;
+    }
     case M_SETTINGS:
         panel(x, y, w, h, "Settings");
         list_rows(NSET, &menu_sel, lx, ly, lw, lh, setting_row);
@@ -1438,14 +1845,16 @@ static void draw_panels(void)
         const char *help =
             "WASD or Up/Down: walk  ·  Shift: run  ·  Mouse, Left/Right arrows or right-drag: look  ·  PgUp/PgDn: look up/down\n"
             "(Change keys, mouse speed and look mode in Esc > Settings)\n"
-            "E: talk to a crew member, sit on the couch, use the TV, lie in bed, use the PC\n"
-            "Esc: menu (PC, settings, quit)  ·  P: shop  ·  C: decorate  ·  F1: this help  ·  F2: graphics quality\n\n"
+            "E: talk to a crew member, sit on the couch, use the TV, lie in bed, use the PC or the tablet on the bed\n"
+            "Esc: menu (PC, crew, settings, quit)  ·  K: AI crew  ·  P: shop  ·  C: decorate  ·  F1: this help  ·  F2: graphics quality\n\n"
             "The crew lives here. They follow the real clock: they sleep in the AI bedrooms at night, eat in the kitchen "
             "at meal times, and walk to the work room when you give them a task (talk to one, press Tab, describe the task).\n\n"
             "Using LifeOS earns points. Spend them in the shop (the kiosk in the hallway, or P) on paint, floors, furniture "
             "and extras, then place them with Decorate (C).\n\n"
             "The computer in the master bedroom is your real desktop (KDE Plasma). Press E at the desk to use it and "
-            "Shift+F4 to come back here.\n\n"
+            "Shift+F4 to come back here. Its monitor shows your desktop live (Esc > Settings > PC screen).\n\n"
+            "The tablet on the bed opens LSIW Control, for Windows programs; close it to come back.\n\n"
+            "Add, remove and change the crew in the AI crew panel (K, or Esc > AI crew).\n\n"
             "Got a second monitor? It shows your tasks, the crew and the time; arrange those widgets like any Plasma widget.";
         text_wrap(F_BODY, lx, ly, (int)lw, help, C_TXT);
         nrows = 0;
@@ -1468,6 +1877,8 @@ static int list_len(void)
     case M_DECOR: return D_FIXED + ndecor;
     case M_VIDEOS: return nvideos + (video_active() ? 1 : 0);
     case M_SETTINGS: return NSET;
+    case M_CREW: return crew_loaded ? ncrew + 1 : 0;
+    case M_AGENT: return NE;
     }
     return 0;
 }
@@ -1481,6 +1892,8 @@ static void list_activate(int i)
     case M_DECOR: if (i >= D_FIXED) decor_change(i, 1); else decor_change(i, 1); break;
     case M_VIDEOS: video_pick(i); break;
     case M_SETTINGS: setting_change(i, 1); break;
+    case M_CREW: crew_edit(i); break;
+    case M_AGENT: agent_activate(i); break;
     }
 }
 
@@ -1488,6 +1901,8 @@ static void list_side(int dir)
 {
     if (mode == M_DECOR) decor_change(menu_sel, dir);
     else if (mode == M_SETTINGS) setting_change(menu_sel, dir);
+    else if (mode == M_CREW && menu_sel > 0) crew_toggle(menu_sel - 1);
+    else if (mode == M_AGENT) agent_change(menu_sel, dir);
 }
 
 static void utf8_pop(char *s)
@@ -1497,12 +1912,22 @@ static void utf8_pop(char *s)
     s[n] = 0;
 }
 
-static bool is_panel(int m) { return m == M_QUIT || m == M_MENU || m == M_SHOP || m == M_DECOR || m == M_VIDEOS || m == M_SETTINGS || m == M_HELP || m == M_BOARD; }
+static bool is_panel(int m) { return m == M_QUIT || m == M_MENU || m == M_SHOP || m == M_DECOR || m == M_VIDEOS || m == M_SETTINGS || m == M_HELP || m == M_BOARD || m == M_CREW || m == M_AGENT; }
 
 static void handle_key(SDL_Keysym k)
 {
     SDL_Keycode key = k.sym;
-    if (mode == M_PC_IN || mode == M_PC_OUT) return;
+    if (in_transition(mode)) return;
+    if (ed_field >= 0) {
+        if (key == SDLK_ESCAPE) ed_commit(false);
+        else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) ed_commit(true);
+        else if (key == SDLK_BACKSPACE) utf8_pop(ed_buf);
+        else if (key == SDLK_v && (k.mod & KMOD_CTRL)) {
+            char *clip = SDL_GetClipboardText();
+            if (clip) { strncat(ed_buf, clip, sizeof ed_buf - strlen(ed_buf) - 1); SDL_free(clip); }
+        }
+        return;
+    }
     if (rebinding >= 0) {
         if (key != SDLK_ESCAPE) {
             for (int i = 0; i < NKEYS; i++) if (i != rebinding && KEYS[i] == k.scancode) KEYS[i] = KEYS[rebinding];  /* swap */
@@ -1528,11 +1953,12 @@ static void handle_key(SDL_Keysym k)
     if (is_panel(mode)) {
         int n = list_len();
         if (key == SDLK_ESCAPE) {
-            if (from_menu && (mode == M_SETTINGS || mode == M_QUIT)) { menu_sel = mode == M_SETTINGS ? 1 : 2; mode = M_MENU; from_menu = false; }
+            if (mode == M_AGENT) { mode = M_CREW; menu_sel = 0; del_armed = -1; }
+            else if (from_menu && (mode == M_SETTINGS || mode == M_QUIT || mode == M_CREW)) { menu_sel = mode == M_CREW ? 1 : mode == M_SETTINGS ? 2 : 3; mode = M_MENU; from_menu = false; }
             else { from_menu = false; close_panel(); }
         }
-        else if (key == SDLK_UP || key == SDLK_w) { if (n) menu_sel = (menu_sel - 1 + n) % n; }
-        else if (key == SDLK_DOWN || key == SDLK_s) { if (n) menu_sel = (menu_sel + 1) % n; }
+        else if (key == SDLK_UP || key == SDLK_w) { if (n) menu_sel = (menu_sel - 1 + n) % n; del_armed = -1; }
+        else if (key == SDLK_DOWN || key == SDLK_s) { if (n) menu_sel = (menu_sel + 1) % n; del_armed = -1; }
         else if (key == SDLK_LEFT || key == SDLK_a) list_side(-1);
         else if (key == SDLK_RIGHT || key == SDLK_d) list_side(1);
         else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) { if (n) list_activate(menu_sel); }
@@ -1551,6 +1977,8 @@ static void handle_key(SDL_Keysym k)
     case SDLK_p: menu_sel = 0; open_mode(M_SHOP); break;
     case SDLK_c: menu_sel = 0; open_mode(M_DECOR); break;
     case SDLK_F1: open_mode(M_HELP); break;
+    case SDLK_k: open_mode(M_CREW); from_menu = false; crew_open(); break;
+    case SDLK_t: if (mode == M_LIE) enter_tablet(); break;
     case SDLK_F2: CFG.quality = (CFG.quality + 1) % 3; apply_quality(); save_state(false);
         toast("Graphics: %s", CFG.quality == 0 ? "Low" : CFG.quality == 1 ? "Medium" : "High"); break;
     case SDLK_v: if (mode == M_SIT || dist2(P.x, P.z, 5, 13) < 5) { nvideos = video_scan(videos, MAX_VIDEOS); menu_sel = 0; open_mode(M_VIDEOS); } break;
@@ -1645,6 +2073,34 @@ static void camera_for_frame(V3 *eye, float *yaw, float *pitch, float *fade, flo
             exit_code = EXIT_TO_PC;
             running = false;
         }
+    } else if (mode == M_TAB_IN) {
+        anim_t += dt;
+        float t = smooth(anim_t / 0.8f);
+        V3 e = W.tablet_eye;
+        *eye = v3(lerpf(anim_from.x, e.x, t), lerpf(anim_from.y, e.y, t), lerpf(anim_from.z, e.z, t));
+        float want_yaw = atan2f(W.tablet.x - e.x, W.tablet.z - e.z);
+        float want_pitch = atan2f(W.tablet.y - e.y, dist2(e.x, e.z, W.tablet.x, W.tablet.z));
+        *yaw = anim_yaw0 + wrap_angle(want_yaw - anim_yaw0) * t;
+        *pitch = lerpf(anim_pitch0, want_pitch, t);
+        *fade = clampf((anim_t - 0.7f) / 0.3f, 0, 1);
+        if (anim_t > 1.05f) {
+            P.x = 3.2f; P.z = 1.86f; P.yaw = -PI_F / 2; P.pitch = -0.3f;
+            save_state(false);
+            chats_save();
+            exit_code = EXIT_TO_TABLET;
+            running = false;
+        }
+    } else if (mode == M_TAB_OUT) {
+        anim_t += dt;
+        float t = smooth((anim_t - 0.2f) / 0.8f);
+        V3 e = W.tablet_eye;
+        *eye = v3(lerpf(e.x, 3.2f, t), lerpf(e.y, 1.62f, t), lerpf(e.z, 1.86f, t));
+        *yaw = -PI_F / 2; *pitch = lerpf(atan2f(W.tablet.y - e.y, dist2(e.x, e.z, W.tablet.x, W.tablet.z)), -0.2f, t);
+        *fade = 1 - clampf(anim_t / 0.4f, 0, 1);
+        if (anim_t > 1.0f) {
+            mode = M_WALK; P.x = 3.2f; P.z = 1.86f; P.yaw = -PI_F / 2; P.pitch = -0.2f; P.eye = 1.62f;
+            set_relative(true);
+        }
     } else if (mode == M_PC_OUT) {
         anim_t += dt;
         float t = smooth((anim_t - 0.2f) / 0.9f);
@@ -1685,9 +2141,10 @@ int main(int argc, char **argv)
 {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--from-pc")) from_pc = true;
+        else if (!strcmp(argv[i], "--from-tablet")) from_tablet = true;
         else if (!strcmp(argv[i], "--windowed")) windowed = true;
         else if (!strcmp(argv[i], "--help")) {
-            puts("lifeos-apartment [--from-pc] [--windowed]\nThe LifeOS 3D apartment desktop. Exit code 10 = the user went to the PC (KDE desktop).");
+            puts("lifeos-apartment [--from-pc] [--from-tablet] [--windowed]\nThe LifeOS 3D apartment desktop. Exit code 10 = the user went to the PC (KDE desktop),\n11 = the user opened the tablet (LSIW Control).");
             return 0;
         }
     }
@@ -1701,6 +2158,8 @@ int main(int argc, char **argv)
     SDL_SetHint("SDL_VIDEO_X11_WMCLASS", "lifeos-apartment");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0) { fprintf(stderr, "apartment: SDL_Init: %s\n", SDL_GetError()); return 1; }
     load_state();
+    abs_pointer = detect_abs_pointer();
+    fprintf(stderr, "apartment: pointer: %s\n", abs_pointer ? "absolute (virtual machine): edge turning" : "relative: locked in the middle");
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
@@ -1738,8 +2197,9 @@ int main(int argc, char **argv)
     video_set_quality(CFG.quality);
     SDL_StopTextInput();
     if (from_pc) { mode = M_PC_OUT; anim_t = 0; P.x = W.pc_stand.x; P.z = W.pc_stand.z; }
+    else if (from_tablet) { mode = M_TAB_OUT; anim_t = 0; P.x = 3.2f; P.z = 1.86f; }
     else set_relative(true);
-    if (!from_pc && room_at(P.x, P.z) < 0) { P.x = W.spawn.x; P.z = W.spawn.z; }
+    if (!from_pc && !from_tablet && room_at(P.x, P.z) < 0) { P.x = W.spawn.x; P.z = W.spawn.z; }
     toast("Welcome home. Walk up to a crew member and press E to talk. F1 for help.");
 
     Uint64 freq = SDL_GetPerformanceFrequency(), last = SDL_GetPerformanceCounter();
@@ -1761,12 +2221,18 @@ int main(int argc, char **argv)
             case SDL_QUIT: running = false; break;
             case SDL_KEYDOWN: handle_key(ev.key.keysym); break;
             case SDL_TEXTINPUT:
-                if (mode == M_CHAT && strlen(input) + strlen(ev.text.text) < sizeof input - 1) strcat(input, ev.text.text);
+                if (ed_field >= 0) { if (strlen(ed_buf) + strlen(ev.text.text) < sizeof ed_buf - 1) strcat(ed_buf, ev.text.text); }
+                else if (mode == M_CHAT && strlen(input) + strlen(ev.text.text) < sizeof input - 1) strcat(input, ev.text.text);
                 break;
             case SDL_MOUSEMOTION:
                 mouse_x = ev.motion.x; mouse_y = ev.motion.y;
                 if (SDL_GetRelativeMouseMode()) look(ev.motion.xrel, ev.motion.yrel);
                 else if (dragging) { look((ev.motion.x - drag_x) * 2, (ev.motion.y - drag_y) * 2); drag_x = ev.motion.x; drag_y = ev.motion.y; }
+                else if (look_active && eff_look() == LOOK_VM) {
+                    look(ev.motion.xrel, ev.motion.yrel);
+                    int ww, wh; SDL_GetWindowSize(win, &ww, &wh);
+                    if (ev.motion.x > ww * 0.05f && ev.motion.x < ww * 0.95f && ev.motion.y > wh * 0.05f && ev.motion.y < wh * 0.95f) vm_armed = true;
+                }
                 else if (is_panel(mode)) {
                     int ww, wh; SDL_GetWindowSize(win, &ww, &wh);
                     int r = row_at(mouse_x * WIN_W / (ww ? ww : 1), mouse_y * WIN_H / (wh ? wh : 1));
@@ -1777,16 +2243,15 @@ int main(int argc, char **argv)
                 if (ev.button.button == SDL_BUTTON_RIGHT) dragging = false;
                 break;
             case SDL_MOUSEBUTTONDOWN:
-                if (ev.button.button == SDL_BUTTON_RIGHT && (mode == M_WALK || mode == M_SIT || mode == M_LIE)) {
-                    drag_look = dragging = true;
-                    set_relative(false);
+                if (ev.button.button == SDL_BUTTON_RIGHT && (mode == M_WALK || mode == M_SIT || mode == M_LIE) && !SDL_GetRelativeMouseMode()) {
+                    dragging = true;
                     drag_x = ev.button.x; drag_y = ev.button.y;
                 } else if (ev.button.button == SDL_BUTTON_LEFT) {
                     if (is_panel(mode)) {
                         int ww, wh; SDL_GetWindowSize(win, &ww, &wh);
                         handle_click(ev.button.x * WIN_W / (ww ? ww : 1), ev.button.y * WIN_H / (wh ? wh : 1));
                     } else if (mode == M_WALK) {
-                        if (!SDL_GetRelativeMouseMode() && !drag_look) set_relative(true);
+                        if (!look_active) set_relative(true);
                         else if (target.kind != I_NONE) interact();
                     }
                 }
@@ -1809,6 +2274,8 @@ int main(int argc, char **argv)
         poll_backend(dt);
         video_poll();
         update_player(dt);
+        edge_turn(dt);
+        pccap_set(live_pc && has_focus && room_at(P.x, P.z) == R_MASTER && mode != M_PC_IN, CFG.quality == 0);
         npc_update(dt, P.x, P.z);
         find_target();
         for (int i = 0; i < 5; i++) if (toasts[i].t > 0) toasts[i].t -= dt;
@@ -1871,7 +2338,7 @@ int main(int argc, char **argv)
         glDisable(GL_DEPTH_TEST);
         gfx_ortho(WIN_W, WIN_H);
         glEnable(GL_BLEND);
-        if (mode != M_PC_IN && mode != M_PC_OUT) {
+        if (!in_transition(mode)) {
             draw_labels(vw, vh, (float)WIN_W / vw, (float)WIN_H / vh);
             draw_hud(fps);
             if (mode == M_CHAT) draw_chat();

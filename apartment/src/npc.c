@@ -30,6 +30,8 @@ static Col color_named(const char *n, const char *slug)
     return rgb(80 + (int)(h % 160), 80 + (int)((h >> 8) % 160), 80 + (int)((h >> 16) % 160));
 }
 
+Col crew_color(const char *name) { return color_named(name, name ? name : ""); }
+
 static float rnd(void) { return (float)rand() / (float)RAND_MAX; }
 
 /* ------------------------------------------------------------------ roster */
