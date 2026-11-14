@@ -3,7 +3,9 @@
   "identifier": "default",
   "description": "Main window: core events only. File access goes through the permissioned backend, never the webview.",
   "windows": [
-    "main"
+    "main",
+    "wallpaper",
+    "miniapp-*"
   ],
   "permissions": [
     "core:default",

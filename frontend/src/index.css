@@ -33,3 +33,8 @@ body { @apply bg-bg text-text font-sans antialiased; }
 /* Control Center: work flowing along the links between the Overseer and specialists. */
 @keyframes station-flow { to { stroke-dashoffset: -12; } }
 .station-flow { animation: station-flow 0.8s linear infinite; }
+
+/* Mood lighting: a soft glow from the top-right corner in the mood's color (set by MoodLayer). */
+body { background-image: radial-gradient(ellipse 80% 60% at 100% 0%, color-mix(in oklab, var(--mood-glow, transparent) 20%, transparent), transparent 70%); background-attachment: fixed; }
+@keyframes panic-pulse { 50% { box-shadow: 0 0 0 6px rgb(248 113 113 / 0.25); } }
+.panic-pulse { animation: panic-pulse 1.2s ease-in-out infinite; }

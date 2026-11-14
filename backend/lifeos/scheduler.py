@@ -26,10 +26,52 @@ def fire_reminders() -> int:
     return len(due)
 
 
+def _tidy() -> object:
+    from . import tidy
+
+    return tidy.scheduled()
+
+
+def _history() -> object:
+    from . import recall
+
+    return recall.sync_history() if recall.cfg()["browser_history"] else None
+
+
+def _self_upgrade() -> object:
+    from . import upgrade
+
+    return upgrade.scheduled()
+
+
 def _daily_backup() -> object:
     from . import backup
 
     return backup.create() if backup.due() else None
+
+
+def _usb() -> object:
+    from . import usbbackup
+
+    return usbbackup.tick()
+
+
+def _levels() -> object:
+    from . import xp
+
+    return xp.check_levels()
+
+
+def _doctor() -> object:
+    from . import doctor
+
+    return doctor.scheduled()
+
+
+def _learn() -> object:
+    from . import learn
+
+    return learn.remind()
 
 
 class Scheduler:
@@ -44,6 +86,13 @@ class Scheduler:
             ("calendars", 30 * 60, integrations.sync_all),
             ("embed-memories", 10 * 60, memory.reembed_missing),
             ("backup", 30 * 60, _daily_backup),
+            ("tidy", 60, _tidy),
+            ("history", 15 * 60, _history),
+            ("self-upgrade", 60 * 60, _self_upgrade),
+            ("usb-backup", 10, _usb),
+            ("levels", 5 * 60, _levels),
+            ("doctor", 6 * 60 * 60, _doctor),
+            ("learn", 30 * 60, _learn),
         ]
         self._last: dict[str, float] = {}
 

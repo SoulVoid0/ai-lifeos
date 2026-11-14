@@ -203,6 +203,21 @@ class PowerArgs(BaseModel):
     action: Literal["lock", "sleep", "restart", "shutdown", "sign_out"]
 
 
+class WifiArgs(BaseModel):
+    action: Literal["list", "status", "connect", "disconnect", "on", "off"] = "list"
+    ssid: str = Field("", description="Network name, for connect")
+    password: str = Field("", description="Wi-Fi password for a new network (leave empty for saved or open ones)")
+
+
+class BluetoothArgs(BaseModel):
+    action: Literal["list", "scan", "connect", "disconnect", "pair", "forget", "on", "off"] = "list"
+    device: str = Field("", description="Device name or address, for connect/disconnect/pair/forget")
+
+
+class BrightnessArgs(BaseModel):
+    level: int = Field(ge=1, le=100, description="Screen brightness 1-100")
+
+
 class WorkspaceArgs(BaseModel):
     name: str = Field(..., description="Workspace name, e.g. 'study'")
 
@@ -227,6 +242,34 @@ class BreakDownArgs(BaseModel):
 class ReplanArgs(BaseModel):
     task_id: int | None = Field(None, description="Task id of the parent task")
     title: str | None = Field(None, description="Title of the parent task")
+
+
+class ScreenArgs(BaseModel):
+    question: str = Field("", description="What to find out about the screen, e.g. 'what does this error mean?'")
+
+
+class RecallArgs(BaseModel):
+    question: str = Field(..., description="The user's question in their words, with the time if they said one, e.g. "
+                                           "'the site about GPUs I looked at on Tuesday'")
+
+
+class UpgradeArgs(BaseModel):
+    title: str = ""
+
+
+class CouncilArgs(BaseModel):
+    question: str = Field(..., description="The decision to debate, with the context the council needs")
+    members: list[str] = Field(default_factory=list, description="Agent slugs to sit on the council (2-6); empty = a default panel")
+
+
+class FlashcardArgs(BaseModel):
+    topic: str = Field("", description="What to learn, e.g. 'Spanish travel phrases' or 'how TCP works'")
+    path: str = Field("", description="Or a file (in an approved folder) to make cards from")
+    count: int = Field(15, description="How many cards (3-60)")
+
+
+class MiniAppArgs(BaseModel):
+    description: str = Field(..., description="What the tool should do, who it's for and any must-have features")
 
 
 @dataclass
@@ -730,6 +773,55 @@ def _set_volume(a: VolumeArgs, ctx: dict[str, Any]) -> dict[str, Any]:
     return {"summary": what + ".", **out}
 
 
+def _wifi(a: WifiArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import devices
+
+    try:
+        if a.action == "status":
+            st = devices.wifi_status()
+            return {"summary": f"Wi-Fi is connected to {st['connected']}." if st["connected"] else
+                    "Wi-Fi is not connected." if st["available"] else "This computer has no Wi-Fi.", **st}
+        if a.action == "list":
+            nets = devices.wifi_networks()
+            shown = ", ".join(f"{n['ssid']} ({n['signal']}%{', connected' if n['connected'] else ''})" for n in nets[:10])
+            return {"summary": f"Wi-Fi networks: {shown}" if nets else "No Wi-Fi networks found.", "networks": nets}
+        if a.action == "connect":
+            out = devices.wifi_connect(a.ssid, a.password)
+            return {"summary": f"Connected to {out['connected']}.", **out}
+        if a.action == "disconnect":
+            out = devices.wifi_disconnect()
+            return {"summary": "Disconnected from Wi-Fi." if out["disconnected"] else "Wi-Fi wasn't connected.", **out}
+        out = devices.wifi_power(a.action == "on")
+        return {"summary": "Opened Wi-Fi settings." if out.get("opened_settings") else f"Wi-Fi turned {a.action}.", **out}
+    except devices.DeviceError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def _bluetooth(a: BluetoothArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import devices
+
+    try:
+        if a.action in ("list", "scan"):
+            rows = devices.bluetooth_devices(8 if a.action == "scan" else 0)
+            shown = ", ".join(d["name"] + (" (connected)" if d["connected"] else "" if d["paired"] else " (not paired)")
+                              for d in rows[:12])
+            return {"summary": f"Bluetooth devices: {shown}" if rows else "No Bluetooth devices found.", "devices": rows}
+        action = {"on": "power_on", "off": "power_off"}.get(a.action, a.action)
+        return devices.bluetooth_action(action, a.device)  # type: ignore[arg-type]
+    except devices.DeviceError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def _brightness(a: BrightnessArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import devices
+
+    try:
+        out = devices.set_brightness(a.level)
+    except devices.DeviceError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Set the screen brightness to {out['brightness']}%.", **out}
+
+
 def _power(a: PowerArgs, ctx: dict[str, Any]) -> dict[str, Any]:
     from . import system
 
@@ -818,6 +910,69 @@ def _replan(a: ReplanArgs, ctx: dict[str, Any]) -> dict[str, Any]:
                        f"\"{first['title']}\" by {first['due_at']}.", **out}
 
 
+def _look_at_screen(a: ScreenArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import screen
+
+    try:
+        out = screen.ask(a.question, fresh=True)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": out["answer"][:1500], **out}
+
+
+def _recall(a: RecallArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import recall
+
+    out = recall.answer(a.question)
+    return {"summary": out["answer"][:1500], "results": out["results"][:8], "window": out["window"]}
+
+
+def _convene_council(a: CouncilArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import council
+
+    s = council.start(a.question, a.members or None)
+    return {"summary": f"Council {s['id']} convened ({', '.join(s['names'].values())}). The debate runs in the background; "
+                       "the decision appears on the Council page and in the bell.", "council_id": s["id"]}
+
+
+def _make_flashcards(a: FlashcardArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import learn
+
+    try:
+        d = learn.create_deck(topic=a.topic, path=a.path, count=a.count)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Making a flashcard deck \"{d['title']}\" ({a.count} cards). It shows up under Learn in a minute.",
+            "deck_id": d["id"]}
+
+
+def _build_mini_app(a: MiniAppArgs, ctx: dict[str, Any]) -> dict[str, Any]:
+    from . import toolsmith
+
+    try:
+        app = toolsmith.build(a.description)
+    except ValueError as exc:
+        raise ToolError(str(exc)) from exc
+    return {"summary": f"Building the mini app in the background (Tools page, #{app['id']}). It opens in its own "
+                       "window when it's ready.", "app_id": app["id"]}
+
+
+def _prepare_upgrade(a: UpgradeArgs, ctx: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    raise ToolError("Self-upgrades are proposed by Forge from Settings → Self-upgrade, not by a tool call")
+
+
+def _execute_upgrade(args: dict[str, Any], preview: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+    from . import upgrade
+
+    return upgrade.execute(args, preview, options)
+
+
+def _undo_upgrade(result: dict[str, Any]) -> dict[str, Any]:
+    from . import upgrade
+
+    return upgrade.undo(result)
+
+
 TOOLS: dict[str, Tool] = {t.name: t for t in [
     Tool("search_files", "Search indexed files in approved folders by topic, name, type, folder or date.",
          SearchFilesArgs, "read", "auto", run=_search_files),
@@ -900,11 +1055,32 @@ TOOLS: dict[str, Tool] = {t.name: t for t in [
          "auto", run=_set_volume),
     Tool("power_action", "Lock the screen, sleep, restart, shut down or sign out. Requires approval.", PowerArgs,
          "destructive", "confirm", run=_power),
+    Tool("wifi", "Wi-Fi: list nearby networks, show status, connect (with a password for a new network), disconnect, "
+         "or turn Wi-Fi on/off.", WifiArgs, "write", "auto", run=_wifi),
+    Tool("bluetooth", "Bluetooth: list or scan for devices, connect, disconnect, pair, forget a device, or turn "
+         "Bluetooth on/off.", BluetoothArgs, "write", "auto", run=_bluetooth),
+    Tool("set_brightness", "Set the screen brightness (laptops and supported monitors).", BrightnessArgs, "write",
+         "auto", run=_brightness),
     Tool("break_down_task", "Split a big task (assignment, project) into ordered steps with time estimates and "
          "due dates spread before its deadline.", BreakDownArgs, "write", "auto", run=_break_down,
          undo=_undo_break_down),
     Tool("replan_task", "Reschedule the open steps of a broken-down task over the time left (when behind).",
          ReplanArgs, "write", "auto", run=_replan),
+    Tool("look_at_screen", "Take a screenshot and ask the local vision model about it (errors, what's open, what "
+         "something means). Use when the user says 'this', 'my screen' or 'this error'.", ScreenArgs, "read", "auto",
+         run=_look_at_screen),
+    Tool("recall", "Search the user's own past by time and topic: web pages they visited (browser history), files, "
+         "chats, memories, missions. For 'what was that site/file/thing I ... on Tuesday/yesterday/last week'.",
+         RecallArgs, "read", "auto", run=_recall),
+    Tool("convene_council", "Have several agents debate a decision and vote (advice only, nothing is done). For hard "
+         "choices with trade-offs: 'should I...', 'which is better...'.", CouncilArgs, "read", "auto", run=_convene_council),
+    Tool("make_flashcards", "Make a flashcard deck (spaced repetition, in Learn) from a topic or a file, to help the user "
+         "learn or memorize something.", FlashcardArgs, "write", "auto", run=_make_flashcards),
+    Tool("build_mini_app", "Build a small single-window tool (timer, converter, tracker, calculator, mini game) as a "
+         "sandboxed app the user opens from the Tools page.", MiniAppArgs, "write", "auto", run=_build_mini_app),
+    Tool("apply_self_upgrade", "Apply a LifeOS code change Forge proposed (on a new git branch, tests run first). "
+         "Only created from Settings → Self-upgrade.", UpgradeArgs, "destructive", "confirm",
+         prepare=_prepare_upgrade, execute=_execute_upgrade, undo=_undo_upgrade),
 ]}
 
 

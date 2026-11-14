@@ -204,6 +204,23 @@ export interface SystemStatus {
 }
 export interface Program { name: string; pids: number[]; count: number; memory_mb: number; cpu_percent: number; protected: boolean }
 export type PowerAction = "lock" | "sleep" | "restart" | "shutdown" | "sign_out";
+export interface WifiNetwork { ssid: string; signal: number; secure: boolean; security: string; connected: boolean }
+export interface BtDevice { address: string; name: string; paired: boolean; connected: boolean; kind: string; battery: number | null }
+export interface DisplayInfo {
+  name: string; label: string; enabled: boolean; scale: number | null; width: number | null; height: number | null;
+  refresh: number | null; modes: string[]; settings_only?: boolean;
+}
+type Maybe<T> = T | { error: string };
+export interface DevicesOverview {
+  platform: "windows" | "linux" | "macos";
+  wifi: Maybe<{ available: boolean; enabled: boolean; connected: string }>;
+  bluetooth: Maybe<{ available: boolean; powered: boolean | null; settings_only?: boolean }>;
+  displays: Maybe<DisplayInfo[]>;
+  brightness: number | null | { error: string };
+  notifications: { supported: boolean; running: boolean; error: string };
+}
+export type BtAction = "connect" | "disconnect" | "pair" | "forget" | "power_on" | "power_off";
+export interface SetupState { needed: boolean; done: boolean; user_name: string; suggested_folders: string[]; platform: string }
 export interface BackupFile { name: string; path: string; bytes: number; created_at: string }
 
 export interface Folder {
@@ -346,6 +363,8 @@ export interface Agent {
   quirks: string;
   catchphrases: string[];
   idle_lines: string[];
+  tts_voice?: string;
+  tts_rate?: number;
 }
 
 export type AgentState = "idle" | "working" | "waiting" | "asking" | "offline";
@@ -654,9 +673,10 @@ export interface CalSource { id: number; kind: string; location: string; label: 
 export interface EmailStatus { configured: boolean; host: string; port: number; username: string; folder: string }
 export type EmailAlertEvent = "mission_done" | "mission_failed" | "approval" | "question" | "workflow";
 export interface EmailAlerts {
-  enabled: boolean; to: string; host: string; port: number; username: string; security: "ssl" | "starttls";
+  enabled: boolean; to: string; host: string; port: number; username: string; security: "ssl" | "starttls"; buttons: boolean;
   events: Record<EmailAlertEvent, boolean>;
   configured: boolean; password_stored: boolean; password_from_imap: boolean; last_sent_at: string | null; last_error: string | null;
+  buttons_inbox: string | null; replies: { running: boolean; last_poll: string | null; last_error: string | null };
 }
 export interface EmailMessage { id: string; from: string; subject: string; date: string | null; snippet: string }
 
@@ -681,6 +701,91 @@ export interface DayPlan {
 }
 
 // ---------------------------------------------------------------- endpoints
+
+// ---------------------------------------------------------------- 0.2 features
+
+export interface VoiceConfig {
+  wake_word: boolean; wake_phrase: string; mic: string; stt_model: "small" | "lgraph"; engine: "auto" | "piper" | "system" | "browser";
+  default_voice: string; chime: boolean; speak_agent_chat: boolean; pause_in_games: boolean; listen_seconds: number;
+}
+export interface VoiceJob { item: string; state: "downloading" | "done" | "failed"; done: number; total: number; error: string | null }
+export interface VoiceExchange { heard: string; reply: string; agent: string | null; kind: string; at: string }
+export interface VoiceStatus {
+  config: VoiceConfig; piper: boolean; voices_installed: string[];
+  catalog: { id: string; label: string; installed: boolean }[];
+  stt_models: { key: string; name: string; size: string; label: string; installed: boolean }[];
+  packages: { vosk: boolean; sounddevice: boolean }; system_tts: string | null; jobs: VoiceJob[];
+  listener: { state: string; heard: string; reply: string; agent: string | null; error: string; level: number; since: number };
+  history: VoiceExchange[]; agent_voices: Record<string, { voice: string; rate: number }>;
+}
+export interface Preset { id: string; label: string; tts_voice: string; tts_rate: number; voice: string; quirks: string; catchphrases: string[]; idle_lines: string[] }
+export interface ScreenStatus {
+  config: { model: string; keep_screenshot: boolean; hotkey: boolean };
+  models: { model: string; size: string; why: string }[]; installed: boolean;
+  last: { answer?: string; question?: string; model?: string; busy?: boolean; at?: number; seconds?: number };
+  screenshot_at: number | null; hotkey: string | null;
+}
+export interface ScreenAnswer { answer: string; model: string; question: string; seconds: number }
+export interface ArenaMatch {
+  id: number; prompt: string; a_agent: string; a_model: string; b_agent: string; b_model: string;
+  a_result: string | null; b_result: string | null; a_seconds: number | null; b_seconds: number | null;
+  status: "running" | "ready" | "decided" | "failed"; error: string | null; winner: "a" | "b" | "tie" | null; reason: string | null;
+  a_name: string | null; b_name: string | null; created_at: string; new_lessons?: { id: number; agent: string; text: string }[];
+}
+export interface ArenaRank { key: string; name: string; win: number; loss: number; tie: number; games: number; win_rate: number | null }
+export interface TidyConfig { enabled: boolean; folder: string; mode: "ask" | "auto"; rename: boolean; min_age_minutes: number; interval_minutes: number; last_run_at: string }
+export interface TidyStatus { config: TidyConfig; folder: string; loose_files: number; default_folder: string; os_downloads: string | null }
+export interface TidyPlan { folder: string; moves: (Move & { renamed: boolean })[]; by_category: Record<string, number>; renamed: number }
+export interface RemoteDevice { id: string; name: string; created_at: string; last_seen: string; ip: string }
+export interface RemoteStatus { enabled: boolean; running: boolean; port: number; urls: string[]; pin: string | null; pin_expires_in: number | null; pair_url: string | null; devices: RemoteDevice[]; error: string }
+export interface GameModeConfig { enabled: boolean; auto_detect: boolean; fullscreen: boolean; games: string[]; free_gpu: boolean; stop_comfy: boolean; hold_ai: boolean; reload_after: boolean; notify: boolean }
+export interface GameMode { active: boolean; game: string | null; since: number | null; reason: string | null; manual: boolean | null; config: GameModeConfig; unloaded: number }
+export interface WallpaperConfig { enabled: boolean; fps: number; show_clock: boolean; show_ticker: boolean; dim: number; game_mode?: boolean }
+export interface UpgradeConfig { enabled: boolean; repo_path: string; every_days: number; focus: string; run_tests: boolean; push: boolean; model: string; last_run_at: string }
+export interface UpgradeStatus {
+  config: UpgradeConfig; repo: string | null; git: boolean; model: string | null; busy: boolean;
+  last: { state: string; error: string; at: string | null; action_id: number | null }; proposals: Action[];
+}
+export interface RecallHit { source: "web" | "chat" | "file" | "memory" | "mission" | "activity"; title: string; url?: string; path?: string; snippet?: string; when: string; detail?: string; score: number; mission_id?: number; conversation_id?: number }
+export interface RecallAnswer { question: string; answer: string; keywords: string[]; window: { start: string | null; end: string | null; label: string }; widened: string | null; results: RecallHit[]; history_on: boolean }
+export interface RecallStatus { config: { browser_history: boolean; keep_days: number; last_sync: string }; visits: number; per_browser: Record<string, number>; browsers_found: string[] }
+
+// ---------------------------------------------------------------- 0.3 features
+
+export interface CouncilTurn { round: number; agent: string; text: string; seconds: number }
+export interface CouncilVote { agent: string; choice: number; reason: string }
+export interface CouncilSession {
+  id: number; question: string; agents: string[]; rounds: number; transcript: CouncilTurn[]; options: string[]; votes: CouncilVote[];
+  tally: number[]; decision: string | null; summary: string | null; user_choice: string | null; names: Record<string, string>;
+  status: "running" | "voting" | "decided" | "failed" | "stopped"; error: string | null; created_at: string; finished_at: string | null;
+}
+export interface XpAgent {
+  slug: string; name: string; role: string; color: string; icon: string; level: number; rank: string; xp: number; week_xp: number;
+  level_start: number; next_level: number; progress: number; avg_score: number | null; success_rate: number | null;
+  tasks_done: number; tasks_failed: number; good_tasks: number; rated_high: number; arena_wins: number; arena_losses: number;
+  arena_ties: number; councils: number; council_majority: number; lessons: number; work_seconds: number; steps: number;
+}
+export interface XpBoard { agents: XpAgent[]; crew_xp: number; crew_level: number; xp_table: Record<string, number> }
+export interface MoodConfig { enabled: boolean; colors: boolean; music: boolean; volume: number; follow_time: boolean; follow_activity: boolean }
+export interface Mood {
+  config: MoodConfig; phase: "night" | "dawn" | "day" | "dusk"; activity: "idle" | "busy" | "alert" | "focus" | "gaming";
+  counts: { working: number; waiting: number }; palette: { accent: string; tint: string; glow: string };
+  music: { on: boolean; volume: number; tempo: number; intensity: number; scale: string; root: number }; hour: number;
+}
+export interface SfxConfig { enabled: boolean; volume: number; theme: "scifi" | "soft" | "retro"; clicks: boolean }
+export interface PetConfig { enabled: boolean; species: "bot" | "cat" | "slime" | "ghost" | "fox"; name: string; size: number; roam: boolean; speak: boolean }
+export interface MiniApp { id: number; name: string; description: string; icon: string; version: number; status: "building" | "ready" | "failed"; error: string | null; notes: string; busy: boolean; created_at: string; updated_at: string }
+export interface DoctorFinding { severity: "ok" | "info" | "warn" | "bad"; area: string; title: string; detail: string; fix: string }
+export interface DoctorReport { at: string; worst: DoctorFinding["severity"]; findings: DoctorFinding[]; summary: string; seconds: number; counts: Record<string, number> }
+export interface DoctorStatus { config: { weekly: boolean; last_run_at: string; notify: boolean }; busy: boolean; report: DoctorReport | null }
+export interface Deck { id: number; title: string; source: string; status: "making" | "ready" | "failed"; error: string | null; created_at: string; cards: number; due: number; new: number; learned: number; card_list?: Card[] }
+export interface Card { id: number; deck_id: number; front: string; back: string; ease: number; interval_days: number; reps: number; lapses: number; due_at: string; deck_title?: string }
+export interface LearnStats { cards: number; due: number; learned: number; streak: number; reviews_week: number; accuracy_week: number | null; config: { daily_reminder: boolean; new_per_day: number } }
+export interface StoryScene { id: number; idx: number; text: string; choices: string[]; chosen: string | null; image_prompt: string; media_id: number | null; image_status: string | null; image_error: string | null }
+export interface Story { id: number; title: string; premise: string; style: string; narrator: string; status: "writing" | "ready" | "ended" | "failed"; error: string | null; created_at: string; scene_count: number; scenes?: StoryScene[]; cover_media_id?: number | null }
+export interface PanicStatus { active: boolean; since: string | null; automation_paused: boolean; config: { hotkey: boolean; hide_windows: boolean; pause_automation: boolean; unload_models: boolean; mute: boolean; stop_media: boolean }; done?: string[]; hide_windows?: boolean }
+export interface UsbDrive { id: string; label: string; allowed: boolean; present: boolean; mount?: string; free?: number; total?: number; last_backup_at?: string; last_bytes?: number }
+export interface UsbStatus { config: { enabled: boolean; include_media: boolean; keep: number; ask_new: boolean; min_hours: number }; drives: UsbDrive[]; running: string | null; last: { path: string; bytes: number; drive: string; seconds: number } | null; error: string }
 
 export const api = {
   health: () => get<{ ok: boolean; version: string }>("/api/health"),
@@ -731,6 +836,18 @@ export const api = {
   setVolume: (v: { level?: number; change?: "up" | "down" | "mute" }) => post("/api/system/volume", v),
   power: (action: PowerAction) => post<{ summary: string }>("/api/system/power", { action }),
   cloudFolders: () => get<CloudFolder[]>("/api/folders/cloud"),
+  devices: () => get<DevicesOverview>("/api/devices"),
+  wifiNetworks: (rescan = false) => get<WifiNetwork[]>(`/api/devices/wifi${qs({ rescan: rescan || undefined })}`),
+  wifiConnect: (ssid: string, password = "") => post<{ connected: string }>("/api/devices/wifi/connect", { ssid, password }),
+  wifiDisconnect: () => post("/api/devices/wifi/disconnect"),
+  wifiPower: (on: boolean) => post<{ enabled: boolean; opened_settings?: boolean }>("/api/devices/wifi/power", { on }),
+  btDevices: (scan = 0) => get<BtDevice[]>(`/api/devices/bluetooth${qs({ scan: scan || undefined })}`),
+  btAction: (action: BtAction, device = "") => post<{ summary: string }>("/api/devices/bluetooth", { action, device }),
+  setDisplay: (d: { name: string; mode?: string; scale?: number; enabled?: boolean }) => post<{ summary: string }>("/api/devices/display", d),
+  setBrightness: (level: number) => post("/api/devices/brightness", { level }),
+  openOsSettings: (page: "wifi" | "bluetooth" | "display" | "sound") => post(`/api/devices/open-settings/${page}`),
+  setup: () => get<SetupState>("/api/setup"),
+  finishSetup: () => post("/api/setup/done"),
 
   suggestionAction: (a: NonNullable<Suggestion["action"]>) => request<unknown>(a.method, a.path, a.body ?? {}),
 
@@ -890,8 +1007,124 @@ export const api = {
     request<EmailStatus>("PUT", "/api/email", e),
   testEmail: () => post<{ ok: boolean; latest?: string | null; error?: string }>("/api/email/test"),
   emailAlerts: () => get<EmailAlerts>("/api/email-alerts"),
-  setEmailAlerts: (e: Partial<Omit<EmailAlerts, "configured" | "password_stored" | "password_from_imap" | "last_sent_at" | "last_error">> & { password?: string }) =>
+  setEmailAlerts: (e: Partial<Omit<EmailAlerts, "configured" | "password_stored" | "password_from_imap" | "last_sent_at" | "last_error" | "buttons_inbox" | "replies">> & { password?: string }) =>
     request<EmailAlerts>("PUT", "/api/email-alerts", e),
   testEmailAlerts: () => post<{ ok: boolean; to?: string; error?: string }>("/api/email-alerts/test"),
   emailMessages: (limit = 15, unread = true) => get<EmailMessage[]>(`/api/email/messages${qs({ limit, unread })}`),
+
+  // 0.2
+  voice: () => get<VoiceStatus>("/api/voice"),
+  setVoice: (c: Partial<VoiceConfig>) => patch<VoiceStatus>("/api/voice", c),
+  microphones: () => get<{ index: number; name: string; default: boolean }[]>("/api/voice/microphones"),
+  systemVoices: () => get<string[]>("/api/voice/system-voices"),
+  installVoice: (items: string[]) => post<VoiceStatus>("/api/voice/install", { items }),
+  say: (text: string, agent?: string | null, voice?: string, rate?: number) => post<{ queued: boolean; engine?: string; text?: string }>("/api/voice/say", { text, agent: agent ?? null, voice, rate }),
+  stopSpeaking: () => post("/api/voice/stop"),
+  listen: () => post<{ ok: boolean }>("/api/voice/listen"),
+  voiceCommand: (text: string, speak = true) => post<{ reply: string; agent: string | null; route: { kind: string } }>("/api/voice/command", { text, speak }),
+  voiceAudioUrl: (text: string, agent?: string | null) => `${BASE}/api/voice/audio${qs({ text, agent })}`,
+  presets: () => get<Preset[]>("/api/crew/presets"),
+  screen: () => get<ScreenStatus>("/api/screen"),
+  setScreen: (c: Partial<ScreenStatus["config"]>) => patch<ScreenStatus>("/api/screen", c),
+  askScreen: (question: string, fresh?: boolean) => post<ScreenAnswer>("/api/screen/ask", { question, fresh }),
+  captureScreen: () => post<{ width: number; height: number }>("/api/screen/capture"),
+  screenshotBlob: async () => {
+    const res = await fetch(`${BASE}/api/screen/last.png?t=${Date.now()}`, { headers: { "X-LifeOS-Client": "1" } });
+    if (!res.ok) throw new ApiError(res.status, "No screenshot yet");
+    return URL.createObjectURL(await res.blob());
+  },
+  arena: () => get<ArenaMatch[]>("/api/arena"),
+  arenaMatch: (id: number) => get<ArenaMatch>(`/api/arena/${id}`),
+  startArena: (prompt: string, a: { agent: string; model?: string }, b: { agent: string; model?: string }) => post<ArenaMatch>("/api/arena", { prompt, a, b }),
+  voteArena: (id: number, winner: "a" | "b" | "tie", reason = "") => post<ArenaMatch>(`/api/arena/${id}/vote`, { winner, reason }),
+  deleteArena: (id: number) => del(`/api/arena/${id}`),
+  arenaBoard: () => get<{ agents: ArenaRank[]; models: ArenaRank[]; rounds: number }>("/api/arena/leaderboard"),
+  tidy: () => get<TidyStatus>("/api/tidy"),
+  setTidy: (c: Partial<TidyConfig>) => patch<TidyStatus>("/api/tidy", c),
+  tidyPreview: () => get<TidyPlan>("/api/tidy/preview"),
+  tidyRun: () => post<{ status: string; action?: Action }>("/api/tidy/run"),
+  remote: () => get<RemoteStatus>("/api/remote"),
+  setRemote: (c: { enabled?: boolean; port?: number }) => patch<RemoteStatus>("/api/remote", c),
+  newRemotePin: () => post<RemoteStatus>("/api/remote/pin"),
+  remoteQr: async () => {
+    const res = await fetch(`${BASE}/api/remote/qr.svg?t=${Date.now()}`, { headers: { "X-LifeOS-Client": "1" } });
+    if (!res.ok) throw new ApiError(res.status, "No QR code");
+    return URL.createObjectURL(await res.blob());
+  },
+  removeRemoteDevice: (id: string) => del<RemoteDevice[]>(`/api/remote/devices/${id}`),
+  remoteFirewall: () => post<{ ok: boolean; note: string }>("/api/remote/firewall"),
+  gameMode: shared(() => get<GameMode>("/api/gamemode"), 2000),
+  setGameModeConfig: (c: Partial<GameModeConfig>) => patch<GameMode>("/api/gamemode", c),
+  setGameMode: (on: boolean | null) => post<GameMode>("/api/gamemode", { on }),
+  detectGame: () => get<{ game: string | null; how: string | null }>("/api/gamemode/detect"),
+  wallpaper: () => get<WallpaperConfig>("/api/wallpaper"),
+  setWallpaperConfig: (c: Partial<WallpaperConfig>) => patch<WallpaperConfig>("/api/wallpaper", c),
+  upgrade: () => get<UpgradeStatus>("/api/upgrade"),
+  setUpgrade: (c: Partial<UpgradeConfig>) => patch<UpgradeStatus>("/api/upgrade", c),
+  proposeUpgrade: (focus?: string) => post<UpgradeStatus>("/api/upgrade/propose", { focus: focus ?? null }),
+  recall: () => get<RecallStatus>("/api/recall"),
+  setRecall: (c: Partial<RecallStatus["config"]>) => patch<RecallStatus>("/api/recall", c),
+  recallSearch: (question: string) => post<RecallAnswer>("/api/recall/search", { question }),
+  recallSync: () => post<{ added: number; browsers: string[]; errors?: string[] }>("/api/recall/sync"),
+  forgetHistory: () => del<{ deleted: number }>("/api/recall/history"),
+
+  // 0.3
+  councils: () => get<CouncilSession[]>("/api/council"),
+  council: (id: number) => get<CouncilSession>(`/api/council/${id}`),
+  councilDefaults: () => get<{ members: string[]; max: number }>("/api/council/defaults"),
+  startCouncil: (question: string, members: string[], rounds: number) => post<CouncilSession>("/api/council", { question, members, rounds }),
+  stopCouncil: (id: number) => post<CouncilSession>(`/api/council/${id}/stop`),
+  chooseCouncil: (id: number, option: number | null) => post<CouncilSession>(`/api/council/${id}/choose`, { option }),
+  councilMission: (id: number) => post<{ id: number }>(`/api/council/${id}/mission`),
+  deleteCouncil: (id: number) => del(`/api/council/${id}`),
+  mood: () => get<Mood>("/api/mood"),
+  setMood: (c: Partial<MoodConfig>) => patch<Mood>("/api/mood", c),
+  xp: () => get<XpBoard>("/api/xp"),
+  sfx: () => get<SfxConfig>("/api/sfx"),
+  setSfx: (c: Partial<SfxConfig>) => patch<SfxConfig>("/api/sfx", c),
+  pet: () => get<PetConfig>("/api/pet"),
+  setPet: (c: Partial<PetConfig>) => patch<PetConfig>("/api/pet", c),
+  miniApps: () => get<MiniApp[]>("/api/mini-apps"),
+  miniApp: (id: number) => get<MiniApp>(`/api/mini-apps/${id}`),
+  buildMiniApp: (description: string) => post<MiniApp>("/api/mini-apps", { description }),
+  reviseMiniApp: (id: number, change: string) => post<MiniApp>(`/api/mini-apps/${id}/revise`, { change }),
+  undoMiniApp: (id: number) => post<MiniApp>(`/api/mini-apps/${id}/undo`),
+  deleteMiniApp: (id: number) => del(`/api/mini-apps/${id}`),
+  miniAppStore: (id: number) => get<Record<string, unknown>>(`/api/mini-apps/${id}/store`),
+  setMiniAppStore: (id: number, key: string, value: unknown, remove = false) => post<Record<string, unknown>>(`/api/mini-apps/${id}/store`, { key, value, remove }),
+  miniAppUrl: (id: number, version: number) => `${BASE}/miniapp/${id}?v=${version}`,
+  doctor: () => get<DoctorStatus>("/api/doctor"),
+  setDoctor: (c: Partial<DoctorStatus["config"]>) => patch<DoctorStatus>("/api/doctor", c),
+  runDoctor: () => post<DoctorReport>("/api/doctor/run"),
+  cleanTemp: () => post<{ removed: number; freed: number; skipped: number; folder: string }>("/api/doctor/clean-temp"),
+  learn: () => get<{ stats: LearnStats; decks: Deck[] }>("/api/learn"),
+  setLearn: (c: Partial<LearnStats["config"]>) => patch<LearnStats>("/api/learn", c),
+  deck: (id: number) => get<Deck>(`/api/learn/decks/${id}`),
+  makeDeck: (d: { topic?: string; text?: string; path?: string; count?: number; title?: string }) => post<Deck>("/api/learn/decks", d),
+  deleteDeck: (id: number) => del(`/api/learn/decks/${id}`),
+  addCard: (deck: number, front: string, back: string) => post<Deck>(`/api/learn/decks/${deck}/cards`, { front, back }),
+  editCard: (id: number, c: { front?: string; back?: string }) => patch<Card>(`/api/learn/cards/${id}`, c),
+  deleteCard: (id: number) => del(`/api/learn/cards/${id}`),
+  importCards: (deck: number, text: string) => post<{ added: number }>(`/api/learn/decks/${deck}/import`, { text }),
+  deckExportUrl: (id: number) => `${BASE}/api/learn/decks/${id}/export`,
+  learnQueue: (deck?: number) => get<Card[]>(`/api/learn/queue${qs({ deck_id: deck })}`),
+  reviewCard: (id: number, grade: number) => post<Card>(`/api/learn/cards/${id}/review`, { grade }),
+  checkCard: (id: number, answer: string) => post<{ correct: boolean; feedback: string; suggested_grade: number; back: string }>(`/api/learn/cards/${id}/check`, { answer }),
+  stories: () => get<{ stories: Story[]; styles: string[] }>("/api/stories"),
+  story: (id: number) => get<Story>(`/api/stories/${id}`),
+  startStory: (premise: string, style: string, narrator: string, pictures: boolean) => post<Story>("/api/stories", { premise, style, narrator, pictures }),
+  chooseStory: (id: number, choice: string, pictures = true) => post<Story>(`/api/stories/${id}/choose`, { choice, pictures }),
+  retryStory: (id: number) => post<Story>(`/api/stories/${id}/retry`),
+  redrawScene: (sceneId: number) => post(`/api/stories/scenes/${sceneId}/picture`),
+  deleteStory: (id: number) => del(`/api/stories/${id}`),
+  storyMarkdownUrl: (id: number) => `${BASE}/api/stories/${id}/markdown`,
+  panic: shared(() => get<PanicStatus>("/api/panic"), 1500),
+  triggerPanic: () => post<PanicStatus>("/api/panic"),
+  clearPanic: () => post<PanicStatus>("/api/panic/clear"),
+  setPanic: (c: Partial<PanicStatus["config"]>) => patch<PanicStatus>("/api/panic", c),
+  usb: () => get<UsbStatus>("/api/usb-backup"),
+  setUsb: (c: Partial<UsbStatus["config"]>) => patch<UsbStatus>("/api/usb-backup", c),
+  allowUsb: (id: string, allowed: boolean) => post<UsbStatus>(`/api/usb-backup/${id}/allow`, { allowed }),
+  runUsb: (id: string) => post<{ path: string; bytes: number }>(`/api/usb-backup/${id}/run`),
+  forgetUsb: (id: string) => del<UsbStatus>(`/api/usb-backup/${id}`),
 };

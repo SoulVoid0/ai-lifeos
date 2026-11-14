@@ -17,3 +17,9 @@ export function onDesktopEvent<T>(name: string, fn: (payload: T) => void): () =>
   listen<T>(name, (e) => fn(e.payload)).then((u) => (gone ? u() : (off = u)));
   return () => { gone = true; off?.(); };
 }
+export const setWallpaper = (on: boolean) => (isDesktop ? invoke<boolean>("set_wallpaper", { on }) : Promise.resolve(false));
+export const setPet = (on: boolean, size: number) => (isDesktop ? invoke<boolean>("set_pet", { on, size }) : Promise.resolve(false));
+export const openMiniApp = (id: number, title: string) =>
+  isDesktop ? invoke<void>("open_mini_app", { id, title }) : Promise.resolve(void window.open(`#/miniapp/${id}`, `miniapp-${id}`));
+export const panicHide = () => (isDesktop ? invoke<void>("panic_hide") : Promise.resolve());
+export const focusMain = () => (isDesktop ? invoke<void>("focus_main") : Promise.resolve());

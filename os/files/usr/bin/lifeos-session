@@ -1,0 +1,17 @@
+#!/bin/sh
+# The AI LifeOS login session: labwc (a small stacking Wayland compositor) with LifeOS full screen underneath
+# every other window. Config comes from /etc/xdg/labwc unless the user has their own ~/.config/labwc.
+export XDG_CURRENT_DESKTOP=LifeOS:wlroots
+export MOZ_ENABLE_WAYLAND=1
+# Virtual machines (VirtualBox, VMware, QEMU without virgl) often have no working 3D: draw in software there.
+virt=$(systemd-detect-virt 2>/dev/null || echo none)
+if [ "$virt" != "none" ] || ! ls /dev/dri/renderD* >/dev/null 2>&1; then
+  export WLR_RENDERER=pixman WLR_NO_HARDWARE_CURSORS=1 LIBGL_ALWAYS_SOFTWARE=1
+fi
+log="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos"; mkdir -p "$log"
+systemctl --user import-environment XDG_CURRENT_DESKTOP WLR_RENDERER 2>/dev/null
+systemctl --user start lifeos-backend.service 2>/dev/null || (lifeos-backend >"$log/backend.log" 2>&1 &)
+labwc 2>"$log/labwc.log"
+code=$?
+[ $code -ne 0 ] && echo "LifeOS desktop stopped (code $code). Details: $log/labwc.log" && tail -n 15 "$log/labwc.log"
+exit $code

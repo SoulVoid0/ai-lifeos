@@ -14,10 +14,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import (__version__, actions, activity, agent, config, conversations, crew, files, integrations, lean, learning, llm, mailer, media, memory,
+from . import (__version__, actions, activity, agent, config, conversations, db, crew, files, integrations, lean, learning, llm, mailer, media, memory,
                missions, permissions, proactive, projects, scheduler, search, services, settings, tasks, tools, vault,
                updates, workflows)
-from . import apps, backup, cloud, custom_tools, renamer, system, workspaces
+from . import apps, backup, cloud, custom_tools, devices, notify_bus, renamer, system, workspaces
+from . import arena, common, gamemode, recall, remote, screen, tidy, upgrade, voice
+from . import council, doctor, learn, mood, panic, story, toolsmith, usbbackup, xp
 
 log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
@@ -36,8 +38,15 @@ async def lifespan(app: FastAPI):
     if not os.environ.get("LIFEOS_NO_SERVICES"):
         services.start_background()
         threading.Thread(target=apps.list_apps, daemon=True, name="apps-preload").start()
+        notify_bus.start()
+        gamemode.start()
+        voice.sync_listener()
+        remote.sync()
     yield
     _scheduler.stop()
+    gamemode.stop()
+    voice.shutdown()
+    remote.stop()
     services.stop_all()
 
 
@@ -160,6 +169,8 @@ class AgentIn(BaseModel):
     quirks: str = ""
     catchphrases: list[str] = []
     idle_lines: list[str] = []
+    tts_voice: str = ""
+    tts_rate: float = 1.0
 
 
 class AgentPatch(BaseModel):
@@ -178,6 +189,8 @@ class AgentPatch(BaseModel):
     quirks: str | None = None
     catchphrases: list[str] | None = None
     idle_lines: list[str] | None = None
+    tts_voice: str | None = None
+    tts_rate: float | None = None
 
 
 class LessonIn(BaseModel):
@@ -577,6 +590,105 @@ def power(body: PowerIn) -> dict[str, Any]:
     return system.power(body.action)  # type: ignore[arg-type]
 
 
+class WifiIn(BaseModel):
+    ssid: str = Field(max_length=64)
+    password: str = Field(default="", max_length=128)
+
+
+class OnOffIn(BaseModel):
+    on: bool
+
+
+class BluetoothIn(BaseModel):
+    action: str
+    device: str = Field(default="", max_length=120)
+
+
+class DisplayIn(BaseModel):
+    name: str = Field(max_length=60)
+    mode: str = ""
+    scale: float | None = None
+    enabled: bool | None = None
+
+
+class BrightnessIn(BaseModel):
+    level: int = Field(ge=1, le=100)
+
+
+@app.get("/api/devices")
+def devices_overview() -> dict[str, Any]:
+    return {**devices.overview(), "notifications": notify_bus.status()}
+
+
+@app.get("/api/devices/wifi")
+def wifi_networks(rescan: bool = False) -> list[dict[str, Any]]:
+    return devices.wifi_networks(rescan)
+
+
+@app.post("/api/devices/wifi/connect")
+def wifi_connect(body: WifiIn) -> dict[str, Any]:
+    return devices.wifi_connect(body.ssid, body.password)
+
+
+@app.post("/api/devices/wifi/disconnect")
+def wifi_disconnect() -> dict[str, Any]:
+    return devices.wifi_disconnect()
+
+
+@app.post("/api/devices/wifi/power")
+def wifi_power(body: OnOffIn) -> dict[str, Any]:
+    return devices.wifi_power(body.on)
+
+
+@app.get("/api/devices/bluetooth")
+def bluetooth_devices(scan: int = 0) -> list[dict[str, Any]]:
+    return devices.bluetooth_devices(scan)
+
+
+@app.post("/api/devices/bluetooth")
+def bluetooth_action(body: BluetoothIn) -> dict[str, Any]:
+    if body.action not in ("connect", "disconnect", "pair", "forget", "power_on", "power_off"):
+        raise ValueError("Unknown Bluetooth action")
+    return devices.bluetooth_action(body.action, body.device)  # type: ignore[arg-type]
+
+
+@app.post("/api/devices/display")
+def set_display(body: DisplayIn) -> dict[str, Any]:
+    return devices.set_display(body.name, body.mode, body.scale, body.enabled)
+
+
+@app.post("/api/devices/brightness")
+def set_brightness(body: BrightnessIn) -> dict[str, Any]:
+    return devices.set_brightness(body.level)
+
+
+@app.post("/api/devices/open-settings/{page}")
+def open_os_settings(page: str) -> dict[str, Any]:
+    if page not in ("wifi", "bluetooth", "display", "sound"):
+        raise KeyError(page)
+    return devices.open_settings(page)  # type: ignore[arg-type]
+
+
+@app.get("/api/setup")
+def setup_state() -> dict[str, Any]:
+    """Whether to show the first-start setup screen: never once it's done, and not for people who already use LifeOS."""
+    with db.session() as conn:
+        used = conn.execute("SELECT (SELECT COUNT(*) FROM conversations) + (SELECT COUNT(*) FROM tasks)"
+                            " + (SELECT COUNT(*) FROM approved_folders)").fetchone()[0]
+    done = bool(settings.get("setup_done"))
+    home = Path.home()
+    suggested = [str(home / d) for d in ("Documents", "Downloads", "Desktop", "Pictures", "Videos", "Music")
+                 if (home / d).is_dir()]
+    return {"needed": not done and not used, "done": done, "user_name": settings.get("user_name"),
+            "suggested_folders": suggested, "platform": devices.overview()["platform"]}
+
+
+@app.post("/api/setup/done")
+def setup_finish() -> dict[str, Any]:
+    settings.update({"setup_done": True})
+    return {"done": True}
+
+
 class WorkspaceItemIn(BaseModel):
     kind: str
     target: str = Field(max_length=2000)
@@ -825,7 +937,10 @@ def rate_task(task_id: int, body: RatingIn) -> dict[str, Any]:
 
 @app.post("/api/crew/agents/{slug}/chat")
 def chat_with_agent(slug: str, body: AgentChatIn) -> dict[str, Any]:
-    return missions.talk(slug, body.message, [t.model_dump() for t in body.history])
+    out = missions.talk(slug, body.message, [t.model_dump() for t in body.history])
+    if out.get("reply") and voice.cfg()["speak_agent_chat"]:
+        voice.say(out["reply"], slug)  # in the agent's own voice
+    return out
 
 
 @app.get("/api/crew/agents/{slug}/activity")
@@ -1312,6 +1427,723 @@ def test_email_alerts() -> dict[str, Any]:
 @app.get("/api/email/messages")
 def email_messages(limit: int = 15, unread: bool = True) -> list[dict[str, Any]]:
     return integrations.check_email(limit, unread)
+
+
+# ---------------------------------------------------------------- 0.2: voice, screen, arena, tidy, remote, game mode,
+# wallpaper, self-upgrade and memory search
+
+class SayIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+    agent: str | None = None
+    voice: str | None = None
+    rate: float | None = None
+
+
+class ItemsIn(BaseModel):
+    items: list[str]
+
+
+class CommandIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=2000)
+    speak: bool = True
+
+
+class ScreenIn(BaseModel):
+    question: str = Field("", max_length=2000)
+    fresh: bool | None = None
+
+
+class ArenaSide(BaseModel):
+    agent: str
+    model: str | None = None
+
+
+class ArenaIn(BaseModel):
+    prompt: str = Field(..., min_length=1, max_length=4000)
+    a: ArenaSide
+    b: ArenaSide
+
+
+class VoteIn(BaseModel):
+    winner: str
+    reason: str = Field("", max_length=400)
+
+
+class OnIn(BaseModel):
+    on: bool | None = None
+
+
+class FocusIn(BaseModel):
+    focus: str | None = Field(None, max_length=500)
+
+
+class RecallIn(BaseModel):
+    question: str = Field(..., min_length=1, max_length=1000)
+
+
+@app.get("/api/voice")
+def voice_status() -> dict[str, Any]:
+    return voice.status()
+
+
+@app.patch("/api/voice")
+def voice_config(body: dict[str, Any]) -> dict[str, Any]:
+    voice.configure(body)
+    return voice.status()
+
+
+@app.get("/api/voice/microphones")
+def voice_mics() -> list[dict[str, Any]]:
+    return voice.microphones()
+
+
+@app.get("/api/voice/system-voices")
+def voice_system() -> list[str]:
+    return voice.system_voices()
+
+
+@app.post("/api/voice/install")
+def voice_install(body: ItemsIn) -> dict[str, Any]:
+    return voice.install(body.items)
+
+
+@app.post("/api/voice/say")
+def voice_say(body: SayIn) -> dict[str, Any]:
+    if body.voice or body.rate:  # a preview of a specific voice: render it now so errors show
+        path = voice.synthesize(body.text, body.agent, body.voice, body.rate)
+        common.background("voice-preview", lambda: (voice._play(path), path.unlink(missing_ok=True)))
+        return {"queued": True}
+    return voice.say(body.text, body.agent)
+
+
+@app.get("/api/voice/audio")
+def voice_audio(text: str, agent: str | None = None) -> Response:
+    """The reply as a WAV file, for the browser to play (phone, browser mode)."""
+    path = voice.synthesize(text[:4000], agent)
+    data = path.read_bytes()
+    path.unlink(missing_ok=True)
+    return Response(data, media_type="audio/wav")
+
+
+@app.post("/api/voice/stop")
+def voice_stop() -> dict[str, Any]:
+    voice.stop_speaking()
+    return {"ok": True}
+
+
+@app.post("/api/voice/listen")
+def voice_listen() -> dict[str, Any]:
+    return voice.push_to_talk()
+
+
+@app.post("/api/voice/command")
+def voice_command(body: CommandIn) -> dict[str, Any]:
+    return voice.handle(body.text, speak=body.speak)
+
+
+@app.get("/api/crew/presets")
+def personality_presets() -> list[dict[str, Any]]:
+    return crew.PRESETS
+
+
+@app.get("/api/screen")
+def screen_status() -> dict[str, Any]:
+    return screen.status()
+
+
+@app.patch("/api/screen")
+def screen_config(body: dict[str, Any]) -> dict[str, Any]:
+    screen.configure(body)
+    return screen.status()
+
+
+@app.post("/api/screen/capture")
+def screen_capture() -> dict[str, Any]:
+    return screen.capture()
+
+
+@app.get("/api/screen/last.png")
+def screen_last() -> FileResponse:
+    path = screen.shot_path()
+    if not path.is_file():
+        raise KeyError("No screenshot yet")
+    return FileResponse(path, media_type="image/png")
+
+
+@app.post("/api/screen/ask")
+def screen_ask(body: ScreenIn) -> dict[str, Any]:
+    return screen.ask(body.question, fresh=body.fresh)
+
+
+@app.get("/api/arena")
+def arena_list(limit: int = 30) -> list[dict[str, Any]]:
+    return arena.list_matches(limit)
+
+
+@app.post("/api/arena")
+def arena_start(body: ArenaIn) -> dict[str, Any]:
+    return arena.start(body.prompt, body.a.model_dump(), body.b.model_dump())
+
+
+@app.get("/api/arena/leaderboard")
+def arena_board() -> dict[str, Any]:
+    return arena.leaderboard()
+
+
+@app.get("/api/arena/{mid}")
+def arena_get(mid: int) -> dict[str, Any]:
+    return arena.get(mid)
+
+
+@app.post("/api/arena/{mid}/vote")
+def arena_vote(mid: int, body: VoteIn) -> dict[str, Any]:
+    return arena.vote(mid, body.winner, body.reason)
+
+
+@app.delete("/api/arena/{mid}")
+def arena_delete(mid: int) -> dict[str, Any]:
+    return arena.delete(mid)
+
+
+@app.get("/api/tidy")
+def tidy_status() -> dict[str, Any]:
+    return tidy.status()
+
+
+@app.patch("/api/tidy")
+def tidy_config(body: dict[str, Any]) -> dict[str, Any]:
+    tidy.configure(body)
+    return tidy.status()
+
+
+@app.get("/api/tidy/preview")
+def tidy_preview() -> dict[str, Any]:
+    return tidy.plan()
+
+
+@app.post("/api/tidy/run")
+def tidy_run() -> dict[str, Any]:
+    return tidy.run(force=True, source="user")
+
+
+@app.get("/api/remote")
+def remote_status() -> dict[str, Any]:
+    return remote.status()
+
+
+@app.patch("/api/remote")
+def remote_config(body: dict[str, Any]) -> dict[str, Any]:
+    remote.configure(body)
+    return remote.status()
+
+
+@app.post("/api/remote/pin")
+def remote_pin() -> dict[str, Any]:
+    remote.new_pin()
+    return remote.status()
+
+
+@app.get("/api/remote/qr.svg")
+def remote_qr() -> Response:
+    st = remote.status()
+    if not st["pair_url"]:
+        raise ValueError("Turn the phone remote on first (and connect this PC to your Wi-Fi or network)")
+    return Response(remote.qr_svg(st["pair_url"]), media_type="image/svg+xml")
+
+
+@app.delete("/api/remote/devices/{device_id}")
+def remote_remove(device_id: str) -> list[dict[str, Any]]:
+    return remote.remove_device(device_id)
+
+
+@app.post("/api/remote/firewall")
+def remote_firewall() -> dict[str, Any]:
+    return remote.open_firewall()
+
+
+@app.get("/api/gamemode")
+def gamemode_status() -> dict[str, Any]:
+    return gamemode.status()
+
+
+@app.patch("/api/gamemode")
+def gamemode_config(body: dict[str, Any]) -> dict[str, Any]:
+    gamemode.configure(body)
+    return gamemode.status()
+
+
+@app.post("/api/gamemode")
+def gamemode_set(body: OnIn) -> dict[str, Any]:
+    return gamemode.set_manual(body.on)
+
+
+@app.get("/api/gamemode/detect")
+def gamemode_detect() -> dict[str, Any]:
+    game, how = gamemode.detect()
+    return {"game": game, "how": how}
+
+
+@app.get("/api/wallpaper")
+def wallpaper_config() -> dict[str, Any]:
+    return {**common.group("wallpaper"), "game_mode": gamemode.active()}
+
+
+@app.patch("/api/wallpaper")
+def set_wallpaper(body: dict[str, Any]) -> dict[str, Any]:
+    def check(c: dict[str, Any]) -> None:
+        if not 1 <= c["fps"] <= 60:
+            raise ValueError("fps must be between 1 and 60")
+        if not 0 <= c["dim"] <= 0.9:
+            raise ValueError("dim must be between 0 and 0.9")
+
+    return common.save_group("wallpaper", body, check)
+
+
+@app.get("/api/upgrade")
+def upgrade_status() -> dict[str, Any]:
+    return upgrade.status()
+
+
+@app.patch("/api/upgrade")
+def upgrade_config(body: dict[str, Any]) -> dict[str, Any]:
+    upgrade.configure(body)
+    return upgrade.status()
+
+
+@app.post("/api/upgrade/propose")
+def upgrade_propose(body: FocusIn | None = None) -> dict[str, Any]:
+    return upgrade.propose_async(body.focus if body else None)
+
+
+@app.get("/api/recall")
+def recall_status() -> dict[str, Any]:
+    return recall.status()
+
+
+@app.patch("/api/recall")
+def recall_config(body: dict[str, Any]) -> dict[str, Any]:
+    recall.configure(body)
+    return recall.status()
+
+
+@app.post("/api/recall/search")
+def recall_search(body: RecallIn) -> dict[str, Any]:
+    return recall.answer(body.question)
+
+
+@app.post("/api/recall/sync")
+def recall_sync() -> dict[str, Any]:
+    return recall.sync_history()
+
+
+@app.delete("/api/recall/history")
+def recall_forget() -> dict[str, Any]:
+    return {"deleted": recall.forget_history()}
+
+
+# ---------------------------------------------------------------- 0.3: council, mood, XP, sounds, pet, code-to-app,
+# PC doctor, learn mode, story mode, panic button and USB backup
+
+class CouncilIn(BaseModel):
+    question: str = Field(..., min_length=1, max_length=3000)
+    members: list[str] | None = None
+    rounds: int = 2
+
+
+class ChoiceIn(BaseModel):
+    option: int | None = None
+
+
+@app.get("/api/council")
+def council_list() -> list[dict[str, Any]]:
+    return council.list_sessions()
+
+
+@app.get("/api/council/defaults")
+def council_defaults() -> dict[str, Any]:
+    return {"members": council.default_members(), "max": council.MAX_MEMBERS}
+
+
+@app.post("/api/council")
+def council_start(body: CouncilIn) -> dict[str, Any]:
+    return council.start(body.question, body.members, body.rounds)
+
+
+@app.get("/api/council/{sid}")
+def council_get(sid: int) -> dict[str, Any]:
+    return council.get(sid)
+
+
+@app.post("/api/council/{sid}/stop")
+def council_stop(sid: int) -> dict[str, Any]:
+    council.stop(sid)
+    return council.get(sid)
+
+
+@app.post("/api/council/{sid}/choose")
+def council_choose(sid: int, body: ChoiceIn) -> dict[str, Any]:
+    return council.choose(sid, body.option)
+
+
+@app.post("/api/council/{sid}/mission")
+def council_mission(sid: int) -> dict[str, Any]:
+    s = council.get(sid)
+    pick = s["user_choice"] or (s["decision"] or "").replace(" (tie broken by the chair)", "")
+    if not pick:
+        raise ValueError("The council hasn't decided yet")
+    return missions.start(f"{pick}\n\n(Decided by the crew council on: {s['question']})", source="council")
+
+
+@app.delete("/api/council/{sid}")
+def council_delete(sid: int) -> dict[str, Any]:
+    return council.delete(sid)
+
+
+@app.get("/api/mood")
+def mood_now() -> dict[str, Any]:
+    return mood.current()
+
+
+@app.patch("/api/mood")
+def mood_config(body: dict[str, Any]) -> dict[str, Any]:
+    def check(c: dict[str, Any]) -> None:
+        c["volume"] = max(0.0, min(float(c["volume"]), 1.0))
+    common.save_group("mood", body, check)
+    return mood.current()
+
+
+@app.get("/api/xp")
+def xp_board() -> dict[str, Any]:
+    return xp.board()
+
+
+@app.get("/api/sfx")
+def sfx_config() -> dict[str, Any]:
+    return common.group("sfx")
+
+
+@app.patch("/api/sfx")
+def set_sfx(body: dict[str, Any]) -> dict[str, Any]:
+    def check(c: dict[str, Any]) -> None:
+        c["volume"] = max(0.0, min(float(c["volume"]), 1.0))
+        if c["theme"] not in ("scifi", "soft", "retro"):
+            raise ValueError("theme must be scifi, soft or retro")
+    return common.save_group("sfx", body, check)
+
+
+@app.get("/api/pet")
+def pet_config() -> dict[str, Any]:
+    return common.group("pet")
+
+
+@app.patch("/api/pet")
+def set_pet(body: dict[str, Any]) -> dict[str, Any]:
+    def check(c: dict[str, Any]) -> None:
+        if c["species"] not in ("bot", "cat", "slime", "ghost", "fox"):
+            raise ValueError("Unknown pet")
+        c["size"] = max(48, min(int(c["size"]), 192))
+        c["name"] = str(c["name"]).strip()[:20] or "Byte"
+    return common.save_group("pet", body, check)
+
+
+class BuildIn(BaseModel):
+    description: str = Field(..., min_length=1, max_length=3000)
+
+
+class ReviseIn(BaseModel):
+    change: str = Field(..., min_length=1, max_length=3000)
+
+
+class StoreIn(BaseModel):
+    key: str = Field(..., min_length=1, max_length=200)
+    value: Any = None
+    remove: bool = False
+
+
+@app.get("/api/mini-apps")
+def mini_apps() -> list[dict[str, Any]]:
+    return toolsmith.list_apps()
+
+
+@app.post("/api/mini-apps")
+def mini_app_build(body: BuildIn) -> dict[str, Any]:
+    return toolsmith.build(body.description)
+
+
+@app.get("/api/mini-apps/{app_id}")
+def mini_app(app_id: int) -> dict[str, Any]:
+    return toolsmith.get(app_id)
+
+
+@app.post("/api/mini-apps/{app_id}/revise")
+def mini_app_revise(app_id: int, body: ReviseIn) -> dict[str, Any]:
+    return toolsmith.revise(app_id, body.change)
+
+
+@app.post("/api/mini-apps/{app_id}/undo")
+def mini_app_undo(app_id: int) -> dict[str, Any]:
+    return toolsmith.undo(app_id)
+
+
+@app.delete("/api/mini-apps/{app_id}")
+def mini_app_delete(app_id: int) -> dict[str, Any]:
+    return toolsmith.delete(app_id)
+
+
+@app.get("/api/mini-apps/{app_id}/store")
+def mini_app_store(app_id: int) -> dict[str, Any]:
+    toolsmith.get(app_id)
+    return toolsmith.store_get(app_id)
+
+
+@app.post("/api/mini-apps/{app_id}/store")
+def mini_app_store_set(app_id: int, body: StoreIn) -> dict[str, Any]:
+    return toolsmith.store_set(app_id, body.key, body.value, body.remove)
+
+
+@app.get("/miniapp/{app_id}", include_in_schema=False)
+def mini_app_page(app_id: int) -> Response:
+    """The app itself, for an <iframe> in the LifeOS window. The CSP sandbox gives it no origin: it can't call the API."""
+    a = toolsmith.get(app_id, html=True)
+    if not a["html"]:
+        raise KeyError("This app hasn't been built yet")
+    return Response(a["html"], media_type="text/html", headers={
+        "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-modals allow-downloads; " + toolsmith.CSP
+                                   + "; frame-ancestors 'self' tauri://localhost http://tauri.localhost "
+                                     "http://localhost:5173 http://127.0.0.1:5173 http://127.0.0.1:8765",
+        "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"})
+
+
+@app.get("/api/doctor")
+def doctor_status() -> dict[str, Any]:
+    return doctor.status()
+
+
+@app.patch("/api/doctor")
+def doctor_config(body: dict[str, Any]) -> dict[str, Any]:
+    common.save_group("doctor", body)
+    return doctor.status()
+
+
+@app.post("/api/doctor/run")
+def doctor_run() -> dict[str, Any]:
+    return doctor.run()
+
+
+@app.post("/api/doctor/clean-temp")
+def doctor_clean_temp() -> dict[str, Any]:
+    return doctor.clean_temp()
+
+
+class DeckIn(BaseModel):
+    topic: str = ""
+    text: str = Field("", max_length=20000)
+    path: str = ""
+    count: int = 15
+    title: str = ""
+
+
+class CardIn(BaseModel):
+    front: str | None = None
+    back: str | None = None
+
+
+class GradeIn(BaseModel):
+    grade: int
+
+
+class AnswerIn(BaseModel):
+    answer: str = Field("", max_length=1500)
+
+
+class ImportIn(BaseModel):
+    text: str = Field(..., max_length=500_000)
+
+
+@app.get("/api/learn")
+def learn_overview() -> dict[str, Any]:
+    return {"stats": learn.stats(), "decks": learn.list_decks()}
+
+
+@app.patch("/api/learn")
+def learn_config(body: dict[str, Any]) -> dict[str, Any]:
+    common.save_group("learn", body)
+    return learn.stats()
+
+
+@app.post("/api/learn/decks")
+def learn_create(body: DeckIn) -> dict[str, Any]:
+    return learn.create_deck(body.topic, body.text, body.path, body.count, body.title)
+
+
+@app.get("/api/learn/decks/{deck_id}")
+def learn_deck(deck_id: int) -> dict[str, Any]:
+    return learn.get_deck(deck_id)
+
+
+@app.delete("/api/learn/decks/{deck_id}")
+def learn_delete(deck_id: int) -> dict[str, Any]:
+    return learn.delete_deck(deck_id)
+
+
+@app.get("/api/learn/decks/{deck_id}/export")
+def learn_export(deck_id: int) -> Response:
+    return Response(learn.export_deck(deck_id), media_type="text/tab-separated-values",
+                    headers={"Content-Disposition": f'attachment; filename="lifeos-deck-{deck_id}.txt"'})
+
+
+@app.post("/api/learn/decks/{deck_id}/import")
+def learn_import(deck_id: int, body: ImportIn) -> dict[str, Any]:
+    learn.get_deck(deck_id, with_cards=False)
+    return {"added": learn.import_tsv(deck_id, body.text)}
+
+
+@app.post("/api/learn/decks/{deck_id}/cards")
+def learn_add_card(deck_id: int, body: CardIn) -> dict[str, Any]:
+    learn.get_deck(deck_id, with_cards=False)
+    if not (body.front or "").strip() or not (body.back or "").strip():
+        raise ValueError("A card needs a front and a back")
+    learn.add_cards(deck_id, [(body.front.strip()[:500], body.back.strip()[:1500])])
+    return learn.get_deck(deck_id)
+
+
+@app.patch("/api/learn/cards/{card_id}")
+def learn_edit_card(card_id: int, body: CardIn) -> dict[str, Any]:
+    return learn.update_card(card_id, body.front, body.back)
+
+
+@app.delete("/api/learn/cards/{card_id}")
+def learn_delete_card(card_id: int) -> dict[str, Any]:
+    learn.delete_card(card_id)
+    return {"deleted": card_id}
+
+
+@app.get("/api/learn/queue")
+def learn_queue(deck_id: int | None = None, limit: int = 50) -> list[dict[str, Any]]:
+    return learn.queue(deck_id, min(limit, 200))
+
+
+@app.post("/api/learn/cards/{card_id}/review")
+def learn_review(card_id: int, body: GradeIn) -> dict[str, Any]:
+    return learn.review(card_id, body.grade)
+
+
+@app.post("/api/learn/cards/{card_id}/check")
+def learn_check(card_id: int, body: AnswerIn) -> dict[str, Any]:
+    return learn.check_answer(card_id, body.answer)
+
+
+class StoryIn(BaseModel):
+    premise: str = Field(..., min_length=1, max_length=2000)
+    style: str = ""
+    narrator: str = "creative"
+    pictures: bool = True
+
+
+class StoryChoiceIn(BaseModel):
+    choice: str = Field(..., min_length=1, max_length=400)
+    pictures: bool = True
+
+
+@app.get("/api/stories")
+def stories() -> dict[str, Any]:
+    return {"stories": story.list_stories(), "styles": list(story.STYLES)}
+
+
+@app.post("/api/stories")
+def story_start(body: StoryIn) -> dict[str, Any]:
+    return story.start(body.premise, body.style, body.narrator, body.pictures)
+
+
+@app.get("/api/stories/{sid}")
+def story_get(sid: int) -> dict[str, Any]:
+    return story.get(sid)
+
+
+@app.post("/api/stories/{sid}/choose")
+def story_choose(sid: int, body: StoryChoiceIn) -> dict[str, Any]:
+    return story.choose(sid, body.choice, body.pictures)
+
+
+@app.post("/api/stories/{sid}/retry")
+def story_retry(sid: int) -> dict[str, Any]:
+    return story.retry(sid)
+
+
+@app.post("/api/stories/scenes/{scene_id}/picture")
+def story_picture(scene_id: int) -> dict[str, Any]:
+    job = story.picture(scene_id)
+    if not job:
+        raise ValueError("Image generation is off or not set up (Gallery → Backend)")
+    return job
+
+
+@app.get("/api/stories/{sid}/markdown")
+def story_markdown(sid: int) -> Response:
+    return Response(story.export_markdown(sid), media_type="text/markdown",
+                    headers={"Content-Disposition": f'attachment; filename="lifeos-story-{sid}.md"'})
+
+
+@app.delete("/api/stories/{sid}")
+def story_delete(sid: int) -> dict[str, Any]:
+    return story.delete(sid)
+
+
+@app.get("/api/panic")
+def panic_status() -> dict[str, Any]:
+    return panic.status()
+
+
+@app.post("/api/panic")
+def panic_now() -> dict[str, Any]:
+    return panic.trigger("app")
+
+
+@app.post("/api/panic/clear")
+def panic_clear() -> dict[str, Any]:
+    return panic.clear()
+
+
+@app.patch("/api/panic")
+def panic_config(body: dict[str, Any]) -> dict[str, Any]:
+    body = {k: v for k, v in body.items() if k not in ("active", "since", "paused_by_panic")}
+    common.save_group("panic", body)
+    return panic.status()
+
+
+class AllowIn(BaseModel):
+    allowed: bool = True
+
+
+@app.get("/api/usb-backup")
+def usb_status() -> dict[str, Any]:
+    return usbbackup.status()
+
+
+@app.patch("/api/usb-backup")
+def usb_config(body: dict[str, Any]) -> dict[str, Any]:
+    body = {k: v for k, v in body.items() if k != "drives"}
+
+    def check(c: dict[str, Any]) -> None:
+        c["keep"] = max(1, min(int(c["keep"]), 50))
+        c["min_hours"] = max(0, min(int(c["min_hours"]), 24 * 30))
+    common.save_group("usb_backup", body, check)
+    return usbbackup.status()
+
+
+@app.post("/api/usb-backup/{did}/allow")
+def usb_allow(did: str, body: AllowIn) -> dict[str, Any]:
+    return usbbackup.allow(did, body.allowed)
+
+
+@app.post("/api/usb-backup/{did}/run")
+def usb_run(did: str) -> dict[str, Any]:
+    return usbbackup.run(did, force=True)
+
+
+@app.delete("/api/usb-backup/{did}")
+def usb_forget(did: str) -> dict[str, Any]:
+    return usbbackup.forget(did)
 
 
 # Serve the built web UI when present (browser mode without Tauri).

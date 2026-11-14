@@ -44,8 +44,11 @@ def _include(rel: Path, include_media: bool) -> bool:
     return include_media or rel.parts[0] != "media"
 
 
-def create(include_media: bool | None = None) -> dict[str, Any]:
-    target = _folder()
+def create(include_media: bool | None = None, target: Path | None = None, keep: int | None = None) -> dict[str, Any]:
+    """Zip the data folder into the backup folder (or `target`, e.g. a USB drive, keeping `keep` backups there)."""
+    custom = target is not None
+    target = target or _folder()
+    target.mkdir(parents=True, exist_ok=True)
     data = config.data_dir()
     if include_media is None:
         include_media = bool(settings.get("backup_include_media"))
@@ -70,14 +73,15 @@ def create(include_media: bool | None = None) -> dict[str, Any]:
         partial.replace(out)
     finally:
         shutil.rmtree(tmp_db.parent, ignore_errors=True)
-    _prune(target)
-    settings.update({"backup_last_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+    _prune(target, keep)
+    if not custom:
+        settings.update({"backup_last_at": datetime.now(timezone.utc).isoformat(timespec="seconds")})
     activity.log("backup", f"Backed up LifeOS data to {out}", details={"bytes": out.stat().st_size})
     return {"path": str(out), "bytes": out.stat().st_size}
 
 
-def _prune(target: Path) -> None:
-    keep = max(1, int(settings.get("backup_keep") or 7))
+def _prune(target: Path, keep: int | None = None) -> None:
+    keep = max(1, int(keep or settings.get("backup_keep") or 7))
     for old in sorted(target.glob(f"{PREFIX}*.zip"), reverse=True)[keep:]:
         try:
             old.unlink()

@@ -574,6 +574,11 @@ def _recover(model: str, payload: dict[str, Any], exc: httpx.HTTPStatusError, cf
 
 def _ollama(model: str, messages: list[dict[str, str]], schema: dict[str, Any] | None, timeout: float,
             temperature: float) -> str:
+    from . import gamemode
+
+    gamemode.wait_until_clear(_abort_event())  # a game is running: wait until it closes before loading a model
+    if (_abort_event() or threading.Event()).is_set():
+        raise _aborted()
     cfg = settings.get_all()
     abortable = _abort_event() is not None  # inside a mission: stream, so Stop can cut it off
     payload: dict[str, Any] = {"model": model, "messages": messages, "stream": abortable,

@@ -393,6 +393,132 @@ CREATE TABLE IF NOT EXISTS custom_tools (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS arena_matches (
+    id INTEGER PRIMARY KEY,
+    prompt TEXT NOT NULL,
+    a_agent TEXT NOT NULL,
+    a_model TEXT NOT NULL,
+    b_agent TEXT NOT NULL,
+    b_model TEXT NOT NULL,
+    a_result TEXT,
+    b_result TEXT,
+    a_seconds REAL,
+    b_seconds REAL,
+    status TEXT NOT NULL DEFAULT 'running',
+    error TEXT,
+    winner TEXT,
+    reason TEXT,
+    lessons TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    decided_at TEXT
+);
+
+-- Memory search: a copy of the browsers' history (title, address, time), opt-in.
+CREATE TABLE IF NOT EXISTS history (
+    id INTEGER PRIMARY KEY,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    browser TEXT NOT NULL,
+    visited_at TEXT NOT NULL,
+    UNIQUE(url, visited_at)
+);
+CREATE INDEX IF NOT EXISTS idx_history_visited ON history(visited_at);
+CREATE VIRTUAL TABLE IF NOT EXISTS history_fts USING fts5(
+    title, url, content='history', content_rowid='id', tokenize='porter unicode61'
+);
+CREATE TRIGGER IF NOT EXISTS history_ai AFTER INSERT ON history BEGIN
+    INSERT INTO history_fts(rowid, title, url) VALUES (new.id, new.title, new.url);
+END;
+CREATE TRIGGER IF NOT EXISTS history_ad AFTER DELETE ON history BEGIN
+    INSERT INTO history_fts(history_fts, rowid, title, url) VALUES ('delete', old.id, old.title, old.url);
+END;
+
+-- Council: several agents debate a question, then vote.
+CREATE TABLE IF NOT EXISTS council_sessions (
+    id INTEGER PRIMARY KEY,
+    question TEXT NOT NULL,
+    agents TEXT NOT NULL DEFAULT '[]',
+    rounds INTEGER NOT NULL DEFAULT 2,
+    transcript TEXT NOT NULL DEFAULT '[]',
+    options TEXT NOT NULL DEFAULT '[]',
+    votes TEXT NOT NULL DEFAULT '[]',
+    decision TEXT,
+    summary TEXT,
+    user_choice TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
+    error TEXT,
+    created_at TEXT NOT NULL,
+    finished_at TEXT
+);
+
+-- Learn mode: flashcard decks with spaced repetition (SM-2).
+CREATE TABLE IF NOT EXISTS decks (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'ready',
+    error TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cards (
+    id INTEGER PRIMARY KEY,
+    deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+    front TEXT NOT NULL,
+    back TEXT NOT NULL,
+    ease REAL NOT NULL DEFAULT 2.5,
+    interval_days REAL NOT NULL DEFAULT 0,
+    reps INTEGER NOT NULL DEFAULT 0,
+    lapses INTEGER NOT NULL DEFAULT 0,
+    due_at TEXT NOT NULL,
+    last_review_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_cards_due ON cards(deck_id, due_at);
+CREATE TABLE IF NOT EXISTS card_reviews (
+    id INTEGER PRIMARY KEY,
+    card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    grade INTEGER NOT NULL,
+    reviewed_at TEXT NOT NULL
+);
+
+-- Story mode: choose-your-path stories with a generated picture per scene.
+CREATE TABLE IF NOT EXISTS stories (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    premise TEXT NOT NULL,
+    style TEXT NOT NULL DEFAULT '',
+    narrator TEXT NOT NULL DEFAULT 'creative',
+    status TEXT NOT NULL DEFAULT 'writing',
+    error TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS story_scenes (
+    id INTEGER PRIMARY KEY,
+    story_id INTEGER NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+    idx INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    choices TEXT NOT NULL DEFAULT '[]',
+    chosen TEXT,
+    image_prompt TEXT NOT NULL DEFAULT '',
+    media_id INTEGER,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scenes_story ON story_scenes(story_id, idx);
+
+-- Code-to-app: small single-file tools Forge builds.
+CREATE TABLE IF NOT EXISTS mini_apps (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    icon TEXT NOT NULL DEFAULT 'wrench',
+    html TEXT NOT NULL DEFAULT '',
+    version INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'building',
+    error TEXT,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 # Columns added after the first release. SQLite has no ADD COLUMN IF NOT EXISTS.
@@ -410,6 +536,8 @@ MIGRATIONS = [
     "ALTER TABLE agents ADD COLUMN catchphrases TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE agents ADD COLUMN idle_lines TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE tasks ADD COLUMN parent_id INTEGER",
+    "ALTER TABLE agents ADD COLUMN tts_voice TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE agents ADD COLUMN tts_rate REAL NOT NULL DEFAULT 1.0",
 ]
 
 # Writers wait this long for the lock instead of failing with "database is locked".

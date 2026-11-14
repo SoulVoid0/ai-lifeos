@@ -24,6 +24,8 @@ python -m PyInstaller --noconfirm --clean --onefile --console --name lifeos-back
   --paths $backend `
   --collect-submodules lifeos --collect-submodules uvicorn --collect-all keyring --collect-data tzdata `
   --hidden-import win32ctypes.core `
+  --collect-all vosk --collect-all _sounddevice_data --hidden-import sounddevice --hidden-import _cffi_backend `
+  --hidden-import srt --hidden-import tqdm --collect-submodules PIL --collect-submodules segno `
   (Join-Path $backend "packaging\entry.py")
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed" }
 Pop-Location

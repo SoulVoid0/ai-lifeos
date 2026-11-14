@@ -101,13 +101,59 @@ DEFAULTS: dict[str, Any] = {
     "reflection": True,
     "auto_route": False,
     "lessons_per_task": 5,
-    "notification_prefs": {"reminders": True, "workflows": True, "missions": True, "suggestions": False},
+    "notification_prefs": {"reminders": True, "workflows": True, "missions": True, "suggestions": False, "apps": True},
+    # Linux: receive other apps' desktop notifications in the LifeOS bell (notify_bus.py).
+    "os_notifications": True,
+    # The first-start setup screen (name, Wi-Fi, models, folders) was finished or skipped.
+    "setup_done": False,
     "quiet_hours": {"enabled": False, "start": "22:00", "end": "07:00"},
     "email": {"host": "", "port": 993, "username": "", "folder": "INBOX"},
     # Email alerts over SMTP (mailer.py); the password is in the vault.
     "email_alerts": {"enabled": False, "to": "", "host": "smtp.gmail.com", "port": 465, "username": "",
-                     "security": "ssl", "events": {"mission_done": True, "mission_failed": True, "approval": True,
+                     "security": "ssl", "buttons": True, "events": {"mission_done": True, "mission_failed": True, "approval": True,
                                                    "question": True, "workflow": False}},
+    # ------------------------------------------------ 0.2 features (each a group; see the module named in the comment)
+    # voice.py: wake word, speech recognition and the agents' voices.
+    "voice": {"wake_word": False, "wake_phrase": "hey life os", "mic": "", "stt_model": "small", "engine": "auto",
+              "default_voice": "piper:en_US-lessac-medium", "chime": True, "speak_agent_chat": False,
+              "pause_in_games": True, "listen_seconds": 8},
+    # screen.py: screen questions with a local vision model.
+    "screen": {"model": "qwen2.5vl:7b", "keep_screenshot": True, "hotkey": True},
+    # tidy.py: the Archivist sorts and renames new downloads.
+    "tidy": {"enabled": False, "folder": "", "mode": "ask", "rename": True, "min_age_minutes": 10,
+             "interval_minutes": 60, "last_run_at": ""},
+    # remote.py: the phone remote on the home network (paired phones are stored as hashes).
+    "remote": {"enabled": False, "port": 8766, "devices": []},
+    # gamemode.py: free the GPU while a game runs.
+    "game_mode": {"enabled": True, "auto_detect": True, "fullscreen": True, "games": [], "free_gpu": True,
+                  "stop_comfy": True, "hold_ai": True, "reload_after": True, "notify": True},
+    # The live wallpaper (desktop app): the Station's crew behind your desktop icons.
+    "wallpaper": {"enabled": False, "fps": 15, "show_clock": True, "show_ticker": True, "dim": 0.15},
+    # upgrade.py: Forge proposes changes to LifeOS's own code.
+    "self_upgrade": {"enabled": False, "repo_path": "", "every_days": 7, "focus": "", "run_tests": True, "push": False,
+                     "model": "", "last_run_at": ""},
+    # recall.py: memory search, including a copy of browser history (opt-in).
+    "recall": {"browser_history": False, "keep_days": 90, "last_sync": ""},
+    # ------------------------------------------------ 0.3 features
+    # xp.py: the last level each agent was seen at (for level-up notes).
+    "xp_levels": {},
+    # mood.py: colors and ambient music follow the time of day and what the crew is doing.
+    "mood": {"enabled": True, "colors": True, "music": False, "volume": 0.25, "follow_time": True,
+             "follow_activity": True},
+    # Sound effects (played by the app; the theme and volume live here so every window agrees).
+    "sfx": {"enabled": True, "volume": 0.5, "theme": "scifi", "clicks": False},
+    # The desktop pet: a small creature that reacts to what the crew is doing.
+    "pet": {"enabled": False, "species": "bot", "name": "Byte", "size": 96, "roam": True, "speak": True},
+    # The panic button: stop everything at once.
+    "panic": {"hotkey": True, "hide_windows": True, "pause_automation": True, "unload_models": True, "mute": True,
+              "stop_media": True, "active": False, "since": "", "paused_by_panic": False},
+    # usbbackup.py: back up to a USB drive when it's plugged in.
+    "usb_backup": {"enabled": False, "drives": {}, "include_media": False, "keep": 5, "ask_new": True,
+                   "min_hours": 12},
+    # doctor.py: weekly PC checkups.
+    "doctor": {"weekly": True, "last_run_at": "", "notify": True},
+    # learn.py: flashcard reminders.
+    "learn": {"daily_reminder": True, "new_per_day": 20, "last_reminder": ""},
 }
 
 

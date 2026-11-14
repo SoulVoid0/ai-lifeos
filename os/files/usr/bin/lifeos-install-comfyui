@@ -1,0 +1,16 @@
+#!/bin/sh
+# Installs ComfyUI with PyTorch for ROCm into ~/.local/share/ai-lifeos/comfyui (about 6 GB), for images and video.
+# Not in the image itself to keep the installer small. LifeOS starts it on the first generation.
+set -e
+DIR="$HOME/.local/share/ai-lifeos/comfyui"
+[ -d "$DIR/.git" ] || git clone --depth 1 https://github.com/comfyanonymous/ComfyUI "$DIR"
+python3 -m venv "$DIR/venv"
+"$DIR/venv/bin/pip" install --upgrade pip
+"$DIR/venv/bin/pip" install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.4
+"$DIR/venv/bin/pip" install -r "$DIR/requirements.txt"
+cat > "$DIR/start.sh" <<'EOS'
+#!/bin/sh
+cd "$(dirname "$0")" && HSA_OVERRIDE_GFX_VERSION=10.3.0 exec ./venv/bin/python main.py --listen 127.0.0.1 --port 8188
+EOS
+chmod +x "$DIR/start.sh"
+echo "ComfyUI installed. In LifeOS: Settings -> Images and video -> launcher: $DIR/start.sh"

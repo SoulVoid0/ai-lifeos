@@ -1,0 +1,5 @@
+#!/bin/sh
+# Starts the LifeOS backend from the packaged libraries in /usr/lib/lifeos.
+export PYTHONPATH=/usr/lib/lifeos/site${PYTHONPATH:+:$PYTHONPATH}
+export LIFEOS_WEB_DIST=/usr/share/lifeos/web
+exec python3 -m lifeos "$@"
