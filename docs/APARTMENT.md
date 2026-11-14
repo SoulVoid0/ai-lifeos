@@ -39,5 +39,6 @@ Code: `apartment/` (C, SDL2, OpenGL 1.x, SDL2_ttf, libcurl), session scripts in 
 
 **Settings** (Esc > Settings): graphics quality, mouse sensitivity and invert, mouse look mode (captured, or right-drag
 for VMs), walking and turn speed, field of view, frame rate limit (30/45/60/none), "Save power when idle" (5 fps in the
-background, 10 fps after a minute without input unless the TV plays), and every movement key can be rebound.
+background, 10 fps after a minute without input unless the TV plays), screen resolution (through KDE), text and menu
+size, and every movement key can be rebound.
 While the apartment is up, KDE's shortcuts (Meta/start menu, Alt+Tab) are blocked: KDE is reached through the PC only.

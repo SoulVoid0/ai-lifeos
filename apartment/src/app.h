@@ -39,6 +39,7 @@ static inline uint32_t hash_str(const char *s) { uint32_t h = 2166136261u; while
 /* ------------------------------------------------------------------ gfx.c */
 enum { F_SMALL, F_BODY, F_TITLE, F_HUGE, F_COUNT };
 void gfx_init(int win_h);
+extern float g_ui_scale;   /* text and menu size, 0.75..2 */
 void gfx_resize(int win_h);
 void gfx_shutdown(void);
 void gfx_frame_begin(void);                 /* text cache bookkeeping */

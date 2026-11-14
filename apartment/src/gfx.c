@@ -57,9 +57,11 @@ static void cache_clear(void)
     }
 }
 
+float g_ui_scale = 1.0f;
+
 void gfx_resize(int win_h)
 {
-    int base = win_h < 480 ? 480 : win_h;
+    int base = (int)((win_h < 480 ? 480 : win_h) * g_ui_scale);
     int sizes[F_COUNT] = {base / 62, base / 46, base / 32, base / 15};
     if (!font_file[0]) find_font();
     cache_clear();

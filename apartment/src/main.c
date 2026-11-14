@@ -121,7 +121,7 @@ static void save_state(bool at_pc)
              "fps=%d\nnames=%d\ndisplay=%d\nat_pc=%d\n",
              P.x, P.z, P.yaw, P.pitch, CFG.quality, CFG.sens, CFG.invert, CFG.fov, CFG.volume, CFG.show_fps,
              CFG.show_names, CFG.display, at_pc);
-    n += snprintf(buf + n, sizeof buf - n, "walk=%.2f\nturn=%.2f\ndrag=%d\nfps_limit=%d\nidle_save=%d\n", walk_speed, turn_speed, drag_look, fps_limit, idle_save);
+    n += snprintf(buf + n, sizeof buf - n, "walk=%.2f\nturn=%.2f\ndrag=%d\nfps_limit=%d\nidle_save=%d\nui_scale=%.3f\n", walk_speed, turn_speed, drag_look, fps_limit, idle_save, g_ui_scale);
     for (int i = 0; i < NKEYS && n < (int)sizeof buf - 40; i++) n += snprintf(buf + n, sizeof buf - n, "key_%s=%d\n", KEY_IDS[i], (int)KEYS[i]);
     write_file(path, buf);
 }
@@ -154,6 +154,7 @@ static void load_state(void)
         else if (!strcmp(k, "drag")) drag_look = atoi(v);
         else if (!strcmp(k, "fps_limit")) fps_limit = atoi(v);
         else if (!strcmp(k, "idle_save")) idle_save = atoi(v);
+        else if (!strcmp(k, "ui_scale")) g_ui_scale = clampf((float)atof(v), 0.75f, 2.0f);
         else if (!strncmp(k, "key_", 4)) {
             for (int i = 0; i < NKEYS; i++)
                 if (!strcmp(k + 4, KEY_IDS[i])) { int sc = atoi(v); if (sc > 0 && sc < SDL_NUM_SCANCODES) KEYS[i] = (SDL_Scancode)sc; }
@@ -816,6 +817,93 @@ static void list_rows(int n, int *sel, float x, float y, float w, float h, void 
 
 static int row_first(void) { return (int)rows[79].x; }
 
+/* --- screen resolution, through KDE (kscreen-doctor): the apartment can't change outputs itself on Wayland */
+typedef struct { char out[64]; char id[32]; int w, h; float hz; } ScrMode;
+static ScrMode scr_modes[48];
+static int nscr, scr_cur = -1;
+
+static void jval(J *o, const char *key, char *out, size_t n)
+{
+    J *v = jget(o, key);
+    if (!v) { out[0] = 0; return; }
+    if (v->t == J_STR) snprintf(out, n, "%s", v->s);
+    else snprintf(out, n, "%.0f", v->n);
+}
+
+static int cmp_scr(const void *a, const void *b)
+{
+    const ScrMode *x = a, *y = b;
+    return x->w * x->h - y->w * y->h;
+}
+
+static void screen_modes_load(void)
+{
+    nscr = 0; scr_cur = -1;
+    FILE *p = popen("kscreen-doctor -j 2>/dev/null", "r");
+    if (!p) return;
+    size_t cap = 1 << 16, len = 0;
+    char *buf = malloc(cap);
+    size_t r;
+    while (buf && (r = fread(buf + len, 1, cap - len - 1, p)) > 0) {
+        len += r;
+        if (len + 1 >= cap) { cap *= 2; char *nb = realloc(buf, cap); if (!nb) break; buf = nb; }
+    }
+    pclose(p);
+    if (!buf) return;
+    buf[len] = 0;
+    char *start = strchr(buf, '{');
+    J *j = start ? json_parse(start) : NULL;
+    free(buf);
+    J *outs = j ? jget(j, "outputs") : NULL;
+    if (!outs || outs->t != J_ARR) { json_free(j); return; }
+    J *out = NULL;
+    int seen = 0;
+    for (int i = 0; i < outs->count; i++) {
+        J *o = jat(outs, i);
+        if (!jbool(o, "enabled", false)) continue;
+        if (!out || seen == CFG.display) out = o;
+        seen++;
+    }
+    if (out) {
+        char cur[32], name[64];
+        jval(out, "currentModeId", cur, sizeof cur);
+        snprintf(name, sizeof name, "%s", jstr(out, "name", ""));
+        J *modes = jget(out, "modes");
+        for (int i = 0; modes && i < modes->count && nscr < 48; i++) {
+            J *m = jat(modes, i), *sz = jget(m, "size");
+            int w = (int)jnum(sz, "width", 0), h = (int)jnum(sz, "height", 0);
+            float hz = (float)jnum(m, "refreshRate", 0);
+            char id[32];
+            jval(m, "id", id, sizeof id);
+            if (w < 640 || h < 400 || !id[0]) continue;
+            bool is_cur = !strcmp(id, cur);
+            int k = 0;
+            while (k < nscr && !(scr_modes[k].w == w && scr_modes[k].h == h)) k++;
+            if (k < nscr) {
+                bool keep_cur = !strcmp(scr_modes[k].id, cur);
+                if (is_cur || (!keep_cur && hz > scr_modes[k].hz)) { snprintf(scr_modes[k].id, sizeof scr_modes[k].id, "%s", id); scr_modes[k].hz = hz; }
+                continue;
+            }
+            ScrMode *s2 = &scr_modes[nscr++];
+            snprintf(s2->out, sizeof s2->out, "%s", name);
+            snprintf(s2->id, sizeof s2->id, "%s", id);
+            s2->w = w; s2->h = h; s2->hz = hz;
+        }
+        qsort(scr_modes, (size_t)nscr, sizeof *scr_modes, cmp_scr);
+        for (int i = 0; i < nscr; i++) if (!strcmp(scr_modes[i].id, cur)) scr_cur = i;
+    }
+    json_free(j);
+}
+
+static void screen_mode_set(int i)
+{
+    if (i < 0 || i >= nscr) return;
+    char cmd[200];
+    snprintf(cmd, sizeof cmd, "kscreen-doctor output.%s.mode.%s >/dev/null 2>&1 &", scr_modes[i].out, scr_modes[i].id);
+    if (system(cmd) != 0) toast("Couldn't change the resolution");
+    else toast("Screen: %d x %d", scr_modes[i].w, scr_modes[i].h);
+}
+
 /* --- the pause menu */
 static const char *MENU[] = {"Return to the PC", "Settings", "Quit"};
 #define NMENU 3
@@ -853,7 +941,7 @@ static void menu_activate(int i)
 {
     switch (i) {
     case 0: mode = back_mode = M_WALK; P.x = W.pc_stand.x; P.z = W.pc_stand.z; enter_pc(); break;
-    case 1: menu_sel = 0; from_menu = true; mode = M_SETTINGS; break;
+    case 1: menu_sel = 0; from_menu = true; screen_modes_load(); mode = M_SETTINGS; break;
     case 2: menu_sel = 0; from_menu = true; mode = M_QUIT; break;
     }
 }
@@ -997,7 +1085,8 @@ static void video_pick(int r)
 }
 
 /* --- settings */
-#define NSET (14 + NKEYS + 1)
+#define NSET (15 + NKEYS + 1)
+#define KROW 15   /* first key row */
 static void apply_quality(void);
 
 static void setting_row(int r, float x, float y, float w, float rh, bool on)
@@ -1007,30 +1096,33 @@ static void setting_row(int r, float x, float y, float w, float rh, bool on)
                                       "Show names over the crew", "Show FPS", "Screen (display number)"};
     char v[64];
     static const char *q[3] = {"Low (fastest)", "Medium", "High"};
-    static const char *more[6] = {"Mouse look", "Walking speed", "Turn speed (keys)", "Frame rate limit", "Save power when idle", "Reset keys to default"};
+    static const char *more[8] = {"Mouse look", "Walking speed", "Turn speed (keys)", "Frame rate limit", "Save power when idle",
+                                  "Screen resolution", "Text and menu size", "Reset keys to default"};
     if (r >= 8) {
         const char *name;
-        if (r >= 13 && r < 13 + NKEYS) {
-            int k = r - 13;
+        if (r >= KROW && r < KROW + NKEYS) {
+            int k = r - KROW;
             name = KEY_NAMES[k];
             if (rebinding == k) snprintf(v, sizeof v, "Press a key (Esc cancels)");
             else snprintf(v, sizeof v, "%s", SDL_GetScancodeName(KEYS[k]));
         } else {
-            int m = r < 13 ? r - 8 : 5;
+            int m = r < KROW ? r - 8 : 7;
             name = more[m];
             if (m == 0) snprintf(v, sizeof v, "%s", drag_look ? "Hold right button + drag" : "Mouse captured");
             else if (m == 1) snprintf(v, sizeof v, "%.0f%%", walk_speed * 100);
             else if (m == 2) snprintf(v, sizeof v, "%.0f%%", turn_speed * 100);
             else if (m == 3) { if (fps_limit) snprintf(v, sizeof v, "%d fps", fps_limit); else snprintf(v, sizeof v, "No limit"); }
             else if (m == 4) snprintf(v, sizeof v, "%s", idle_save ? "On" : "Off");
+            else if (m == 5) { if (scr_cur >= 0) snprintf(v, sizeof v, "%d x %d", scr_modes[scr_cur].w, scr_modes[scr_cur].h); else snprintf(v, sizeof v, "%d x %d (fixed)", WIN_W, WIN_H); }
+            else if (m == 6) snprintf(v, sizeof v, "%.0f%%", g_ui_scale * 100);
             else v[0] = 0;
         }
         text(F_BODY, x, y, name, on ? C_ACCENT : C_TXT);
         char b[96];
-        if (r >= 13 && r < 13 + NKEYS) snprintf(b, sizeof b, "[ %s ]", v);
+        if (r >= KROW && r < KROW + NKEYS) snprintf(b, sizeof b, "[ %s ]", v);
         else if (v[0]) snprintf(b, sizeof b, "<  %s  >", v);
         else snprintf(b, sizeof b, "Enter");
-        text(F_BODY, x + w * 0.55f, y, b, (rebinding >= 0 && rebinding == r - 13) ? C_ACCENT : C_TXT);
+        text(F_BODY, x + w * 0.55f, y, b, (rebinding >= 0 && rebinding == r - KROW) ? C_ACCENT : C_TXT);
         return;
     }
     switch (r) {
@@ -1076,8 +1168,13 @@ static void setting_change(int r, int dir)
     case 11: { static const int L[4] = {30, 45, 60, 0}; int i = 0; while (i < 4 && L[i] != fps_limit) i++;
         fps_limit = L[((i < 4 ? i : 2) + dir + 4) % 4]; break; }
     case 12: idle_save = !idle_save; break;
+    case 13:
+        if (nscr > 1) { scr_cur = ((scr_cur < 0 ? 0 : scr_cur) + dir + nscr) % nscr; screen_mode_set(scr_cur); }
+        else toast("This screen offers no other resolutions");
+        break;
+    case 14: g_ui_scale = clampf(g_ui_scale + dir * 0.125f, 0.75f, 2.0f); gfx_resize(WIN_H); break;
     default:
-        if (r >= 13 && r < 13 + NKEYS) { rebinding = r - 13; return; }
+        if (r >= KROW && r < KROW + NKEYS) { rebinding = r - KROW; return; }
         memcpy(KEYS, KEY_DEF, sizeof KEYS); toast("Keys reset"); break;
     }
     save_state(false);
