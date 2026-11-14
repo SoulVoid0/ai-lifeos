@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=AI LifeOS
+Comment=Your LifeOS dashboard, crew and settings
+Exec=firefox --new-window http://127.0.0.1:8765/
+Icon=applications-science
+Terminal=false
+Categories=Utility;

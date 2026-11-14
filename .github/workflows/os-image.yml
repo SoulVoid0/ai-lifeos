@@ -26,7 +26,7 @@ jobs:
     steps:
       - name: Tools
         run: |
-          pacman -Syu --noconfirm --needed archiso base-devel python python-pip nodejs npm git zstd github-cli
+          pacman -Syu --noconfirm --needed archiso base-devel python python-pip nodejs npm git zstd github-cli sdl2 sdl2_ttf gtk4 pkgconf
           useradd -m builder
 
       - uses: actions/checkout@v4
@@ -48,13 +48,24 @@ jobs:
           rm -rf $S/ollama/lib/ollama/cuda_* $S/ollama/lib/ollama/*cuda* 2>/dev/null || true
           du -sh $S/*
 
+      - name: Build the 3D apartment
+        run: |
+          make -C apartment
+          cp apartment/lifeos-apartment os/arch/pkg/src-stage/lifeos-apartment-bin
+
+      - name: Build the lsiw package (LSIW with C: at /)
+        run: |
+          chown -R builder os/arch/lsiw
+          cd os/arch/lsiw && sudo -u builder makepkg --nodeps --noconfirm
+          mkdir -p /repo && cp lsiw-*.pkg.tar.zst /repo/
+
       - name: Build the lifeos package
         run: |
           VER=0.1.${{ github.run_number }}
           sed -i "s/^pkgver=.*/pkgver=$VER/" os/arch/pkg/PKGBUILD
           chown -R builder os/arch/pkg
           cd os/arch/pkg && sudo -u builder makepkg --nodeps --noconfirm
-          mkdir -p /repo && cp lifeos-*.pkg.tar.zst /repo/ && repo-add /repo/lifeos.db.tar.gz /repo/lifeos-*.pkg.tar.zst
+          mkdir -p /repo && cp lifeos-*.pkg.tar.zst /repo/ && repo-add /repo/lifeos.db.tar.gz /repo/*.pkg.tar.zst
 
       - name: Build the ISO
         run: |
@@ -81,10 +92,10 @@ jobs:
           rm -rf /tmp/work /var/cache/pacman/pkg/*  # mkarchiso's work tree fills the runner's disk
           mkdir -p publish
           sha256sum "$ISO" | awk '{print $1}' > "publish/$(basename "$ISO").sha256"
-          cp /repo/lifeos-*.pkg.tar.zst publish/
+          cp /repo/*.pkg.tar.zst publish/
           if [ "$(stat -c %s "$ISO")" -lt 2000000000 ]; then mv "$ISO" publish/
           else split -b 1900M -d -a 1 "$ISO" "publish/$(basename "$ISO").part" && rm "$ISO"; fi
           ls -lh publish
           gh release create "os-arch-${{ github.run_number }}" publish/* --repo "${{ github.repository }}" --prerelease \
             --target "${{ github.sha }}" --title "AI LifeOS (Arch) ${{ github.run_number }} (test build)" \
-            --notes "Boots straight into LifeOS from a USB stick (write the .iso with Rufus, DD mode). To install it on a disk, open a terminal (Super+Enter) and run lifeos-install; the disk you choose is erased."
+            --notes "Boots straight into the LifeOS 3D apartment from a USB stick (write the .iso with Rufus, DD mode; if the ISO is in parts, join them first). Walk with WASD, press E on the PC in the master bedroom for the KDE desktop, Shift+F4 to come back. To install on a disk, open Konsole on the PC and run lifeos-install; the disk you choose is erased."

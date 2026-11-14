@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=LifeOS Apartment
+Exec=/usr/bin/lifeos-apartment --autostart
+OnlyShowIn=KDE;
+NoDisplay=true
+X-KDE-autostart-phase=2

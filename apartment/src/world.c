@@ -425,6 +425,13 @@ static void floor_room(int room)
     glEnd();
 }
 
+static void light_panel(float x, float z, float s)
+{
+    boxc(x, H - 0.06f, z, s, 0.06f, s, rgb(220, 220, 214));
+    float y = H - 0.061f, h = s / 2 - 0.03f;
+    quad(v3(x - h, y, z - h), v3(x + h, y, z - h), v3(x + h, y, z + h), v3(x - h, y, z + h), rgb(255, 252, 238));
+}
+
 static void ceiling(void)
 {
     quad(v3(0, H, 0), v3(24, H, 0), v3(24, H, 16), v3(0, H, 16), C_CEIL);
@@ -432,10 +439,10 @@ static void ceiling(void)
     for (int r = 0; r < NROOMS; r++) {
         const Rect *q = &ROOM_RECT[r];
         if (r == R_HALL) {
-            for (float x = 3; x < 24; x += 6) boxc(x, H - 0.05f, 8, 0.5f, 0.05f, 0.5f, rgb(250, 246, 230));
+            for (float x = 3; x < 24; x += 6) light_panel(x, 8, 0.5f);
             continue;
         }
-        boxc((q->x0 + q->x1) / 2, H - 0.06f, (q->z0 + q->z1) / 2, 0.7f, 0.06f, 0.7f, rgb(250, 246, 230));
+        light_panel((q->x0 + q->x1) / 2, (q->z0 + q->z1) / 2, 0.7f);
     }
 }
 

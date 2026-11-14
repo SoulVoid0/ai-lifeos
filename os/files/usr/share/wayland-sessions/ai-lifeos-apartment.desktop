@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=AI LifeOS
+Comment=The LifeOS 3D apartment, with KDE Plasma on the PC
+Exec=/usr/bin/lifeos-apartment-session
+TryExec=/usr/bin/startplasma-wayland
+Type=Application
+DesktopNames=KDE

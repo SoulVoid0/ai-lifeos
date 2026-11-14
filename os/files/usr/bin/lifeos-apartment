@@ -1,0 +1,32 @@
+#!/bin/sh
+# Starts the LifeOS 3D apartment, the desktop of LifeOS. Runs at login in the "AI LifeOS" session, and from
+# Shift+F4 on the KDE desktop (the PC in the master bedroom) to go back into the apartment.
+#   --autostart  only start in the AI LifeOS session (not in a plain Plasma session)
+#   --from-pc    start at the PC desk, standing up from the computer
+BIN=/usr/lib/lifeos/lifeos-apartment-bin
+RUN=${XDG_RUNTIME_DIR:-/tmp}
+if [ "$1" = "--autostart" ]; then
+  [ -e "$RUN/lifeos-apartment-session" ] || exit 0
+  shift
+fi
+# one apartment at a time
+exec 9>"$RUN/lifeos-apartment.lock"
+flock -n 9 || exit 0
+log="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos"
+mkdir -p "$log"
+args="$*"
+crashes=0
+while :; do
+  started=$(date +%s)
+  "$BIN" $args >>"$log/apartment.log" 2>&1
+  code=$?
+  # 0: closed or logged out, 10: the user went to the PC (KDE desktop). Anything else is a crash.
+  [ "$code" -eq 0 ] || [ "$code" -eq 10 ] && exit 0
+  [ $(( $(date +%s) - started )) -lt 30 ] && crashes=$((crashes + 1)) || crashes=0
+  if [ "$crashes" -ge 3 ]; then
+    notify-send -a "LifeOS" "The apartment keeps closing" "You're on the KDE desktop. Details: $log/apartment.log. Press Shift+F4 to try again." 2>/dev/null
+    exit 1
+  fi
+  args=""
+  sleep 1
+done

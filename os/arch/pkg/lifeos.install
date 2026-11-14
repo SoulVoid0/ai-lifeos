@@ -1,6 +1,12 @@
 post_install() {
   systemctl enable sddm.service NetworkManager.service bluetooth.service ollama.service lifeos-firstuser.service >/dev/null 2>&1 || true
   systemctl --global enable lifeos-backend.service >/dev/null 2>&1 || true
+  # SDDM starts on the AI LifeOS (apartment) session until someone picks another one.
+  if [ ! -s /var/lib/sddm/state.conf ]; then
+    mkdir -p /var/lib/sddm
+    printf '[Last]\nSession=/usr/share/wayland-sessions/ai-lifeos-apartment.desktop\n' > /var/lib/sddm/state.conf
+    chown -R sddm:sddm /var/lib/sddm 2>/dev/null || true
+  fi
 }
 post_upgrade() {
   post_install

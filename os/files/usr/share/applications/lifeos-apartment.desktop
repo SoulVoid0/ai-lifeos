@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Back to the apartment
+GenericName=LifeOS Apartment
+Comment=Leave the PC and go back into the LifeOS apartment (Shift+F4)
+Exec=/usr/bin/lifeos-apartment --from-pc
+Icon=go-home
+Terminal=false
+Categories=System;
+X-KDE-Shortcuts=Shift+F4
+StartupNotify=false

@@ -1,0 +1,13 @@
+#!/bin/sh
+# The "AI LifeOS" login session: KDE Plasma (the PC's desktop) with the 3D apartment full screen on top.
+run=${XDG_RUNTIME_DIR:-/tmp}
+log="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos"
+mkdir -p "$log"
+# KWin's Wayland session needs a graphics device; without one, use the classic LifeOS session.
+if ! ls /dev/dri/card* >/dev/null 2>&1; then
+  exec /usr/bin/lifeos-session
+fi
+touch "$run/lifeos-apartment-session"
+/usr/bin/lifeos-desktop-setup >>"$log/desktop-setup.log" 2>&1
+(/usr/bin/lifeos-screens >>"$log/screens.log" 2>&1 &)
+exec /usr/bin/startplasma-wayland
