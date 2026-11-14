@@ -17,6 +17,7 @@ build() {   # name label application overlay
   # modem and cloud tools, and documentation and translations for languages the installer doesn't offer.
   grep -vxF -f os/arch/packages.drop "$P/packages.x86_64" > "$P/packages.keep" && mv "$P/packages.keep" "$P/packages.x86_64"
   sed -i "/^\[options\]/a NoExtract = usr/share/doc/* usr/share/gtk-doc/* usr/share/help/* usr/share/man/* usr/share/info/*\nNoExtract = usr/share/locale/* $(sed 's|^|!usr/share/locale/|; s|$|*|' os/arch/locales.keep | tr '\n' ' ')!usr/share/locale/locale.alias" "$P/pacman.conf"
+  sed -i "/^\\[options\\]/a DisableDownloadTimeout" "$P/pacman.conf"
   printf '\n[lifeos]\nSigLevel = Optional TrustAll\nServer = file:///repo\n' >> "$P/pacman.conf"
   cp -a os/arch/airootfs/. "$P/airootfs/"
   [ -n "$overlay" ] && cp -a "$overlay/." "$P/airootfs/"
