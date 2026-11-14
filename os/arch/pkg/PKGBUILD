@@ -13,7 +13,7 @@ depends=(python labwc sddm xorg-server firefox foot swaybg xdg-desktop-portal-wl
          # the 3D apartment and the PC's KDE Plasma desktop
          sdl2 sdl2_ttf ffmpeg libnotify xdg-user-dirs
          plasma-desktop plasma-workspace kwin kscreen plasma-nm plasma-pa powerdevil bluedevil breeze breeze-gtk
-         kde-gtk-config xdg-desktop-portal-kde konsole dolphin kate ark spectacle gwenview okular
+         kde-gtk-config xdg-desktop-portal-kde konsole dolphin kate ark loupe
          lsiw)
 install=lifeos.install
 options=(!strip !debug)

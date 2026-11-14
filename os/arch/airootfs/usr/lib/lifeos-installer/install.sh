@@ -149,7 +149,7 @@ rm -f etc/systemd/system/network-online.target.wants/systemd-networkd-wait-onlin
       etc/systemd/system/sockets.target.wants/systemd-networkd.socket etc/systemd/system/sound.target.wants/livecd-alsa-unmuter.service \
       etc/systemd/system/dbus-org.freedesktop.network1.service etc/systemd/system/dbus-org.freedesktop.resolve1.service
 rm -f etc/resolv.conf && touch etc/resolv.conf
-sed -i '/^\[lifeos\]/,+2d' etc/pacman.conf
+sed -i '/^\[lifeos\]/,+2d; /^NoExtract = usr\/share\/\(doc\|locale\)/d' etc/pacman.conf
 cd /
 
 # ---------------------------------------------------------------- file systems and swap
