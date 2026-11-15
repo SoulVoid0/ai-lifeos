@@ -38,7 +38,7 @@ typedef struct { int kind, a, b; char s[200]; } Ev;   /* EV_TEXT: UTF-8; EV_KEY:
 #define MAX_SYMS 240
 
 typedef struct {
-    bool used;
+    bool used, adopted;   /* adopted: a screen kept running by the apartment before this one (not our child) */
     pid_t sway;
     int w, h;
     Uint32 started;
@@ -468,15 +468,83 @@ bool nest_key(int n, SDL_Keycode k, Uint16 mod)
 
 /* ------------------------------------------------------------------ the sessions */
 
+/* Is pid a running sway with this config (not a zombie, not a reused pid)? */
+static bool sway_alive(pid_t pid, const char *conf)
+{
+    if (pid <= 1) return false;
+    char cl[64], cmdline[700] = "";
+    snprintf(cl, sizeof cl, "/proc/%d/cmdline", (int)pid);
+    FILE *c = fopen(cl, "r");
+    if (!c) return false;
+    size_t k = fread(cmdline, 1, sizeof cmdline - 1, c);
+    fclose(c);
+    for (size_t i = 0; i < k; i++) if (!cmdline[i]) cmdline[i] = ' ';
+    return strstr(cmdline, "sway") && strstr(cmdline, conf);
+}
+
+static void set_paths(Nest *ns, int n, const char *run_dir)
+{
+    snprintf(ns->dir, sizeof ns->dir, "%s/lifeos-%s", run_dir, NAMES[n]);
+    snprintf(ns->conf, sizeof ns->conf, "%s.sway", ns->dir);
+    snprintf(ns->sock, sizeof ns->sock, "%s.sock", ns->dir);
+    snprintf(ns->envf, sizeof ns->envf, "%s.env", ns->dir);
+}
+
+static pid_t read_pidfile(const Nest *ns)
+{
+    char pidf[600], line[64];
+    snprintf(pidf, sizeof pidf, "%s.pid", ns->dir);
+    FILE *f = fopen(pidf, "r");
+    pid_t pid = 0;
+    if (f) {
+        if (fgets(line, sizeof line, f)) pid = (pid_t)atoi(line);
+        fclose(f);
+    }
+    return pid;
+}
+
+static void start_threads(Nest *ns)
+{
+    ns->used = true;
+    ns->started = SDL_GetTicks();
+    pthread_mutex_init(&ns->mu, NULL);
+    pthread_cond_init(&ns->cv, NULL);
+    pthread_create(&ns->cap_t, NULL, capture_main, ns);
+    pthread_create(&ns->in_t, NULL, input_main, ns);
+}
+
+/* Ends our threads but leaves the screen and its program running, for the next apartment (back from the PC). */
+static void detach_one(Nest *ns)
+{
+    if (!ns->used) return;
+    ns->stop = 1;
+    pthread_mutex_lock(&ns->mu);
+    pthread_cond_broadcast(&ns->cv);
+    pthread_mutex_unlock(&ns->mu);
+    pthread_join(ns->cap_t, NULL);
+    pthread_join(ns->in_t, NULL);
+    vp_close(ns);
+    free(ns->ready);
+    GLuint tex = ns->tex;
+    pthread_mutex_destroy(&ns->mu);
+    pthread_cond_destroy(&ns->cv);
+    memset(ns, 0, sizeof *ns);
+    ns->tex = tex;
+}
+
 static void stop_one(Nest *ns)
 {
     if (!ns->used) return;
     if (ns->sway > 0) {
         kill(-ns->sway, SIGTERM);   /* sway and everything started in it */
         kill(ns->sway, SIGTERM);
-        for (int i = 0; i < 30 && waitpid(ns->sway, NULL, WNOHANG) == 0; i++) usleep(50000);
+        for (int i = 0; i < 30 && (ns->adopted ? sway_alive(ns->sway, ns->conf) : waitpid(ns->sway, NULL, WNOHANG) == 0); i++)
+            usleep(50000);
         kill(-ns->sway, SIGKILL);
-        waitpid(ns->sway, NULL, WNOHANG);
+        if (!ns->adopted) waitpid(ns->sway, NULL, WNOHANG);
+        char pidf[600];
+        snprintf(pidf, sizeof pidf, "%s.pid", ns->dir);
+        unlink(pidf);
     }
     ns->stop = 1;
     pthread_mutex_lock(&ns->mu);
@@ -495,10 +563,37 @@ static void stop_one(Nest *ns)
     ns->tex = tex;   /* reused */
 }
 
+/* Takes over screen n left running by the apartment before this one (going to the PC and back). */
+bool nest_adopt(int n, int w, int h)
+{
+    Nest *ns = &N[n];
+    if (ns->used) return true;
+    const char *run_dir = getenv("XDG_RUNTIME_DIR");
+    if (!run_dir || !*run_dir || !nest_available()) return false;
+    GLuint tex = ns->tex;
+    memset(ns, 0, sizeof *ns);
+    ns->tex = tex;
+    set_paths(ns, n, run_dir);
+    pid_t old = read_pidfile(ns);
+    if (!sway_alive(old, ns->conf) || access(ns->sock, F_OK) != 0 || access(ns->envf, R_OK) != 0) return false;
+    ns->w = w; ns->h = h;
+    ns->sway = old;
+    ns->adopted = true;
+    FILE *f = fopen(ns->envf, "r");
+    if (f) {
+        if (fgets(ns->wl, sizeof ns->wl, f)) ns->wl[strcspn(ns->wl, "\r\n")] = 0;
+        fclose(f);
+    }
+    start_threads(ns);
+    fprintf(stderr, "apartment: took over the %s's screen (sway %d)\n", NAMES[n], (int)old);
+    return true;
+}
+
 bool nest_start(int n, const char *cmd, int w, int h)
 {
     Nest *ns = &N[n];
     if (ns->used) return true;
+    if (nest_adopt(n, w, h)) return true;
     if (!nest_available()) return false;
     const char *run_dir = getenv("XDG_RUNTIME_DIR");
     if (!run_dir || !*run_dir) return false;
@@ -506,30 +601,15 @@ bool nest_start(int n, const char *cmd, int w, int h)
     memset(ns, 0, sizeof *ns);
     ns->tex = tex;
     ns->w = w; ns->h = h;
-    snprintf(ns->conf, sizeof ns->conf, "%s/lifeos-%s.sway", run_dir, NAMES[n]);
-    snprintf(ns->sock, sizeof ns->sock, "%s/lifeos-%s.sock", run_dir, NAMES[n]);
-    snprintf(ns->envf, sizeof ns->envf, "%s/lifeos-%s.env", run_dir, NAMES[n]);
+    set_paths(ns, n, run_dir);
+    /* a session left behind (an apartment that crashed) but not usable: end it first */
+    pid_t old = read_pidfile(ns);
+    if (sway_alive(old, ns->conf)) { kill(-old, SIGTERM); kill(old, SIGTERM); }
     unlink(ns->sock);
     unlink(ns->envf);
-    /* a session left behind by an apartment that crashed: end it first */
-    char pidf[600], line[64];
-    snprintf(pidf, sizeof pidf, "%s/lifeos-%s.pid", run_dir, NAMES[n]);
-    FILE *f = fopen(pidf, "r");
-    if (f) {
-        if (fgets(line, sizeof line, f)) {
-            pid_t old = (pid_t)atoi(line);
-            char cl[600], cmdline[700] = "";
-            snprintf(cl, sizeof cl, "/proc/%d/cmdline", (int)old);
-            FILE *c = old > 1 ? fopen(cl, "r") : NULL;
-            if (c) {
-                size_t k = fread(cmdline, 1, sizeof cmdline - 1, c);
-                fclose(c);
-                for (size_t i = 0; i < k; i++) if (!cmdline[i]) cmdline[i] = ' ';
-                if (strstr(cmdline, "sway") && strstr(cmdline, ns->conf)) kill(old, SIGTERM);
-            }
-        }
-        fclose(f);
-    }
+    char pidf[600];
+    snprintf(pidf, sizeof pidf, "%s.pid", ns->dir);
+    FILE *f;
     f = fopen(ns->conf, "w");
     if (!f) return false;
     fprintf(f,
@@ -550,12 +630,7 @@ bool nest_start(int n, const char *cmd, int w, int h)
     if (ns->sway <= 0) return false;
     f = fopen(pidf, "w");
     if (f) { fprintf(f, "%d\n", (int)ns->sway); fclose(f); }
-    ns->used = true;
-    ns->started = SDL_GetTicks();
-    pthread_mutex_init(&ns->mu, NULL);
-    pthread_cond_init(&ns->cv, NULL);
-    pthread_create(&ns->cap_t, NULL, capture_main, ns);
-    pthread_create(&ns->in_t, NULL, input_main, ns);
+    start_threads(ns);
     fprintf(stderr, "apartment: started the %s's own screen (sway %d)\n", NAMES[n], (int)ns->sway);
     return true;
 }
@@ -612,7 +687,7 @@ int nest_update(void)
                 fclose(f);
             }
         }
-        if (waitpid(ns->sway, NULL, WNOHANG) == ns->sway) {
+        if (ns->adopted ? !sway_alive(ns->sway, ns->conf) : waitpid(ns->sway, NULL, WNOHANG) == ns->sway) {
             fprintf(stderr, "apartment: the %s's screen ended\n", NAMES[n]);
             ns->sway = 0;
             stop_one(ns);
@@ -622,7 +697,25 @@ int nest_update(void)
     return ended;
 }
 
-void nest_shutdown(void)
+void nest_shutdown(bool keep_running)
 {
-    for (int n = 0; n < NEST_N; n++) stop_one(&N[n]);
+    for (int n = 0; n < NEST_N; n++) {
+        if (keep_running) detach_one(&N[n]);
+        else stop_one(&N[n]);
+    }
+}
+
+/* A new size for screen n (the TV going fullscreen and back); the program in it follows. */
+void nest_resize(int n, int w, int h)
+{
+    Nest *ns = &N[n];
+    if (!ns->used || !ns->wl[0] || (ns->w == w && ns->h == h)) return;
+    ns->w = w; ns->h = h;
+    char res[32];
+    snprintf(res, sizeof res, "%dx%d", w, h);
+    char **env = make_env(ns, false);
+    const char *argv[] = {"swaymsg", "output", "HEADLESS-1", "resolution", res, NULL};
+    pid_t pid = run(argv, env, -1, false);
+    free_env(env);
+    if (pid > 0) waitpid(pid, NULL, 0);
 }

@@ -11,7 +11,7 @@ KDE Plasma desktop.
 | Menu (Return to the PC, AI crew, Settings, Quit) / AI crew / shop / decorate / help | Esc / K / P / C / F1 |
 | Look | The mouse: the cursor is hidden and held in the middle. In VMs with an absolute mouse (Hyper-V, VirtualBox, QEMU tablet) it's hidden and pushing it against a screen edge keeps turning. Also Left/Right, PgUp/PgDn, or right-drag |
 | Windows programs | The tablet on the master bed shows LSIW Control live; E picks it up and you use it in your hands (Esc or a click outside puts it down) |
-| TV | E on the remote (or R on the couch) switches Steam mode (Big Picture) and video mode. In Steam mode, E on the TV (Enter on the couch) sits you in front of it and Steam Big Picture runs on it; F12 or a click outside the TV gets up (Esc is Steam's Back) |
+| TV | E on the remote (or R on the couch) switches Steam mode (Big Picture) and video mode. In Steam mode, E on the TV (Enter on the couch) sits you in front of it and Steam Big Picture runs on it; F11 switches between fullscreen and the TV (remembered), F12 or a click outside the TV gets up (Esc is Steam's Back). Steam keeps running while you use the PC |
 | Record | E on the camera in the hallway (or Shift+F5 anywhere): records everything on screen, PC and tablet included, with sound, to ~/Videos/LifeOS recordings |
 | Graphics quality | F2 (Low renders at half resolution and 30 fps; picked automatically on software rendering) |
 | Use the PC | E at the desk: the apartment closes and Plasma is yours |

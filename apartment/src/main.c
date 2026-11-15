@@ -48,6 +48,7 @@ static SDL_Scancode KEYS[NKEYS] = {SDL_SCANCODE_W, SDL_SCANCODE_S, SDL_SCANCODE_
                                    SDL_SCANCODE_PAGEUP, SDL_SCANCODE_PAGEDOWN};
 static float walk_speed = 1.0f, turn_speed = 1.0f;
 static int fps_limit = 60;        /* 30, 45, 60, or 0 = no limit (vsync only) */
+static bool tv_full;              /* Steam on the TV: over the whole window instead of on the TV */
 static bool idle_save = true;     /* drop to a few frames per second when idle or in the background */
 static Uint32 last_input_ms;
 static bool has_focus = true;
@@ -70,7 +71,8 @@ static time_t rec_since;
 static bool tab_live_anim;        /* the tablet opens in the apartment (held), not by leaving it */
 static float hold_t;
 static int tv_prev;               /* the mode to go back to after using the TV */
-static float use_x, use_y, use_w, use_h;   /* the screen in use (held tablet or TV), in window pixels */
+static float use_x, use_y, use_w, use_h;
+static Uint32 tv_hint_ms;   /* when the TV's controls hint was last shown */   /* the screen in use (held tablet or TV), in window pixels */
 static bool in_transition(int m) { return m == M_PC_IN || m == M_PC_OUT || m == M_TAB_IN || m == M_TAB_OUT; }
 static int mode = M_WALK, back_mode = M_WALK;
 static float anim_t;
@@ -142,7 +144,7 @@ static void save_state(bool at_pc)
              "fps=%d\nnames=%d\ndisplay=%d\nat_pc=%d\n",
              P.x, P.z, P.yaw, P.pitch, CFG.quality, CFG.sens, CFG.invert, CFG.fov, CFG.volume, CFG.show_fps,
              CFG.show_names, CFG.display, at_pc);
-    n += snprintf(buf + n, sizeof buf - n, "walk=%.2f\nturn=%.2f\nlook=%d\nfps_limit=%d\nidle_save=%d\nui_scale=%.3f\nlive_pc=%d\ntv_mode=%d\n", walk_speed, turn_speed, look_mode, fps_limit, idle_save, g_ui_scale, live_pc, tv_get_mode());
+    n += snprintf(buf + n, sizeof buf - n, "walk=%.2f\nturn=%.2f\nlook=%d\nfps_limit=%d\nidle_save=%d\nui_scale=%.3f\nlive_pc=%d\ntv_mode=%d\ntv_full=%d\n", walk_speed, turn_speed, look_mode, fps_limit, idle_save, g_ui_scale, live_pc, tv_get_mode(), tv_full);
     for (int i = 0; i < NKEYS && n < (int)sizeof buf - 40; i++) n += snprintf(buf + n, sizeof buf - n, "key_%s=%d\n", KEY_IDS[i], (int)KEYS[i]);
     write_file(path, buf);
 }
@@ -175,6 +177,7 @@ static void load_state(void)
         else if (!strcmp(k, "look")) { look_mode = atoi(v); if (look_mode < 0 || look_mode >= NLOOK) look_mode = LOOK_AUTO; }
         else if (!strcmp(k, "live_pc")) live_pc = atoi(v);
         else if (!strcmp(k, "tv_mode")) tv_set_mode(atoi(v));
+        else if (!strcmp(k, "tv_full")) tv_full = atoi(v) != 0;
         else if (!strcmp(k, "fps_limit")) fps_limit = atoi(v);
         else if (!strcmp(k, "idle_save")) idle_save = atoi(v);
         else if (!strcmp(k, "ui_scale")) g_ui_scale = clampf((float)atof(v), 0.75f, 2.0f);
@@ -852,11 +855,14 @@ static void steam_play(void)
     set_relative(false);
     SDL_StartTextInput();
     steam_tv_use(true);
+    steam_tv_fullscreen(tv_full, WIN_W, WIN_H);
+    tv_hint_ms = SDL_GetTicks();
 }
 
 static void tv_leave(void)
 {
     steam_tv_use(false);
+    steam_tv_fullscreen(false, 0, 0);
     SDL_StopTextInput();
     mode = tv_prev;
     set_relative(true);
@@ -2226,6 +2232,12 @@ static void utf8_pop(char *s)
 
 static bool is_panel(int m) { return m == M_QUIT || m == M_MENU || m == M_SHOP || m == M_DECOR || m == M_VIDEOS || m == M_SETTINGS || m == M_HELP || m == M_BOARD || m == M_CREW || m == M_AGENT || m == M_LETTER || m == M_MODELS; }
 
+/* Steam fullscreen: the whole window */
+static void tv_full_rect(float *x, float *y, float *w, float *h)
+{
+    *x = 0; *y = 0; *w = (float)WIN_W; *h = (float)WIN_H;   /* the TV's screen takes the window's size */
+}
+
 /* Window position (event coordinates) to a spot on the screen in use, 0..1; false outside it. */
 static bool use_at(int ex, int ey, float *fx, float *fy)
 {
@@ -2252,7 +2264,16 @@ static void handle_key(SDL_Keysym k)
     SDL_Keycode key = k.sym;
     if (in_transition(mode)) return;
     if (mode == M_TAB_HOLD) { if (key == SDLK_ESCAPE) tablet_down(); else nest_key(NEST_TAB, key, k.mod); return; }
-    if (mode == M_TV_USE) { if (key == SDLK_F12 || (key == SDLK_ESCAPE && (k.mod & KMOD_SHIFT))) tv_leave(); else nest_key(NEST_TV, key, k.mod); return; }
+    if (mode == M_TV_USE) {
+        if (key == SDLK_F12 || (key == SDLK_ESCAPE && (k.mod & KMOD_SHIFT))) tv_leave();
+        else if (key == SDLK_F11) {
+            tv_full = !tv_full;
+            steam_tv_fullscreen(tv_full, WIN_W, WIN_H);
+            tv_hint_ms = SDL_GetTicks();
+            save_state(false);
+        } else nest_key(NEST_TV, key, k.mod);
+        return;
+    }
     if (mdl_typing) {
         if (key == SDLK_ESCAPE) { mdl_typing = false; SDL_StopTextInput(); }
         else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
@@ -2468,6 +2489,7 @@ static void camera_for_frame(V3 *eye, float *yaw, float *pitch, float *fade, flo
         *pitch = lerpf(anim_pitch0, 0, t);
         float hw = (W.tv_w / 2 / d) / (th * A) * WIN_W / 2, hh = (W.tv_h / 2 / d) / th * WIN_H / 2;
         use_x = WIN_W / 2.0f - hw; use_y = WIN_H / 2.0f - hh; use_w = 2 * hw; use_h = 2 * hh;
+        if (tv_full) tv_full_rect(&use_x, &use_y, &use_w, &use_h);
     } else if (mode == M_TAB_HOLD) {
         V3 e = W.tablet_eye;
         *eye = v3(e.x, e.y + 0.1f, e.z);
@@ -2773,8 +2795,27 @@ int main(int argc, char **argv)
         gfx_ortho(WIN_W, WIN_H);
         glEnable(GL_BLEND);
         if (mode == M_TAB_HOLD) tablet_draw_held(T, "Esc or click outside the tablet to put it down");
-        if (mode == M_TV_USE && anim_t > 0.6f) {
-            const char *hint = "F12 or click outside the TV: stop using it  ·  Esc is Back in Steam";
+        if (mode == M_TV_USE && anim_t > 0.6f && tv_full) {
+            rect(0, 0, (float)WIN_W, (float)WIN_H, rgb(0, 0, 0));
+            float u, v, x, y, w, h;
+            tv_full_rect(&x, &y, &w, &h);
+            GLuint tex = nest_ready(NEST_TV) ? nest_texture(NEST_TV, &u, &v) : 0;
+            if (tex) {
+                glEnable(GL_TEXTURE_2D);
+                glBindTexture(GL_TEXTURE_2D, tex);
+                glColor4f(1, 1, 1, 1);
+                glBegin(GL_QUADS);
+                glTexCoord2f(0, 0); glVertex2f(x, y);
+                glTexCoord2f(u, 0); glVertex2f(x + w, y);
+                glTexCoord2f(u, v); glVertex2f(x + w, y + h);
+                glTexCoord2f(0, v); glVertex2f(x, y + h);
+                glEnd();
+                glDisable(GL_TEXTURE_2D);
+            } else text_center(F_TITLE, WIN_W / 2.0f, WIN_H / 2.0f - text_h(F_TITLE) / 2.0f, "Starting Steam...", rgb(220, 228, 240));
+        }
+        if (mode == M_TV_USE && anim_t > 0.6f && (!tv_full || SDL_GetTicks() - tv_hint_ms < 5000)) {
+            const char *hint = tv_full ? "F11: back to the TV  ·  F12: stop using it  ·  Esc is Back in Steam"
+                                       : "F11: fullscreen  ·  F12 or click outside the TV: stop using it  ·  Esc is Back in Steam";
             int tw = text_w(F_SMALL, hint) + 24;
             float ty = WIN_H - text_h(F_SMALL) - 18.0f;
             rect(WIN_W / 2.0f - tw / 2.0f, ty, (float)tw, text_h(F_SMALL) + 8.0f, rgba(10, 12, 18, 200));
@@ -2809,7 +2850,7 @@ int main(int argc, char **argv)
     if (exit_code != EXIT_TO_PC) save_state(false);
     chats_save();
     video_stop();
-    apps_shutdown();
+    apps_shutdown(exit_code == EXIT_TO_PC);
     net_shutdown();
     gfx_shutdown();
     SDL_GL_DeleteContext(gl);

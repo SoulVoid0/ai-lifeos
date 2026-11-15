@@ -245,14 +245,16 @@ void nest_text(int n, const char *utf8);
 bool nest_key(int n, SDL_Keycode k, Uint16 mod);
 int nest_update(void);                     /* bit per screen that ended */
 void nest_stop(int n);
-void nest_shutdown(void);
+void nest_shutdown(bool keep_running);   /* keep_running: leave the screens up for the next apartment (PC trip) */
+bool nest_adopt(int n, int w, int h);      /* take over a screen the previous apartment left running */
+void nest_resize(int n, int w, int h);
 
 /* ------------------------------------------------------------------ apps.c */
 enum { JOB_NONE, JOB_STEAM, JOB_UPDATE };
 enum { TV_VIDEO, TV_STEAM };
 void apps_init(void);
 void apps_update(float dt, int room, bool focused);
-void apps_shutdown(void);                  /* gives the tablet's window back; calls pccap_shutdown */
+void apps_shutdown(bool to_pc);            /* to_pc: the tablet's and TV's screens keep running; calls pccap_shutdown */
 bool tablet_live(void);                    /* LSIW Control can run on the tablet's own screen */
 bool tablet_ready(void);                   /* its screen has a picture */
 bool tablet_hold(void);                    /* picked up: full speed pictures */
@@ -268,6 +270,7 @@ void tv_set_mode(int m);
 bool steam_installed(void);
 bool steam_tv_start(void);                 /* Steam Big Picture in the TV's own screen */
 void steam_tv_use(bool on);                /* sitting in front of it, using it */
+void steam_tv_fullscreen(bool on, int w, int h);  /* Steam over the whole window (the TV's screen at that size) */
 void steam_tv_draw(V3 tl, V3 tr, V3 br, V3 bl, float h, float t);
 bool letter_here(void);
 float letter_age(void);

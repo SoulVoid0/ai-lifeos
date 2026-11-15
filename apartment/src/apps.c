@@ -72,7 +72,9 @@ static const char *JS_LIB =
     "var w=Math.round(g.width*0.62),h=Math.round(w/1.6);if(h>g.height*0.74){h=Math.round(g.height*0.74);w=Math.round(h*1.6);}"
     "return {x:g.x+Math.round((g.width-w)/2),y:g.y+Math.round((g.height-h)/2-g.height*0.03),width:w,height:h};}\n"
     "function front(w){if(!w)return;w.minimized=false;workspace.activeWindow=w;}\n"
-    "function home(){var a=A();if(a){a.minimized=false;workspace.activeWindow=a;}}\n";
+    "function home(){var a=A();if(a){a.minimized=false;workspace.activeWindow=a;}}\n"
+    "function docks(hide){var l=workspace.stackingOrder;for(var i=0;i<l.length;i++){var w=l[i];if(w.deleted||!w.dock)continue;"
+    "w.keepBelow=hide;w.opacity=hide?0:1;}var a=A();if(hide&&a)workspace.raiseWindow(a);}\n";
 
 static void kwin(const char *fmt, ...)
 {
@@ -145,7 +147,7 @@ GLuint tablet_texture(float *u, float *v) { return nest_ready(NEST_TAB) ? nest_t
 
 /* ------------------------------------------------------------------ Steam on the TV */
 
-static struct { bool using_; Uint32 started_at; } tvs;
+static struct { bool using_, full; Uint32 started_at; } tvs;
 
 /* Steam Big Picture in the TV's own screen; when Steam quits, the screen closes */
 #define TV_CMD "sh -c 'steam -gamepadui; swaymsg exit'"
@@ -160,6 +162,16 @@ bool steam_tv_start(void)
 
 void steam_tv_use(bool on) { tvs.using_ = on; }
 
+void steam_tv_fullscreen(bool on, int w, int h)
+{
+    tvs.full = on;
+    if (on) {
+        /* the TV's screen at the window's size (up to 1920 wide), so Steam is sharp */
+        if (w > 1920) { h = h * 1920 / w; w = 1920; }
+        nest_resize(NEST_TV, w & ~1, h & ~1);
+    } else nest_resize(NEST_TV, 1280, 720);
+}
+
 /* ------------------------------------------------------------------ windows brought in front (Steam, the updater) */
 
 static struct {
@@ -170,7 +182,8 @@ static struct {
     int nknown;
     char fronted[8][64];
     int nfronted;
-    bool lost_focus;
+    bool lost_focus, docks_hidden;
+    Uint32 docks_at;
 } job;
 
 int job_kind(void) { return job.kind; }
@@ -191,7 +204,7 @@ static void front_once(const WinInfo *w)
 {
     if (was_fronted(w->id) || !safe_id(w->id)) return;
     if (job.nfronted < 8) snprintf(job.fronted[job.nfronted++], 64, "%s", w->id);
-    kwin("front(I('%s'));", w->id);
+    kwin("docks(true);front(I('%s'));", w->id);
 }
 
 void job_start(int kind)
@@ -202,10 +215,21 @@ void job_start(int kind)
     pccap_watch(true);
 }
 
-void job_end(void) { job.kind = JOB_NONE; }
+/* While a terminal is in front of the apartment, KDE's panel stays hidden (it's only part of the PC). */
+static void docks_back(void) { kwin("docks(false);"); }
+
+void job_end(void)
+{
+    if (job.docks_hidden) docks_back();
+    job.kind = JOB_NONE;
+    job.docks_hidden = false;
+}
 
 static void job_launch(void)
 {
+    kwin("docks(true);");
+    job.docks_hidden = true;
+    job.docks_at = SDL_GetTicks();
     if (job.kind == JOB_STEAM) {
         const char *argv[] = {"konsole", "--hide-menubar", "--hide-tabbar", "-e", "/usr/bin/lifeos-steam", "--setup", NULL};
         if (spawn(argv) < 0) { toast("Couldn't open the Steam setup"); job_end(); return; }
@@ -231,6 +255,8 @@ static void job_update(bool focused)
         job_launch();
         return;
     }
+    /* keep KDE's panel hidden while the terminal is up (Plasma can bring it back) */
+    if (job.docks_hidden && now - job.docks_at > 3000) { kwin("docks(true);"); job.docks_at = now; }
     if (!focused) job.lost_focus = true;
     else if (job.lost_focus) { job_end(); return; }          /* back in the apartment */
     if (now - job.started > 600000) { job_end(); return; }
@@ -306,6 +332,11 @@ void apps_init(void)
         int fl = fcntl(fd, F_GETFD);
         if (fl >= 0) fcntl(fd, F_SETFD, fl | FD_CLOEXEC);
     }
+    /* the screens the apartment before this one left running (back from the PC) */
+    if (nest_adopt(NEST_TV, 1280, 720)) { tvs.started_at = 0; nest_resize(NEST_TV, 1280, 720); }
+    nest_adopt(NEST_TAB, 1280, 800);
+    /* KDE's panel, if an apartment that crashed left it hidden */
+    if (getenv("WAYLAND_DISPLAY")) docks_back();
     if (installed("/usr/bin/lifeos-update") && !getenv("LIFEOS_NO_UPDATE_CHECK")) {
         pthread_t t;
         if (pthread_create(&t, NULL, update_checker, NULL) == 0) pthread_detach(t);
@@ -324,10 +355,11 @@ void apps_update(float dt, int room, bool focused)
     int ended = nest_update();
     if (ended & (1 << NEST_TV)) {
         tvs.using_ = false;
-        if (SDL_GetTicks() - tvs.started_at < 15000)
+        tvs.full = false;
+        if (tvs.started_at && SDL_GetTicks() - tvs.started_at < 15000)
             toast("Steam closed right away. If it's open on the PC, quit it there first (Steam runs once).");
     }
-    nest_set_fps(NEST_TV, tvs.using_ ? 24 : tv ? 4 : 0);
+    nest_set_fps(NEST_TV, tvs.using_ ? (tvs.full ? 30 : 24) : tv ? 4 : 0);
     pccap_watch(job.kind != JOB_NONE);
     nwins = pccap_windows(wins, 64, &wins_age);
     tablet_update(near);
@@ -347,9 +379,12 @@ void apps_update(float dt, int room, bool focused)
     }
 }
 
-void apps_shutdown(void)
+void apps_shutdown(bool to_pc)
 {
-    nest_shutdown();
+    if (job.docks_hidden) docks_back();
+    /* Going to the PC: Steam on the TV and LSIW on the tablet keep running, and the next apartment takes them
+     * over. Otherwise (logging out, a new LifeOS) they end. */
+    nest_shutdown(to_pc);
     pccap_shutdown();
 }
 
