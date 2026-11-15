@@ -10,7 +10,7 @@ if [ "$virt" != "none" ] || ! ls /dev/dri/renderD* >/dev/null 2>&1; then
 fi
 log="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos"; mkdir -p "$log"
 systemctl --user import-environment XDG_CURRENT_DESKTOP WLR_RENDERER 2>/dev/null
-systemctl --user start lifeos-backend.service 2>/dev/null || (lifeos-backend >"$log/backend.log" 2>&1 &)
+systemctl --user start lifeos-backend.service 2>/dev/null || (LIFEOS_NO_KEYRING=1 lifeos-backend >"$log/backend.log" 2>&1 &)
 labwc 2>"$log/labwc.log"
 code=$?
 [ $code -ne 0 ] && echo "LifeOS desktop stopped (code $code). Details: $log/labwc.log" && tail -n 15 "$log/labwc.log"

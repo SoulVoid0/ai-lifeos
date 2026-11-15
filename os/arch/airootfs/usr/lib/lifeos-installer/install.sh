@@ -97,7 +97,7 @@ else
 fi
 log "root: $ROOT  efi: ${ESP:-none}"
 wipefs -af "$ROOT" >/dev/null
-mkfs.ext4 -F -L LifeOS "$ROOT" >/dev/null
+mkfs.ext4 -F -L LifeOS "$ROOT" >/dev/null 2>&1
 mount "$ROOT" "$T"
 if [ -n "$ESP" ]; then mkdir -p "$T/boot/efi" && mount "$ESP" "$T/boot/efi"; fi
 
@@ -106,7 +106,7 @@ if [ "$LSIW_TIER" = standard ] || [ "$LSIW_TIER" = deep ]; then
   if [ "$LSIW_WHERE" = partition ] && [ -n "$LSIW_PART" ]; then
     umount "$LSIW_PART" 2>/dev/null || true
     wipefs -af "$LSIW_PART" >/dev/null
-    mkfs.ext4 -F -L LSIW "$LSIW_PART" >/dev/null
+    mkfs.ext4 -F -L LSIW "$LSIW_PART" >/dev/null 2>&1
     LSIW_MOUNT=/lsiw
     mkdir -p "$T/lsiw" && mount "$LSIW_PART" "$T/lsiw"
   fi
@@ -117,10 +117,14 @@ say 8 "Copying LifeOS to the disk"
 total=$(du -sxm "$SRC" 2>/dev/null | cut -f1 || echo 6000)
 rsync -aAXH --numeric-ids --info=progress2 --no-inc-recursive \
   --exclude=/proc/ --exclude=/sys/ --exclude=/dev/ --exclude=/run/ --exclude=/tmp/ --exclude=/mnt/ \
-  "$SRC"/ "$T"/ 2>&1 | tr '\r' '\n' | while read -r line; do
-    pct=$(echo "$line" | grep -o '[0-9]\+%' | head -n 1 | tr -d % || true)
-    [ -n "$pct" ] && say $((8 + pct * 64 / 100)) "Copying LifeOS to the disk ($pct%)"
-  done
+  "$SRC"/ "$T"/ 2>&1 | tr '\r' '\n' | { last=-1; while read -r line; do
+    if [[ $line =~ \ ([0-9]+)%\  ]] && [ "${BASH_REMATCH[1]}" != "$last" ]; then
+      last=${BASH_REMATCH[1]}
+      say $((8 + last * 64 / 100)) "Copying LifeOS to the disk ($last%)"
+    elif [[ $line != *%* && -n ${line// /} ]]; then
+      log "$line"
+    fi
+  done; }
 mkdir -p "$T"/{proc,sys,dev,run,tmp,mnt}
 chmod 1777 "$T/tmp"
 log "copied about ${total} MB"
@@ -154,6 +158,12 @@ cd /
 
 # ---------------------------------------------------------------- file systems and swap
 genfstab -U "$T" > "$T/etc/fstab"
+# genfstab falls back to device names when udev hasn't seen a new file system yet; device names change between boots
+for dev in "$ROOT" "$ESP" "${LSIW_PART:-}"; do
+  [ -n "$dev" ] || continue
+  uuid=$(blkid -p -s UUID -o value "$dev" 2>/dev/null || true)
+  [ -n "$uuid" ] && sed -i "s#^$dev[[:space:]]#UUID=$uuid\t#" "$T/etc/fstab"
+done
 if [ "${SWAP_GB:-0}" -gt 0 ]; then
   mkswap -U clear --size "${SWAP_GB}G" --file "$T/swapfile" >/dev/null 2>&1 || {
     dd if=/dev/zero of="$T/swapfile" bs=1M count=$((SWAP_GB * 1024)) status=none && chmod 600 "$T/swapfile" && mkswap "$T/swapfile" >/dev/null; }
@@ -200,15 +210,15 @@ lsiw_conf() {
     echo
     echo "[drive]"
     echo "c_drive = $1"
-    if [ "$1" = / ]; then
-      echo
-      echo "[variables]"
-      echo "WINDIR = /windows"
-      echo "CSIDL_PROGRAM_FILES = /Program Files"
-      echo "CSIDL_PROGRAM_FILESX86 = /Program Files (x86)"
-      echo "CSIDL_COMMON_APPDATA = /ProgramData"
-      echo "PROFILESFOLDER = /users"
-    fi
+    # the folders Windows expects right under C:\ live in the chosen C: (LSIW's own defaults are in the home folder)
+    local r=${1%/}
+    echo
+    echo "[variables]"
+    echo "WINDIR = $r/windows"
+    echo "CSIDL_PROGRAM_FILES = $r/Program Files"
+    echo "CSIDL_PROGRAM_FILESX86 = $r/Program Files (x86)"
+    echo "CSIDL_COMMON_APPDATA = $r/ProgramData"
+    echo "PROFILESFOLDER = $r/users"
   } > "$T/etc/lsiw/lsiw.conf"
 }
 WINFOLDERS=("windows" "Program Files" "Program Files (x86)" "ProgramData" "users")
@@ -262,7 +272,9 @@ say 92 "Installing the boot loader"
 sed -i 's/^#\?GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/; s/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="AI LifeOS"/; s/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=4/' "$T/etc/default/grub"
 grep -q '^GRUB_DISABLE_OS_PROBER' "$T/etc/default/grub" || echo 'GRUB_DISABLE_OS_PROBER=false' >> "$T/etc/default/grub"
 if [ "$UEFI" = 1 ]; then
-  arch-chroot "$T" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=LifeOS --recheck
+  # some firmware refuses new boot entries: then rely on the fallback path alone
+  arch-chroot "$T" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=LifeOS --recheck ||
+    arch-chroot "$T" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=LifeOS --no-nvram --removable
   # firmware that forgets its boot entries (and most VMs) start the fallback path; only claim it on our own disk
   [ "$MODE" = erase ] && arch-chroot "$T" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable >/dev/null 2>&1 || true
 else

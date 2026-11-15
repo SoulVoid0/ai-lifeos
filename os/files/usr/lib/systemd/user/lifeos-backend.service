@@ -5,6 +5,8 @@ After=graphical-session-pre.target
 [Service]
 ExecStart=/usr/bin/lifeos-backend
 Environment=LIFEOS_WEB_DIST=/usr/share/lifeos/web
+# Secrets go in the owner-only file in the data folder: the desktop keyring would pop up a "create a wallet" window
+Environment=LIFEOS_NO_KEYRING=1
 Restart=on-failure
 
 [Install]

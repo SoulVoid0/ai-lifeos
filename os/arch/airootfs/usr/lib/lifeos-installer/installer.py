@@ -31,7 +31,7 @@ LANGUAGES = [
     ("Polski", "pl_PL.UTF-8", "pl"), ("Português (Brasil)", "pt_BR.UTF-8", "br"), ("Português", "pt_PT.UTF-8", "pt"),
     ("Čeština", "cs_CZ.UTF-8", "cz"), ("Magyar", "hu_HU.UTF-8", "hu"), ("Türkçe", "tr_TR.UTF-8", "tr"),
     ("Русский", "ru_RU.UTF-8", "ru"), ("Українська", "uk_UA.UTF-8", "ua"), ("Ελληνικά", "el_GR.UTF-8", "gr"),
-    ("日本語", "ja_JP.UTF-8", "jp"), ("한국어", "ko_KR.UTF-8", "kr"), ("中文 (简体)", "zh_CN.UTF-8", "cn"),
+    ("Japanese", "ja_JP.UTF-8", "jp"), ("Korean", "ko_KR.UTF-8", "kr"), ("Chinese (Simplified)", "zh_CN.UTF-8", "cn"),
     ("العربية", "ar_SA.UTF-8", "ara"), ("हिन्दी", "hi_IN.UTF-8", "in"),
 ]
 # XKB layout -> Linux console keymap, where the names differ
@@ -148,7 +148,7 @@ class Installer(Gtk.ApplicationWindow):
 
     def __init__(self, app):
         super().__init__(application=app, title="Install AI LifeOS")
-        self.set_default_size(1100, 720)
+        self.set_default_size(1000, 640)
         self.locale, self.xkb = "en_US.UTF-8", "us"
         self.tz = "UTC"
         self.disk = None
@@ -199,7 +199,10 @@ class Installer(Gtk.ApplicationWindow):
         self.pages = [self.page_language(), self.page_keyboard(), self.page_timezone(), self.page_disk(),
                       self.page_account(), self.page_lsiw(), self.page_summary(), self.page_install()]
         for i, p in enumerate(self.pages):
-            self.stack.add_named(p, str(i))
+            # every page scrolls, so Back/Next stay on screen even at 1024x768
+            outer = Gtk.ScrolledWindow(vexpand=True, hexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+            outer.set_child(p)
+            self.stack.add_named(outer, str(i))
         self.show_step()
 
     # ------------------------------------------------------------ helpers
@@ -221,7 +224,7 @@ class Installer(Gtk.ApplicationWindow):
             if key == selected:
                 lb.select_row(r)
         lb.connect("row-selected", lambda _lb, r: r and on_select(r.key))
-        sw = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        sw = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER, min_content_height=220)
         sw.set_child(lb)
         return sw, lb
 

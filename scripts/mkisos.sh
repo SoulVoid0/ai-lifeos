@@ -21,6 +21,9 @@ build() {   # name label application overlay
   printf '\n[lifeos]\nSigLevel = Optional TrustAll\nServer = file:///repo\n' >> "$P/pacman.conf"
   cp -a os/arch/airootfs/. "$P/airootfs/"
   [ -n "$overlay" ] && cp -a "$overlay/." "$P/airootfs/"
+  # Our name in the boot menus and on the text console instead of Arch's install-medium wording
+  grep -rlZ "Arch Linux install medium" "$P/efiboot" "$P/grub" "$P/syslinux" | xargs -0 -r sed -i "s/Arch Linux install medium/$app/g" || true
+  printf '\nWelcome to %s.\nThe desktop starts on its own. To install, run: lifeos-install\n\n' "$app" > "$P/airootfs/etc/motd"
   sed -i "s/^iso_name=.*/iso_name=\"$name\"/; s/^iso_label=.*/iso_label=\"$label\"/; s/^iso_publisher=.*/iso_publisher=\"AI LifeOS\"/; s/^iso_application=.*/iso_application=\"$app\"/" "$P/profiledef.sh"
   sed -i "s/^iso_version=.*/iso_version=\"$VER\"/" "$P/profiledef.sh"
   sed -i 's|file_permissions=(|file_permissions=(\n  ["/etc/sudoers.d/10-live"]="0:0:440"\n  ["/usr/local/bin/lifeos-install"]="0:0:755"\n  ["/usr/lib/lifeos-installer/install.sh"]="0:0:755"\n  ["/usr/lib/lifeos-installer/installer.py"]="0:0:755"|' "$P/profiledef.sh"

@@ -12,3 +12,4 @@ gptfdisk
 dosfstools
 ntfs-3g
 arch-install-scripts
+kwallet-pam
