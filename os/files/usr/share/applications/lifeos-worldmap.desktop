@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=World Map
+GenericName=LifeOS explorable world
+Comment=OpenStreetMap map of the apartment's explorable world: see where you are, search places, teleport anywhere or back home
+Exec=/usr/bin/lifeos-worldmap
+Icon=applications-education-geography
+Terminal=false
+Categories=Education;Geography;
+Keywords=map;teleport;world;openstreetmap;earth;
+StartupNotify=false

@@ -13,7 +13,9 @@ KDE Plasma desktop.
 | Windows programs | The tablet on the master bed shows LSIW Control live; E picks it up and you use it in your hands (Esc or a click outside puts it down) |
 | TV | E on the remote (or R on the couch) switches Steam mode (Big Picture) and video mode. In Steam mode, E on the TV (Enter on the couch) sits you in front of it and Steam Big Picture runs on it; F11 switches between fullscreen and the TV (remembered), F12 or a click outside the TV gets up (Esc is Steam's Back). Steam keeps running while you use the PC |
 | Record | E on the camera in the hallway (or Shift+F5 anywhere): records everything on screen, PC and tablet included, with sound, to ~/Videos/LifeOS recordings |
-| Graphics quality | F2 (Low renders at half resolution and 30 fps; picked automatically on software rendering) |
+| Graphics quality | F2 cycles the presets (Low, Medium, High, Ultra); every part can be set on its own in Esc > Settings > Graphics |
+| Phone (explorable world) | Q: use the PC from anywhere, World map (teleport anywhere), teleport home |
+| TV fullscreen | F11 while using the TV (Steam Big Picture fills the screen); Steam keeps running while you're at the PC |
 | Use the PC | E at the desk: the apartment closes and Plasma is yours |
 | Back to the apartment | Shift+F4 on the Plasma desktop (or "Back to the apartment" in the menu) |
 
@@ -62,7 +64,29 @@ model by itself on first start (the full live ISO already carries it).
 (hallway, opposite the shop); "Update now" installs it over the current one in a terminal (pacman), keeping files,
 settings and crew, and the apartment restarts.
 
-**Settings** (Esc > Settings): graphics quality, mouse sensitivity and invert, mouse look (Auto, hidden and locked,
+**Explorable world** (Esc > Settings > World > "Explorable world (requires internet)", `apartment/src/outside.c`):
+the apartment building stands at the South Pole and its front door leads outside. The whole Earth is there, built
+from OpenStreetMap as you walk: roads with markings, bridges, buildings with their heights, colors and windows,
+parks, water, forests and single trees, railways, and underground: road and rail tunnels, subway lines and station
+halls (E at a subway entrance or tunnel mouth goes down; green signs lead back up). The sky follows the real sun where
+you are (polar day and night at the pole). Map data comes from the Overpass API (one request at a time, at least
+1.5 s apart, backing off on errors, rotating between public servers) and is cached in `~/.cache/lifeos/osm`, so places
+you've been work offline. Shift runs, Ctrl+Shift sprints (40 m/s). The door of the LifeOS building takes you home.
+
+**The phone** (Q): Use the PC (from anywhere; coming back puts you where you were), World map, Teleport home.
+
+**World Map** (`lifeos-worldmap`, icon on the KDE desktop and in the menu): OpenStreetMap in the browser with search
+(Nominatim, at most one search a second), famous places, "Where am I", "Teleport here" (click the map), "Teleport home"
+and "Back to the apartment". Without internet you can still teleport home or type `lat, lon`. Teleports go through
+`~/.local/state/lifeos/teleport`; the apartment writes where you are to `world-pos.json`.
+
+**Sound** (`apartment/src/sound.c`, made in code): footsteps on wood, tiles, snow, grass, asphalt and concrete, the
+front door, clicks and menu blips, the phone, teleports; ambience that follows where you are (room tone, the fridge,
+wind, traffic near big roads, birds by trees in daytime, water, tunnels). Volumes: master, effects, ambience, TV/media,
+and mute, in Esc > Settings > Sound.
+
+**Settings** (Esc > Settings): Graphics: preset, render scale, draw distance, detail, shadows, anti-aliasing, fog,
+vsync, FPS cap, smooth screens; Sound: the volumes above; World: explorable world on/off; Controls: mouse sensitivity and invert, mouse look (Auto, hidden and locked,
 hidden with edge turning for VMs, or right-drag), walking and turn speed, field of view, frame rate limit (30/45/60/none), "Save power when idle" (5 fps in the
 background, 10 fps after a minute without input unless the TV plays), screen resolution (through KDE), text and menu
 size, PC screen (live or picture), and every movement key can be rebound.

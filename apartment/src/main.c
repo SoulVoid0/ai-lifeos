@@ -36,19 +36,27 @@ static bool quality_saved;
 static struct { float x, z, yaw, pitch, eye; } P = {5, 8, 0, 0, 1.62f};
 
 /* ------------------------------------------------------------------ controls (rebindable in Settings) */
-enum { K_FWD, K_BACK, K_LEFT, K_RIGHT, K_RUN, K_USE, K_TURNL, K_TURNR, K_LOOKU, K_LOOKD, NKEYS };
+enum { K_FWD, K_BACK, K_LEFT, K_RIGHT, K_RUN, K_USE, K_TURNL, K_TURNR, K_LOOKU, K_LOOKD, K_PHONE, K_SPRINT, NKEYS };
 static const char *KEY_NAMES[NKEYS] = {"Walk forward", "Walk back", "Step left", "Step right", "Run (hold)",
-                                       "Interact / talk", "Turn left", "Turn right", "Look up", "Look down"};
-static const char *KEY_IDS[NKEYS] = {"fwd", "back", "left", "right", "run", "use", "turnl", "turnr", "looku", "lookd"};
+                                       "Interact / talk", "Turn left", "Turn right", "Look up", "Look down", "Phone",
+                                       "Sprint outside (hold, with Run)"};
+static const char *KEY_IDS[NKEYS] = {"fwd", "back", "left", "right", "run", "use", "turnl", "turnr", "looku", "lookd", "phone", "sprint"};
 static const SDL_Scancode KEY_DEF[NKEYS] = {SDL_SCANCODE_W, SDL_SCANCODE_S, SDL_SCANCODE_A, SDL_SCANCODE_D,
                                             SDL_SCANCODE_LSHIFT, SDL_SCANCODE_E, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT,
-                                            SDL_SCANCODE_PAGEUP, SDL_SCANCODE_PAGEDOWN};
+                                            SDL_SCANCODE_PAGEUP, SDL_SCANCODE_PAGEDOWN, SDL_SCANCODE_Q, SDL_SCANCODE_LCTRL};
 static SDL_Scancode KEYS[NKEYS] = {SDL_SCANCODE_W, SDL_SCANCODE_S, SDL_SCANCODE_A, SDL_SCANCODE_D,
                                    SDL_SCANCODE_LSHIFT, SDL_SCANCODE_E, SDL_SCANCODE_LEFT, SDL_SCANCODE_RIGHT,
-                                   SDL_SCANCODE_PAGEUP, SDL_SCANCODE_PAGEDOWN};
+                                   SDL_SCANCODE_PAGEUP, SDL_SCANCODE_PAGEDOWN, SDL_SCANCODE_Q, SDL_SCANCODE_LCTRL};
 static float walk_speed = 1.0f, turn_speed = 1.0f;
 static int fps_limit = 60;        /* 30, 45, 60, or 0 = no limit (vsync only) */
 static bool tv_full;              /* Steam on the TV: over the whole window instead of on the TV */
+/* graphics options (Settings): presets set them all */
+static const float RS[5] = {0.5f, 0.67f, 0.75f, 0.85f, 1.0f};
+static const int DD[6] = {250, 500, 800, 1200, 2000, 3000};
+static int gfx_preset = 2, rscale_i = 4, draw_i = 2, msaa, msaa_now;
+static bool fog_on = true, vsync = true, smooth_screens = true;
+static bool gfx_saved;            /* the options were saved (else the preset comes from the GPU) */
+static bool phone_trip;           /* went to the PC from the phone: come back to the same spot */
 static bool idle_save = true;     /* drop to a few frames per second when idle or in the background */
 static Uint32 last_input_ms;
 static bool has_focus = true;
@@ -65,7 +73,7 @@ static bool abs_pointer;          /* detected at start: the only pointer is an a
 static bool live_pc = true;       /* the PC monitor shows the live KDE desktop */
 
 enum { M_WALK, M_CHAT, M_MENU, M_SHOP, M_DECOR, M_VIDEOS, M_SETTINGS, M_SIT, M_LIE, M_PC_IN, M_PC_OUT, M_HELP, M_BOARD, M_QUIT,
-       M_TAB_IN, M_TAB_OUT, M_CREW, M_AGENT, M_TAB_HOLD, M_LETTER, M_MODELS, M_TV_USE };
+       M_TAB_IN, M_TAB_OUT, M_CREW, M_AGENT, M_TAB_HOLD, M_LETTER, M_MODELS, M_TV_USE, M_PHONE };
 bool g_recording;
 static time_t rec_since;
 static bool tab_live_anim;        /* the tablet opens in the apartment (held), not by leaving it */
@@ -137,7 +145,7 @@ static void write_file(const char *path, const char *data)
 
 static void save_state(bool at_pc)
 {
-    char path[600], buf[2048];
+    char path[600], buf[4096];
     snprintf(path, sizeof path, "%s/apartment.ini", state_dir());
     int n = snprintf(buf, sizeof buf,
              "x=%.3f\nz=%.3f\nyaw=%.3f\npitch=%.3f\nquality=%d\nsens=%.2f\ninvert=%d\nfov=%.0f\nvolume=%d\n"
@@ -145,8 +153,15 @@ static void save_state(bool at_pc)
              P.x, P.z, P.yaw, P.pitch, CFG.quality, CFG.sens, CFG.invert, CFG.fov, CFG.volume, CFG.show_fps,
              CFG.show_names, CFG.display, at_pc);
     n += snprintf(buf + n, sizeof buf - n, "walk=%.2f\nturn=%.2f\nlook=%d\nfps_limit=%d\nidle_save=%d\nui_scale=%.3f\nlive_pc=%d\ntv_mode=%d\ntv_full=%d\n", walk_speed, turn_speed, look_mode, fps_limit, idle_save, g_ui_scale, live_pc, tv_get_mode(), tv_full);
+    n += snprintf(buf + n, sizeof buf - n, "gfx_preset=%d\nrscale=%d\ndraw=%d\ndetail=%d\nshadows=%d\nfog=%d\nmsaa=%d\nvsync=%d\nsmooth_screens=%d\n"
+                  "vol_master=%d\nvol_effects=%d\nvol_ambient=%d\nmute=%d\nworld_on=%d\nphone_trip=%d\n",
+                  gfx_preset, rscale_i, draw_i, g_detail, g_shadows, fog_on, msaa, vsync, smooth_screens,
+                  g_vol_master, g_vol_effects, g_vol_ambient, g_mute, g_world_on, phone_trip);
     for (int i = 0; i < NKEYS && n < (int)sizeof buf - 40; i++) n += snprintf(buf + n, sizeof buf - n, "key_%s=%d\n", KEY_IDS[i], (int)KEYS[i]);
     write_file(path, buf);
+    snprintf(path, sizeof path, "%s/world.ini", state_dir());
+    if (out_active()) out_save(path, P.x, P.z, P.yaw);
+    else { FILE *f = fopen(path, "w"); if (f) { fprintf(f, "outside=0\nworld_on=%d\n", g_world_on); fclose(f); } }
 }
 
 static void load_state(void)
@@ -181,6 +196,21 @@ static void load_state(void)
         else if (!strcmp(k, "fps_limit")) fps_limit = atoi(v);
         else if (!strcmp(k, "idle_save")) idle_save = atoi(v);
         else if (!strcmp(k, "ui_scale")) g_ui_scale = clampf((float)atof(v), 0.75f, 2.0f);
+        else if (!strcmp(k, "gfx_preset")) { gfx_preset = (int)clampf((float)atoi(v), 0, 4); gfx_saved = true; }
+        else if (!strcmp(k, "rscale")) rscale_i = (int)clampf((float)atoi(v), 0, 4);
+        else if (!strcmp(k, "draw")) draw_i = (int)clampf((float)atoi(v), 0, 5);
+        else if (!strcmp(k, "detail")) g_detail = (int)clampf((float)atoi(v), 0, 3);
+        else if (!strcmp(k, "shadows")) g_shadows = atoi(v);
+        else if (!strcmp(k, "fog")) fog_on = atoi(v);
+        else if (!strcmp(k, "msaa")) msaa = atoi(v);
+        else if (!strcmp(k, "vsync")) vsync = atoi(v);
+        else if (!strcmp(k, "smooth_screens")) smooth_screens = atoi(v);
+        else if (!strcmp(k, "vol_master")) g_vol_master = atoi(v);
+        else if (!strcmp(k, "vol_effects")) g_vol_effects = atoi(v);
+        else if (!strcmp(k, "vol_ambient")) g_vol_ambient = atoi(v);
+        else if (!strcmp(k, "mute")) g_mute = atoi(v);
+        else if (!strcmp(k, "world_on")) g_world_on = atoi(v);
+        else if (!strcmp(k, "phone_trip")) phone_trip = atoi(v);
         else if (!strncmp(k, "key_", 4)) {
             for (int i = 0; i < NKEYS; i++)
                 if (!strcmp(k + 4, KEY_IDS[i])) { int sc = atoi(v); if (sc > 0 && sc < SDL_NUM_SCANCODES) KEYS[i] = (SDL_Scancode)sc; }
@@ -190,6 +220,8 @@ static void load_state(void)
     CFG.quality = CFG.quality < 0 ? 0 : CFG.quality > 2 ? 2 : CFG.quality;
     CFG.sens = clampf(CFG.sens, 0.2f, 4.0f);
     CFG.fov = clampf(CFG.fov, 55, 100);
+    g_draw_dist = DD[draw_i];
+    if (msaa != 0 && msaa != 2 && msaa != 4 && msaa != 8) msaa = 0;
     if (room_at(P.x, P.z) < 0) { P.x = 5; P.z = 8; }
 }
 
@@ -691,6 +723,11 @@ static void find_target(void)
     target.kind = I_NONE;
     if (mode != M_WALK) return;
     float fx = sinf(P.yaw), fz = cosf(P.yaw);
+    if (out_active()) {
+        int k = out_target(P.x, P.z, fx, fz, target.text, sizeof target.text);
+        target.kind = k == OT_HOME ? I_OUT_HOME : k == OT_DOWN ? I_OUT_DOWN : k == OT_UP ? I_OUT_UP : I_NONE;
+        return;
+    }
     float best = 1e9f;
     for (int i = 0; i < NAG; i++) {
         Agent *a = &AG[i];
@@ -709,6 +746,9 @@ static void find_target(void)
     for (int i = 0; i < W.ninters; i++) {
         Inter *in = &W.inters[i];
         if (in->kind == I_LETTER && !(letter_here() && letter_age() > 0.8f)) continue;
+        /* the letter lies on the floor by the front door: look down for it, straight ahead for the door */
+        if (in->kind == I_LETTER && P.pitch > -0.25f) continue;
+        if (in->kind == I_DOOR && letter_here() && P.pitch <= -0.25f) continue;
         float d = dist2(P.x, P.z, in->pos.x, in->pos.z);
         if (d > in->reach) continue;
         float dx = (in->pos.x - P.x) / (d + 1e-4f), dz = (in->pos.z - P.z) / (d + 1e-4f);
@@ -825,6 +865,131 @@ static void enter_pc(void)
     set_relative(false);
 }
 
+static bool is_panel(int m);
+
+/* --- the explorable world: out the front door, home again, teleports from the world map and the phone */
+static void door_inside(void)
+{
+    for (int i = 0; i < W.ninters; i++)
+        if (W.inters[i].kind == I_DOOR) { P.x = W.inters[i].pos.x - 1.3f; P.z = W.inters[i].pos.z; P.yaw = -PI_F / 2; P.pitch = 0; return; }
+    P.x = W.spawn.x; P.z = W.spawn.z;
+}
+
+static void come_home(bool teleported)
+{
+    if (!out_active()) return;
+    out_go_home();
+    door_inside();
+    snd_play(teleported ? S_TELEPORT : S_DOOR, 1);
+    toast(teleported ? "Back home in the apartment" : "Home again");
+    save_state(false);
+}
+
+static void go_outside(void)
+{
+    out_go_outside(&P.x, &P.z, &P.yaw);
+    P.pitch = 0;
+    snd_play(S_DOOR, 1);
+    toast("Outside at the South Pole. Shift runs, Ctrl+Shift sprints, Q is your phone. The door leads home.");
+    save_state(false);
+}
+
+static void world_toggle(void)
+{
+    g_world_on = !g_world_on;
+    if (!g_world_on && out_active()) come_home(true);
+    toast(g_world_on ? "Explorable world on: the front door (hallway) opens onto the South Pole. Map data © OpenStreetMap contributors."
+                     : "Explorable world off");
+}
+
+/* The world map program (and the phone) leave a request in teleport: "home", or "<lat> <lon>". */
+static void teleport_poll(void)
+{
+    char path[600];
+    snprintf(path, sizeof path, "%s/teleport", state_dir());
+    char *b = read_file(path);
+    if (!b) return;
+    unlink(path);
+    double lat, lon;
+    if (!strncmp(b, "home", 4)) { if (out_active()) come_home(true); }
+    else if (sscanf(b, "%lf %lf", &lat, &lon) == 2 && fabs(lat) <= 90 && fabs(lon) <= 360) {
+        if (!g_world_on) { g_world_on = true; toast("Explorable world turned on (Settings)"); }
+        if (mode != M_WALK && mode != M_PHONE) { if (is_panel(mode)) close_panel(); mode = M_WALK; set_relative(true); }
+        out_teleport(lat, lon, &P.x, &P.z);
+        P.pitch = 0;
+        snd_play(S_TELEPORT, 1);
+        toast("Teleported to %.5f, %.5f", lat, lon);
+        save_state(false);
+    }
+    free(b);
+}
+
+/* Where you are, for the world map program. */
+static void write_position(void)
+{
+    char path[600], tmp[620], buf[400];
+    snprintf(path, sizeof path, "%s/world-pos.json", state_dir());
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    double lat = -89.9975, lon = 0;
+    if (out_active()) out_where(P.x, P.z, &lat, &lon);
+    char place[160];
+    json_escape(place, sizeof place, out_active() ? out_place(P.x, P.z) : "");
+    snprintf(buf, sizeof buf, "{\"lat\":%.7f,\"lon\":%.7f,\"outside\":%s,\"underground\":%s,\"world_on\":%s,\"place\":%s}\n",
+             lat, lon, out_active() ? "true" : "false", out_underground() ? "true" : "false", g_world_on ? "true" : "false", place);
+    write_file(tmp, buf);
+    rename(tmp, path);
+}
+
+/* --- the phone: the PC from anywhere, the world map, and the way home */
+static int phone_sel;
+static float phone_t;
+enum { PH_PC, PH_MAP, PH_HOME, PH_AWAY, NPH };
+
+static void phone_open(void)
+{
+    if (mode != M_WALK) return;
+    mode = M_PHONE;
+    phone_sel = 0;
+    phone_t = 0;
+    set_relative(false);
+    snd_play(S_PHONE, 1);
+}
+
+static void phone_close(void) { mode = M_WALK; set_relative(true); snd_play(S_BLIP, 1); }
+
+static void spawn_detached(const char *const argv[])
+{
+    pid_t pid;
+    posix_spawnattr_t at;
+    posix_spawnattr_init(&at);
+    posix_spawnattr_setflags(&at, POSIX_SPAWN_SETSID);
+    if (posix_spawnp(&pid, argv[0], NULL, &at, (char *const *)argv, environ) != 0) toast("Couldn't start %s", argv[0]);
+    posix_spawnattr_destroy(&at);
+}
+
+static void phone_pick(int i)
+{
+    switch (i) {
+    case PH_MAP: {
+        const char *argv[] = {"/usr/bin/lifeos-worldmap", NULL};
+        spawn_detached(argv);
+    } /* fall through: to the PC, where the map opens */
+    case PH_PC:
+        snd_play(S_CLICK, 1);
+        phone_trip = true;
+        save_state(false);
+        chats_save();
+        exit_code = EXIT_TO_PC;
+        running = false;
+        break;
+    case PH_HOME:
+        if (out_active()) { come_home(true); mode = M_WALK; set_relative(true); }
+        else { toast("You're home already"); snd_play(S_ERROR, 1); }
+        break;
+    default: phone_close(); break;
+    }
+}
+
 /* Picking up the tablet on the bed: LSIW Control (Windows programs) on the tablet's own screen, in your hands. */
 static void enter_tablet(void)
 {
@@ -896,6 +1061,7 @@ static void camera_toggle(void)
 
 static void interact(void)
 {
+    if (target.kind != I_DOOR && target.kind != I_OUT_HOME) snd_play(S_CLICK, 0.8f);
     switch (target.kind) {
     case I_AGENT: {
         chat_agent = target.ref;
@@ -933,7 +1099,17 @@ static void interact(void)
     case I_TABLET: enter_tablet(); break;
     case I_REMOTE: remote_toggle(); break;
     case I_CAMERA: camera_toggle(); break;
-    case I_DOOR: toast("%s", letter_here() ? "Nobody's there. The letter is on the mat." : "Nobody's there. New LifeOS versions arrive here as letters."); break;
+    case I_DOOR:
+        if (g_world_on) { go_outside(); break; }
+        snd_play(S_DOOR, 0.6f);
+        toast("%s", letter_here() ? "Nobody's there. The letter is on the mat." : "Nobody's there. New LifeOS versions arrive here as letters. (Turn on Explorable world in Settings to go outside.)");
+        break;
+    case I_OUT_HOME: come_home(false); break;
+    case I_OUT_DOWN:
+        if (out_use(OT_DOWN, &P.x, &P.z)) { snd_play(S_STEP_CONCRETE, 1); toast("Underground. Stairs (green signs) lead back up."); }
+        else { snd_play(S_ERROR, 1); toast("The tunnels here aren't mapped yet"); }
+        break;
+    case I_OUT_UP: out_use(OT_UP, &P.x, &P.z); snd_play(S_STEP_CONCRETE, 1); break;
     case I_LETTER: menu_sel = 0; open_mode(M_LETTER); break;
     case I_BED:
         mode = M_LIE;
@@ -1137,7 +1313,8 @@ static void power(const char *what)
 static void menu_activate(int i)
 {
     switch (i) {
-    case 0: mode = back_mode = M_WALK; P.x = W.pc_stand.x; P.z = W.pc_stand.z; enter_pc(); break;
+    case 0: if (out_active()) { mode = back_mode = M_WALK; phone_pick(PH_PC); break; }
+        mode = back_mode = M_WALK; P.x = W.pc_stand.x; P.z = W.pc_stand.z; enter_pc(); break;
     case 1: from_menu = true; crew_open(); break;
     case 2: menu_sel = 0; from_menu = true; screen_modes_load(); mode = M_SETTINGS; break;
     case 3: menu_sel = 0; from_menu = true; mode = M_QUIT; break;
@@ -1283,64 +1460,95 @@ static void video_pick(int r)
 }
 
 /* --- settings */
-#define NSET (16 + NKEYS + 1)
-#define KROW 16   /* first key row */
+enum { ST_H_GFX, ST_PRESET, ST_RSCALE, ST_DRAW, ST_DETAIL, ST_SHADOWS, ST_FOG, ST_AA, ST_VSYNC, ST_FPSLIM, ST_IDLE, ST_SCREENS, ST_SHOWFPS,
+       ST_H_SND, ST_MASTER, ST_EFFECTS, ST_AMBIENT, ST_MEDIA, ST_MUTE,
+       ST_H_WORLD, ST_WORLD,
+       ST_H_CTRL, ST_SENS, ST_INVERT, ST_FOV, ST_LOOK, ST_WALK, ST_TURN,
+       ST_H_SCREEN, ST_NAMES, ST_DISPLAY, ST_RES, ST_UI, ST_LIVEPC,
+       ST_H_KEYS, ST_KEYS };
+#define KROW ST_KEYS
+#define NSET (ST_KEYS + NKEYS + 1)
 static void apply_quality(void);
+static bool st_header(int r) { return r == ST_H_GFX || r == ST_H_SND || r == ST_H_WORLD || r == ST_H_CTRL || r == ST_H_SCREEN || r == ST_H_KEYS; }
+
+/* Graphics presets set every option; changing one option makes it Custom. */
+static void apply_preset(int p)
+{
+    static const int rs[4] = {0, 2, 4, 4}, dd[4] = {0, 1, 2, 4}, det[4] = {0, 1, 2, 3}, aa[4] = {0, 0, 2, 4};
+    static const bool sh[4] = {false, true, true, true};
+    if (p < 0 || p > 3) return;
+    gfx_preset = p;
+    rscale_i = rs[p]; draw_i = dd[p]; g_detail = det[p]; g_shadows = sh[p]; fog_on = true; msaa = aa[p];
+    g_draw_dist = DD[draw_i];
+    smooth_screens = p > 0;
+}
+
+static void media_apply(void) { video_set_volume(g_mute ? 0 : CFG.volume * g_vol_master / 100); }
 
 static void setting_row(int r, float x, float y, float w, float rh, bool on)
 {
     (void)rh;
-    static const char *names[NSET] = {"Graphics quality", "Mouse sensitivity", "Invert mouse", "Field of view", "TV volume",
-                                      "Show names over the crew", "Show FPS", "Screen (display number)"};
-    char v[64];
-    static const char *q[3] = {"Low (fastest)", "Medium", "High"};
-    static const char *more[9] = {"Mouse look", "Walking speed", "Turn speed (keys)", "Frame rate limit", "Save power when idle",
-                                  "Screen resolution", "Text and menu size", "PC screen in the bedroom", "Reset keys to default"};
+    static const char *PRESETS[5] = {"Low (fastest)", "Medium", "High", "Ultra", "Custom"};
+    static const char *DETAIL[4] = {"Low", "Medium", "High", "Ultra"};
     static const char *looks[NLOOK] = {"Auto", "Hidden, locked in the middle", "Hidden; push an edge to keep turning (VMs)", "Hold right button + drag"};
-    if (r >= 8) {
-        const char *name;
-        if (r >= KROW && r < KROW + NKEYS) {
-            int k = r - KROW;
-            name = KEY_NAMES[k];
-            if (rebinding == k) snprintf(v, sizeof v, "Press a key (Esc cancels)");
-            else snprintf(v, sizeof v, "%s", SDL_GetScancodeName(KEYS[k]));
-        } else {
-            int m = r < KROW ? r - 8 : 8;
-            name = more[m];
-            if (m == 0) {
-                if (look_mode == LOOK_AUTO) snprintf(v, sizeof v, "Auto: %s", abs_pointer ? "edge turning (VM mouse found)" : "locked in the middle");
-                else snprintf(v, sizeof v, "%s", looks[look_mode]);
-            }
-            else if (m == 1) snprintf(v, sizeof v, "%.0f%%", walk_speed * 100);
-            else if (m == 2) snprintf(v, sizeof v, "%.0f%%", turn_speed * 100);
-            else if (m == 3) { if (fps_limit) snprintf(v, sizeof v, "%d fps", fps_limit); else snprintf(v, sizeof v, "No limit"); }
-            else if (m == 4) snprintf(v, sizeof v, "%s", idle_save ? "On" : "Off");
-            else if (m == 5) { if (scr_cur >= 0) snprintf(v, sizeof v, "%d x %d", scr_modes[scr_cur].w, scr_modes[scr_cur].h); else snprintf(v, sizeof v, "%d x %d (fixed)", WIN_W, WIN_H); }
-            else if (m == 6) snprintf(v, sizeof v, "%.0f%%", g_ui_scale * 100);
-            else if (m == 7) snprintf(v, sizeof v, "%s", !live_pc ? "Picture" : pccap_failed() ? "Live (not available here)" : "Live desktop and programs");
-            else v[0] = 0;
-        }
+    const char *name = "";
+    char v[96] = "";
+    if (st_header(r)) {
+        name = r == ST_H_GFX ? "GRAPHICS" : r == ST_H_SND ? "SOUND" : r == ST_H_WORLD ? "WORLD" : r == ST_H_CTRL ? "CONTROLS" : r == ST_H_SCREEN ? "SCREEN AND DISPLAY" : "KEYS";
+        text(F_SMALL, x, y + 4, name, C_ACCENT);
+        return;
+    }
+    if (r >= KROW && r < KROW + NKEYS) {
+        int k = r - KROW;
+        name = KEY_NAMES[k];
+        if (rebinding == k) snprintf(v, sizeof v, "Press a key (Esc cancels)");
+        else snprintf(v, sizeof v, "%s", SDL_GetScancodeName(KEYS[k]));
         text(F_BODY, x, y, name, on ? C_ACCENT : C_TXT);
-        char b[96];
-        if (r >= KROW && r < KROW + NKEYS) snprintf(b, sizeof b, "[ %s ]", v);
-        else if (v[0]) snprintf(b, sizeof b, "<  %s  >", v);
-        else snprintf(b, sizeof b, "Enter");
-        text(F_BODY, x + w * 0.55f, y, b, (rebinding >= 0 && rebinding == r - KROW) ? C_ACCENT : C_TXT);
+        char b[120];
+        snprintf(b, sizeof b, "[ %s ]", v);
+        text(F_BODY, x + w * 0.55f, y, b, rebinding == k ? C_ACCENT : C_TXT);
         return;
     }
     switch (r) {
-    case 0: snprintf(v, sizeof v, "%s", q[CFG.quality]); break;
-    case 1: snprintf(v, sizeof v, "%.1f", CFG.sens); break;
-    case 2: snprintf(v, sizeof v, "%s", CFG.invert ? "On" : "Off"); break;
-    case 3: snprintf(v, sizeof v, "%.0f", CFG.fov); break;
-    case 4: snprintf(v, sizeof v, "%d%%", CFG.volume); break;
-    case 5: snprintf(v, sizeof v, "%s", CFG.show_names ? "On" : "Off"); break;
-    case 6: snprintf(v, sizeof v, "%s", CFG.show_fps ? "On" : "Off"); break;
-    default: snprintf(v, sizeof v, "%d of %d", CFG.display + 1, SDL_GetNumVideoDisplays()); break;
+    case ST_PRESET: name = "Graphics preset (F2)"; snprintf(v, sizeof v, "%s", PRESETS[gfx_preset]); break;
+    case ST_RSCALE: name = "Render resolution"; snprintf(v, sizeof v, "%.0f%%", RS[rscale_i] * 100); break;
+    case ST_DRAW: name = "View distance (outside)"; snprintf(v, sizeof v, "%d m", DD[draw_i]); break;
+    case ST_DETAIL: name = "World detail (trees, windows, markings)"; snprintf(v, sizeof v, "%s", DETAIL[g_detail]); break;
+    case ST_SHADOWS: name = "Shadows"; snprintf(v, sizeof v, "%s", g_shadows ? "On" : "Off"); break;
+    case ST_FOG: name = "Distance haze"; snprintf(v, sizeof v, "%s", fog_on ? "On" : "Off"); break;
+    case ST_AA: name = "Anti-aliasing (smooth edges)"; if (msaa) snprintf(v, sizeof v, "%dx MSAA%s", msaa, msaa != msaa_now ? " (on restart)" : ""); else snprintf(v, sizeof v, "Off%s", msaa != msaa_now ? " (on restart)" : ""); break;
+    case ST_VSYNC: name = "V-Sync"; snprintf(v, sizeof v, "%s", vsync ? "On" : "Off"); break;
+    case ST_FPSLIM: name = "Frame rate limit"; if (fps_limit) snprintf(v, sizeof v, "%d fps", fps_limit); else snprintf(v, sizeof v, "No limit"); break;
+    case ST_IDLE: name = "Save power when idle"; snprintf(v, sizeof v, "%s", idle_save ? "On" : "Off"); break;
+    case ST_SCREENS: name = "Live screens (PC, tablet, TV)"; snprintf(v, sizeof v, "%s", smooth_screens ? "Smooth" : "Power saving"); break;
+    case ST_SHOWFPS: name = "Show FPS"; snprintf(v, sizeof v, "%s", CFG.show_fps ? "On" : "Off"); break;
+    case ST_MASTER: name = "Master volume"; snprintf(v, sizeof v, "%d%%", g_vol_master); break;
+    case ST_EFFECTS: name = "Effects (steps, doors, clicks)"; snprintf(v, sizeof v, "%d%%", g_vol_effects); break;
+    case ST_AMBIENT: name = "Ambience (rooms, wind, traffic, birds)"; snprintf(v, sizeof v, "%d%%", g_vol_ambient); break;
+    case ST_MEDIA: name = "Media (TV and videos)"; snprintf(v, sizeof v, "%d%%", CFG.volume); break;
+    case ST_MUTE: name = "Mute everything"; snprintf(v, sizeof v, "%s", g_mute ? "Muted" : "Off"); break;
+    case ST_WORLD: name = "Explorable world (requires internet)"; snprintf(v, sizeof v, "%s", g_world_on ? "On: the front door opens onto Earth" : "Off"); break;
+    case ST_SENS: name = "Mouse sensitivity"; snprintf(v, sizeof v, "%.1f", CFG.sens); break;
+    case ST_INVERT: name = "Invert mouse"; snprintf(v, sizeof v, "%s", CFG.invert ? "On" : "Off"); break;
+    case ST_FOV: name = "Field of view"; snprintf(v, sizeof v, "%.0f", CFG.fov); break;
+    case ST_LOOK: name = "Mouse look";
+        if (look_mode == LOOK_AUTO) snprintf(v, sizeof v, "Auto: %s", abs_pointer ? "edge turning (VM mouse found)" : "locked in the middle");
+        else snprintf(v, sizeof v, "%s", looks[look_mode]);
+        break;
+    case ST_WALK: name = "Walking speed"; snprintf(v, sizeof v, "%.0f%%", walk_speed * 100); break;
+    case ST_TURN: name = "Turn speed (keys)"; snprintf(v, sizeof v, "%.0f%%", turn_speed * 100); break;
+    case ST_NAMES: name = "Show names over the crew"; snprintf(v, sizeof v, "%s", CFG.show_names ? "On" : "Off"); break;
+    case ST_DISPLAY: name = "Screen (display number)"; snprintf(v, sizeof v, "%d of %d", CFG.display + 1, SDL_GetNumVideoDisplays()); break;
+    case ST_RES: name = "Screen resolution";
+        if (scr_cur >= 0) snprintf(v, sizeof v, "%d x %d", scr_modes[scr_cur].w, scr_modes[scr_cur].h); else snprintf(v, sizeof v, "%d x %d (fixed)", WIN_W, WIN_H);
+        break;
+    case ST_UI: name = "Text and menu size"; snprintf(v, sizeof v, "%.0f%%", g_ui_scale * 100); break;
+    case ST_LIVEPC: name = "PC screen in the bedroom"; snprintf(v, sizeof v, "%s", !live_pc ? "Picture" : pccap_failed() ? "Live (not available here)" : "Live desktop and programs"); break;
+    default: name = "Reset keys to default"; break;
     }
-    text(F_BODY, x, y, names[r], on ? C_ACCENT : C_TXT);
-    char b[80];
-    snprintf(b, sizeof b, "<  %s  >", v);
+    text(F_BODY, x, y, name, on ? C_ACCENT : C_TXT);
+    char b[140];
+    if (v[0]) snprintf(b, sizeof b, "<  %s  >", v); else snprintf(b, sizeof b, "Enter");
     text(F_BODY, x + w * 0.55f, y, b, C_TXT);
 }
 
@@ -1354,33 +1562,54 @@ static void move_to_display(void)
     SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
 }
 
+static void world_toggle(void);
+
 static void setting_change(int r, int dir)
 {
+    if (st_header(r)) return;
+    bool custom = false, world = false;
     switch (r) {
-    case 0: CFG.quality = (CFG.quality + dir + 3) % 3; apply_quality(); break;
-    case 1: CFG.sens = clampf(CFG.sens + dir * 0.1f, 0.2f, 4.0f); break;
-    case 2: CFG.invert = !CFG.invert; break;
-    case 3: CFG.fov = clampf(CFG.fov + dir * 5, 55, 100); break;
-    case 4: CFG.volume = (int)clampf((float)(CFG.volume + dir * 10), 0, 100); video_set_volume(CFG.volume); break;
-    case 5: CFG.show_names = !CFG.show_names; break;
-    case 6: CFG.show_fps = !CFG.show_fps; break;
-    case 7: { int n = SDL_GetNumVideoDisplays(); CFG.display = (CFG.display + dir + n) % (n ? n : 1); move_to_display(); break; }
-    case 8: look_mode = (look_mode + dir + NLOOK) % NLOOK; break;
-    case 9: walk_speed = clampf(walk_speed + dir * 0.1f, 0.5f, 2.0f); break;
-    case 10: turn_speed = clampf(turn_speed + dir * 0.1f, 0.3f, 3.0f); break;
-    case 11: { static const int L[4] = {30, 45, 60, 0}; int i = 0; while (i < 4 && L[i] != fps_limit) i++;
-        fps_limit = L[((i < 4 ? i : 2) + dir + 4) % 4]; break; }
-    case 12: idle_save = !idle_save; break;
-    case 13:
+    case ST_PRESET: apply_preset(((gfx_preset > 3 ? 2 : gfx_preset) + dir + 4) % 4); apply_quality(); world = true; break;
+    case ST_RSCALE: rscale_i = (rscale_i + dir + 5) % 5; custom = true; apply_quality(); break;
+    case ST_DRAW: draw_i = (draw_i + dir + 6) % 6; g_draw_dist = DD[draw_i]; custom = true; break;
+    case ST_DETAIL: g_detail = (g_detail + dir + 4) % 4; custom = true; world = true; break;
+    case ST_SHADOWS: g_shadows = !g_shadows; custom = true; world = true; break;
+    case ST_FOG: fog_on = !fog_on; custom = true; break;
+    case ST_AA: { static const int A[4] = {0, 2, 4, 8}; int i = 0; while (i < 4 && A[i] != msaa) i++; msaa = A[((i < 4 ? i : 0) + dir + 4) % 4]; custom = true;
+        toast("Anti-aliasing changes the next time the apartment starts"); break; }
+    case ST_VSYNC: vsync = !vsync; SDL_GL_SetSwapInterval(vsync ? 1 : 0); break;
+    case ST_FPSLIM: { static const int L[5] = {30, 45, 60, 120, 0}; int i = 0; while (i < 5 && L[i] != fps_limit) i++;
+        fps_limit = L[((i < 5 ? i : 2) + dir + 5) % 5]; break; }
+    case ST_IDLE: idle_save = !idle_save; break;
+    case ST_SCREENS: smooth_screens = !smooth_screens; custom = true; break;
+    case ST_SHOWFPS: CFG.show_fps = !CFG.show_fps; break;
+    case ST_MASTER: g_vol_master = (int)clampf((float)(g_vol_master + dir * 10), 0, 100); media_apply(); break;
+    case ST_EFFECTS: g_vol_effects = (int)clampf((float)(g_vol_effects + dir * 10), 0, 100); break;
+    case ST_AMBIENT: g_vol_ambient = (int)clampf((float)(g_vol_ambient + dir * 10), 0, 100); break;
+    case ST_MEDIA: CFG.volume = (int)clampf((float)(CFG.volume + dir * 10), 0, 100); media_apply(); break;
+    case ST_MUTE: g_mute = !g_mute; media_apply(); break;
+    case ST_WORLD: world_toggle(); break;
+    case ST_SENS: CFG.sens = clampf(CFG.sens + dir * 0.1f, 0.2f, 4.0f); break;
+    case ST_INVERT: CFG.invert = !CFG.invert; break;
+    case ST_FOV: CFG.fov = clampf(CFG.fov + dir * 5, 55, 100); break;
+    case ST_LOOK: look_mode = (look_mode + dir + NLOOK) % NLOOK; break;
+    case ST_WALK: walk_speed = clampf(walk_speed + dir * 0.1f, 0.5f, 2.0f); break;
+    case ST_TURN: turn_speed = clampf(turn_speed + dir * 0.1f, 0.3f, 3.0f); break;
+    case ST_NAMES: CFG.show_names = !CFG.show_names; break;
+    case ST_DISPLAY: { int n = SDL_GetNumVideoDisplays(); CFG.display = (CFG.display + dir + n) % (n ? n : 1); move_to_display(); break; }
+    case ST_RES:
         if (nscr > 1) { scr_cur = ((scr_cur < 0 ? 0 : scr_cur) + dir + nscr) % nscr; screen_mode_set(scr_cur); }
         else toast("This screen offers no other resolutions");
         break;
-    case 14: g_ui_scale = clampf(g_ui_scale + dir * 0.125f, 0.75f, 2.0f); gfx_resize(WIN_H); break;
-    case 15: live_pc = !live_pc; break;
+    case ST_UI: g_ui_scale = clampf(g_ui_scale + dir * 0.125f, 0.75f, 2.0f); gfx_resize(WIN_H); break;
+    case ST_LIVEPC: live_pc = !live_pc; break;
     default:
         if (r >= KROW && r < KROW + NKEYS) { rebinding = r - KROW; return; }
         memcpy(KEYS, KEY_DEF, sizeof KEYS); toast("Keys reset"); break;
     }
+    if (custom) { gfx_preset = 4; CFG.quality = rscale_i == 0 ? 0 : rscale_i < 4 ? 1 : 2; apply_quality(); }
+    if (world) out_settings_changed();
+    snd_play(S_BLIP, 1);
     save_state(false);
 }
 
@@ -1848,7 +2077,7 @@ static void agent_row(int r, float x, float y, float w, float rh, bool on)
 static GLuint scale_tex;
 static int scale_tw, scale_th;
 
-static float render_scale(void) { return CFG.quality == 0 ? 0.5f : CFG.quality == 1 ? 0.75f : 1.0f; }
+static float render_scale(void) { return RS[rscale_i]; }
 
 static void apply_quality(void)
 {
@@ -1952,6 +2181,76 @@ static void draw_chat(void)
     text(F_SMALL, x + 20, y + h - foot, "Enter send  ·  Tab switch Chat/Task  ·  Wheel scroll  ·  Esc close", C_DIM);
 }
 
+/* The phone, held up in front of you: the live PC picture and a few big buttons. */
+static float ph_x, ph_y, ph_w, ph_h, ph_row0, ph_rowh;
+static void draw_phone(float dt)
+{
+    phone_t = fminf(phone_t + dt * 4, 1);
+    float k = 1 - (1 - phone_t) * (1 - phone_t);
+    ph_h = WIN_H * 0.78f; ph_w = ph_h * 0.5f;
+    ph_x = WIN_W - ph_w - WIN_W * 0.08f;
+    ph_y = WIN_H - (ph_h + WIN_H * 0.08f) * k;
+    rect(0, 0, (float)WIN_W, (float)WIN_H, rgba(0, 0, 0, (int)(90 * k)));
+    float b = ph_w * 0.05f;
+    rect(ph_x - b, ph_y - b * 2, ph_w + 2 * b, ph_h + 4 * b, rgb(18, 18, 22));
+    rect(ph_x, ph_y, ph_w, ph_h, rgb(14, 20, 34));
+    rect(ph_x + ph_w / 2 - b, ph_y - b * 1.3f, 2 * b, b * 0.5f, rgb(40, 40, 46));
+    time_t now = time(NULL);
+    struct tm lt;
+    localtime_r(&now, &lt);
+    char clk[16];
+    strftime(clk, sizeof clk, "%H:%M", &lt);
+    text(F_SMALL, ph_x + 12, ph_y + 8, clk, C_TXT);
+    text(F_SMALL, ph_x + ph_w - text_w(F_SMALL, "LifeOS") - 12, ph_y + 8, "LifeOS", C_DIM);
+    /* the PC's screen, live when it can be */
+    float sx = ph_x + 12, sy = ph_y + 14 + text_h(F_SMALL), sw = ph_w - 24, sh = sw * 0.6f;
+    float u, v;
+    GLuint tex = pccap_texture(&u, &v);
+    if (tex) {
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glColor4f(1, 1, 1, 1);
+        glBegin(GL_QUADS);
+        glTexCoord2f(0, 0); glVertex2f(sx, sy);
+        glTexCoord2f(u, 0); glVertex2f(sx + sw, sy);
+        glTexCoord2f(u, v); glVertex2f(sx + sw, sy + sh);
+        glTexCoord2f(0, v); glVertex2f(sx, sy + sh);
+        glEnd();
+        glDisable(GL_TEXTURE_2D);
+    } else {
+        rect(sx, sy, sw, sh, rgb(30, 50, 90));
+        text_center(F_BODY, sx + sw / 2, sy + sh / 2 - text_h(F_BODY) / 2.0f, "Your PC", C_TXT);
+    }
+    float y = sy + sh + 14;
+    if (out_active()) {
+        double lat, lon;
+        out_where(P.x, P.z, &lat, &lon);
+        char loc[120];
+        snprintf(loc, sizeof loc, "%.4f, %.4f", lat, lon);
+        text_center(F_SMALL, ph_x + ph_w / 2, y, loc, C_DIM);
+    } else text_center(F_SMALL, ph_x + ph_w / 2, y, "At home", C_DIM);
+    y += text_h(F_SMALL) + 12;
+    static const char *labels[NPH] = {"Use the PC", "World map: teleport anywhere", "Teleport home", "Put the phone away"};
+    ph_row0 = y; ph_rowh = text_h(F_BODY) * 2.4f;
+    for (int i = 0; i < NPH; i++) {
+        float ry = y + i * ph_rowh;
+        bool dim = i == PH_HOME && !out_active();
+        rect(ph_x + 12, ry, ph_w - 24, ph_rowh - 8, i == phone_sel ? rgba(120, 190, 255, 90) : rgba(255, 255, 255, 18));
+        text(F_BODY, ph_x + 24, ry + (ph_rowh - 8 - text_h(F_BODY)) / 2, labels[i], dim ? C_DIM : C_TXT);
+    }
+    text_center(F_SMALL, ph_x + ph_w / 2, ph_y + ph_h - text_h(F_SMALL) - 10, "Up/Down, Enter · Q or Esc puts it away", C_DIM);
+}
+
+static int phone_row_at(int ex, int ey)
+{
+    int ww, wh;
+    SDL_GetWindowSize(win, &ww, &wh);
+    float mx = ex * (float)WIN_W / (ww ? ww : 1), my = ey * (float)WIN_H / (wh ? wh : 1);
+    if (mx < ph_x || mx > ph_x + ph_w || my < ph_row0) return -1;
+    int r = (int)((my - ph_row0) / ph_rowh);
+    return r >= 0 && r < NPH ? r : -1;
+}
+
 static void draw_hud(float fps)
 {
     time_t now = time(NULL);
@@ -1961,11 +2260,26 @@ static void draw_hud(float fps)
     strftime(tbuf, sizeof tbuf, "%H:%M", &lt);
     strftime(dbuf, sizeof dbuf, "%A %d %B", &lt);
     int cw = text_w(F_BODY, dbuf) > text_w(F_HUGE, tbuf) ? text_w(F_BODY, dbuf) : text_w(F_HUGE, tbuf);
+    char where[200] = "";
+    if (out_active()) {
+        double lat, lon;
+        out_where(P.x, P.z, &lat, &lon);
+        const char *pl = out_place(P.x, P.z);
+        snprintf(where, sizeof where, "%s%s%s%.5f, %.5f", out_underground() ? "Underground · " : "", pl, pl[0] ? " · " : "", lat, lon);
+        if (text_w(F_SMALL, where) + 4 > cw) cw = text_w(F_SMALL, where) + 4;
+    }
     rect(14, 10, cw + 30.0f, text_h(F_HUGE) + text_h(F_BODY) + text_h(F_SMALL) + 16.0f, rgba(10, 12, 18, 150));
     text(F_HUGE, 24, 14, tbuf, rgba(255, 255, 255, 230));
     text(F_BODY, 28, 14 + text_h(F_HUGE), dbuf, rgba(220, 225, 235, 220));
     int room = room_at(P.x, P.z);
-    if (room >= 0) text(F_SMALL, 28, 18 + text_h(F_HUGE) + text_h(F_BODY), ROOM_NAMES[room], rgba(180, 190, 210, 220));
+    if (out_active()) {
+        text(F_SMALL, 28, 18 + text_h(F_HUGE) + text_h(F_BODY), where, rgba(180, 190, 210, 220));
+        bool offline;
+        int loading = out_loading(&offline);
+        const char *st = offline ? "Can't reach the OpenStreetMap server (internet?). Retrying..." : loading ? "Loading the map around you..." : NULL;
+        if (st) text_center(F_SMALL, WIN_W / 2.0f, 18, st, rgba(255, 230, 160, 230));
+        text(F_SMALL, 16, WIN_H - text_h(F_SMALL) - 6.0f, "Map data © OpenStreetMap contributors", rgba(230, 230, 235, 150));
+    } else if (room >= 0) text(F_SMALL, 28, 18 + text_h(F_HUGE) + text_h(F_BODY), ROOM_NAMES[room], rgba(180, 190, 210, 220));
     char pts[48];
     snprintf(pts, sizeof pts, "%d pts", SHOP.balance);
     int pw = text_w(F_TITLE, pts);
@@ -2152,7 +2466,7 @@ static void draw_panels(void)
         panel(x, y, w, h, "How the apartment works");
         const char *help =
             "WASD or Up/Down: walk  ·  Shift: run  ·  Mouse, Left/Right arrows or right-drag: look  ·  PgUp/PgDn: look up/down\n"
-            "(Change keys, mouse speed and look mode in Esc > Settings)\n"
+            "(Change keys, mouse speed, look mode, graphics and sound in Esc > Settings)\n"
             "E: talk to a crew member, sit on the couch, use the TV or the remote, lie in bed, use the PC, the tablet or the camera\n"
             "Esc: menu (PC, crew, settings, quit)  ·  K: AI crew  ·  P: shop  ·  C: decorate  ·  F1: this help  ·  F2: graphics quality\n\n"
             "The crew lives here. They follow the real clock: they sleep in the AI bedrooms at night, eat in the kitchen "
@@ -2166,7 +2480,10 @@ static void draw_panels(void)
             "(Enter on the couch) plays; exit Big Picture or press Shift+F4 to come back.\n\n"
             "The camera in the hallway records everything on the screen (the apartment, the PC, the tablet, games) with sound, "
             "into Videos > LifeOS recordings. Shift+F5 starts or stops it anywhere.\n\n"
-            "When a new LifeOS is out, a letter comes through the front door (east end of the hallway): read it to update.\n\n"
+            "When a new LifeOS is out, a letter comes through the front door (east end of the hallway): look down at it to read it and update.\n\n"
+            "Explorable world (Esc > Settings > World, needs internet): the front door leads out to the South Pole and the whole "
+            "Earth from OpenStreetMap: streets, buildings, trees, bridges, tunnels and subways (E at the stairs). Q is your phone: "
+            "use the PC from anywhere, open the World map to teleport anywhere, or teleport home. Ctrl+Shift sprints.\n\n"
             "Add, remove and change the crew, and download AI models, in the AI crew panel (K, or Esc > AI crew).\n\n"
             "Got a second monitor? It shows your tasks, the crew and the time; arrange those widgets like any Plasma widget.";
         int hf = text_wrap_h(F_BODY, (int)lw, help) > lh ? F_SMALL : F_BODY;
@@ -2201,6 +2518,7 @@ static int list_len(void)
 
 static void list_activate(int i)
 {
+    snd_play(S_CLICK, 0.7f);
     switch (mode) {
     case M_MENU: menu_activate(i); break;
     case M_QUIT: quit_activate(i); break;
@@ -2264,6 +2582,14 @@ static void handle_key(SDL_Keysym k)
     SDL_Keycode key = k.sym;
     if (in_transition(mode)) return;
     if (mode == M_TAB_HOLD) { if (key == SDLK_ESCAPE) tablet_down(); else nest_key(NEST_TAB, key, k.mod); return; }
+    if (mode == M_PHONE) {
+        if (key == SDLK_ESCAPE || k.scancode == KEYS[K_PHONE]) phone_close();
+        else if (key == SDLK_UP || key == SDLK_w) { phone_sel = (phone_sel + NPH - 1) % NPH; snd_play(S_BLIP, 1); }
+        else if (key == SDLK_DOWN || key == SDLK_s) { phone_sel = (phone_sel + 1) % NPH; snd_play(S_BLIP, 1); }
+        else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE || k.scancode == KEYS[K_USE]) phone_pick(phone_sel);
+        else if (key >= SDLK_1 && key < SDLK_1 + NPH) phone_pick(key - SDLK_1);
+        return;
+    }
     if (mode == M_TV_USE) {
         if (key == SDLK_F12 || (key == SDLK_ESCAPE && (k.mod & KMOD_SHIFT))) tv_leave();
         else if (key == SDLK_F11) {
@@ -2330,8 +2656,8 @@ static void handle_key(SDL_Keysym k)
             else if (from_menu && (mode == M_SETTINGS || mode == M_QUIT || mode == M_CREW)) { menu_sel = mode == M_CREW ? 1 : mode == M_SETTINGS ? 2 : 3; mode = M_MENU; from_menu = false; }
             else { from_menu = false; close_panel(); }
         }
-        else if (key == SDLK_UP || key == SDLK_w) { if (n) menu_sel = (menu_sel - 1 + n) % n; del_armed = -1; }
-        else if (key == SDLK_DOWN || key == SDLK_s) { if (n) menu_sel = (menu_sel + 1) % n; del_armed = -1; }
+        else if (key == SDLK_UP || key == SDLK_w) { if (n) menu_sel = (menu_sel - 1 + n) % n; del_armed = -1; snd_play(S_BLIP, 0.7f); }
+        else if (key == SDLK_DOWN || key == SDLK_s) { if (n) menu_sel = (menu_sel + 1) % n; del_armed = -1; snd_play(S_BLIP, 0.7f); }
         else if (key == SDLK_LEFT || key == SDLK_a) list_side(-1);
         else if (key == SDLK_RIGHT || key == SDLK_d) list_side(1);
         else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) { if (n) list_activate(menu_sel); }
@@ -2340,6 +2666,7 @@ static void handle_key(SDL_Keysym k)
         return;
     }
     /* walking, sitting, lying */
+    if (k.scancode == KEYS[K_PHONE] && mode == M_WALK) { phone_open(); return; }
     if (k.scancode == KEYS[K_USE]) {
         if (mode == M_SIT || mode == M_LIE) stand_up();
         else if (target.kind != I_NONE) interact();
@@ -2352,8 +2679,9 @@ static void handle_key(SDL_Keysym k)
     case SDLK_F1: open_mode(M_HELP); break;
     case SDLK_k: open_mode(M_CREW); from_menu = false; crew_open(); break;
     case SDLK_t: if (mode == M_LIE) enter_tablet(); break;
-    case SDLK_F2: CFG.quality = (CFG.quality + 1) % 3; apply_quality(); save_state(false);
-        toast("Graphics: %s", CFG.quality == 0 ? "Low" : CFG.quality == 1 ? "Medium" : "High"); break;
+    case SDLK_F2: apply_preset(gfx_preset >= 3 ? 0 : gfx_preset + 1); CFG.quality = gfx_preset == 0 ? 0 : gfx_preset == 1 ? 1 : 2;
+        apply_quality(); out_settings_changed(); save_state(false);
+        toast("Graphics: %s", gfx_preset == 0 ? "Low" : gfx_preset == 1 ? "Medium" : gfx_preset == 2 ? "High" : "Ultra"); break;
     case SDLK_v: if (mode == M_SIT || dist2(P.x, P.z, 5, 13) < 5) { if (tv_get_mode() == TV_STEAM) remote_toggle(); nvideos = video_scan(videos, MAX_VIDEOS); menu_sel = 0; open_mode(M_VIDEOS); } break;
     case SDLK_SPACE: if (mode == M_SIT) video_pause_toggle(); break;
     case SDLK_r: if (mode == M_SIT) remote_toggle(); break;
@@ -2391,7 +2719,11 @@ static void update_player(float dt)
         if (ks[KEYS[K_TURNR]]) P.yaw -= 2.2f * turn_speed * dt;
         if (ks[KEYS[K_LOOKU]]) P.pitch = clampf(P.pitch + 1.4f * turn_speed * dt, -1.45f, 1.45f);
         if (ks[KEYS[K_LOOKD]]) P.pitch = clampf(P.pitch - 1.4f * turn_speed * dt, -1.45f, 1.45f);
-        float sp = (ks[KEYS[K_RUN]] || (KEYS[K_RUN] == SDL_SCANCODE_LSHIFT && ks[SDL_SCANCODE_RSHIFT]) ? 4.2f : 2.4f) * walk_speed;
+        bool run = ks[KEYS[K_RUN]] || (KEYS[K_RUN] == SDL_SCANCODE_LSHIFT && ks[SDL_SCANCODE_RSHIFT]);
+        float sp = (run ? 4.2f : 2.4f) * walk_speed;
+        bool out = out_active();
+        /* outside the Earth is big: running is faster, and Ctrl+Shift sprints (like a car) */
+        if (out && run) sp = ks[KEYS[K_SPRINT]] || (KEYS[K_SPRINT] == SDL_SCANCODE_LCTRL && ks[SDL_SCANCODE_RCTRL]) ? 40 * walk_speed : 7 * walk_speed;
         float len = sqrtf(f * f + s * s);
         if (len > 0) {
             f /= len; s /= len;
@@ -2399,8 +2731,19 @@ static void update_player(float dt)
             float dx = (fx * f + rx * s) * sp * dt, dz = (fz * f + rz * s) * sp * dt;
             /* small steps so fast movement never tunnels through a wall */
             int steps = (int)(sqrtf(dx * dx + dz * dz) / 0.1f) + 1;
+            static float stride;
+            stride += sqrtf(dx * dx + dz * dz);
+            if (stride > (sp > 5 ? 1.25f : 0.8f)) {
+                stride = 0;
+                int snd = S_STEP_WOOD;
+                if (out) snd = out_underground() ? S_STEP_CONCRETE : out_polar() ? S_STEP_SNOW : out_place(P.x, P.z)[0] ? S_STEP_ROAD : S_STEP_GRASS;
+                else { int rm = room_at(P.x, P.z); if (rm == R_BATH || rm == R_KITCHEN) snd = S_STEP_TILE; }
+                if (sp < 20) snd_play(snd, run ? 0.9f : 0.6f);
+            }
+            if (out) steps = (int)(sqrtf(dx * dx + dz * dz) / 0.25f) + 1;
             for (int i = 0; i < steps; i++) {
                 P.x += dx / steps; P.z += dz / steps;
+                if (out) { out_collide(&P.x, &P.z, 0.3f); continue; }
                 collide_circle(&P.x, &P.z, 0.28f);
                 for (int a = 0; a < NAG; a++) {
                     float d = dist2(P.x, P.z, AG[a].x, AG[a].z);
@@ -2574,10 +2917,16 @@ int main(int argc, char **argv)
     fprintf(stderr, "apartment: pointer: %s\n", abs_pointer ? "absolute (virtual machine): edge turning" : "relative: locked in the middle");
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    if (msaa) { SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1); SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, msaa); }
     Uint32 flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
     if (!windowed) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     int disp = CFG.display < SDL_GetNumVideoDisplays() ? CFG.display : 0;
     win = SDL_CreateWindow("LifeOS Apartment", SDL_WINDOWPOS_CENTERED_DISPLAY(disp), SDL_WINDOWPOS_CENTERED_DISPLAY(disp), 1280, 720, flags);
+    if (!win && msaa) {
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0); SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
+        win = SDL_CreateWindow("LifeOS Apartment", SDL_WINDOWPOS_CENTERED_DISPLAY(disp), SDL_WINDOWPOS_CENTERED_DISPLAY(disp), 1280, 720, flags);
+        if (win) msaa = 0;
+    }
     if (!win) {
         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
         win = SDL_CreateWindow("LifeOS Apartment", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720, flags);
@@ -2588,13 +2937,18 @@ int main(int argc, char **argv)
     if (!windowed) SDL_SetWindowKeyboardGrab(win, SDL_TRUE);
     SDL_GLContext gl = SDL_GL_CreateContext(win);
     if (!gl) { fprintf(stderr, "apartment: OpenGL: %s\n", SDL_GetError()); return 1; }
-    SDL_GL_SetSwapInterval(1);
+    SDL_GL_SetSwapInterval(vsync ? 1 : 0);
+    msaa_now = msaa;
+    if (msaa) glEnable(GL_MULTISAMPLE);
     SDL_GL_GetDrawableSize(win, &WIN_W, &WIN_H);
     const char *renderer = (const char *)glGetString(GL_RENDERER);
     fprintf(stderr, "apartment: OpenGL %s on %s\n", glGetString(GL_VERSION), renderer ? renderer : "?");
     bool software = renderer && (strstr(renderer, "llvmpipe") || strstr(renderer, "softpipe") || strstr(renderer, "Software") ||
                                  strstr(renderer, "SVGA3D") || strstr(renderer, "VirtualBox"));
     if (!quality_saved) CFG.quality = software ? 0 : 2;
+    if (!gfx_saved) { apply_preset(software ? 0 : CFG.quality == 0 ? 0 : CFG.quality == 1 ? 1 : 2); }
+    else if (gfx_preset < 4) { int keep = msaa; apply_preset(gfx_preset); msaa = keep; }
+    g_draw_dist = DD[draw_i];
     gfx_init(WIN_H);
     net_init();
     shop_defaults();
@@ -2605,14 +2959,27 @@ int main(int argc, char **argv)
     npc_default_roster();
     npc_place_all();
     chats_load();
-    video_set_volume(CFG.volume);
+    media_apply();
     video_set_quality(CFG.quality);
+    snd_init();
     SDL_StopTextInput();
+    bool phoned = phone_trip;
+    if (phone_trip) { phone_trip = false; from_pc = false; }   /* back from the PC to where the phone was used */
+    {
+        char wp[600];
+        snprintf(wp, sizeof wp, "%s/world.ini", state_dir());
+        float yaw = P.yaw;
+        if (g_world_on && out_load(wp, &P.x, &P.z, &yaw) && !from_pc && !from_tablet) P.yaw = yaw;
+        else if (out_active() && (from_pc || from_tablet)) out_go_home();
+    }
     if (from_pc) { mode = M_PC_OUT; anim_t = 0; P.x = W.pc_stand.x; P.z = W.pc_stand.z; }
     else if (from_tablet) { mode = M_TAB_OUT; anim_t = 0; P.x = 3.2f; P.z = 1.86f; }
     else set_relative(true);
-    if (!from_pc && !from_tablet && room_at(P.x, P.z) < 0) { P.x = W.spawn.x; P.z = W.spawn.z; }
-    toast("Welcome home. Walk up to a crew member and press E to talk. F1 for help.");
+    if (!from_pc && !from_tablet && !out_active() && room_at(P.x, P.z) < 0) { P.x = W.spawn.x; P.z = W.spawn.z; }
+    teleport_poll();
+    if (phoned) save_state(false);
+    if (out_active()) toast("Out in the world. Q: phone (PC, world map, teleport home). Shift runs, Ctrl+Shift sprints.");
+    else toast("Welcome home. Walk up to a crew member and press E to talk. F1 for help.");
 
     Uint64 freq = SDL_GetPerformanceFrequency(), last = SDL_GetPerformanceCounter();
     float fps = 60, fps_acc = 0; int fps_n = 0;
@@ -2682,7 +3049,10 @@ int main(int argc, char **argv)
                     dragging = true;
                     drag_x = ev.button.x; drag_y = ev.button.y;
                 } else if (ev.button.button == SDL_BUTTON_LEFT) {
-                    if (is_panel(mode)) {
+                    if (mode == M_PHONE) {
+                        int r = phone_row_at(ev.button.x, ev.button.y);
+                        if (r >= 0) { phone_sel = r; phone_pick(r); }
+                    } else if (is_panel(mode)) {
                         int ww, wh; SDL_GetWindowSize(win, &ww, &wh);
                         handle_click(ev.button.x * WIN_W / (ww ? ww : 1), ev.button.y * WIN_H / (wh ? wh : 1));
                     } else if (mode == M_WALK) {
@@ -2730,8 +3100,30 @@ int main(int argc, char **argv)
         }
         video_poll();
         update_player(dt);
+        if (out_active()) {
+            if (out_reorigin(&P.x, &P.z)) {}
+            out_update(dt, P.x, P.z);
+        }
+        {
+            static float tp_t, pos_t;
+            if ((tp_t -= dt) <= 0) { tp_t = 0.5f; teleport_poll(); }
+            if ((pos_t -= dt) <= 0) { pos_t = 2; write_position(); }
+            /* ambience follows where you are */
+            bool o = out_active(), u = out_underground();
+            int rm = o ? -1 : room_at(P.x, P.z);
+            float tr = 0, trees = 0, water = 0;
+            if (o && !u) out_env(P.x, P.z, &tr, &trees, &water);
+            bool day = NOW_HOURS > 5.5f && NOW_HOURS < 20.5f;
+            snd_ambience(A_ROOM, o ? 0 : 0.5f);
+            snd_ambience(A_HUM, rm == R_KITCHEN ? 0.8f : rm >= 0 ? 0.12f : 0);
+            snd_ambience(A_WIND, o && !u ? (out_polar() ? 0.9f : 0.25f + 0.3f * (1 - tr)) : rm >= 0 ? 0.04f : 0);
+            snd_ambience(A_TRAFFIC, o && !u ? tr : rm >= 0 ? 0.05f : 0);
+            snd_ambience(A_BIRDS, o && !u && day ? trees : 0);
+            snd_ambience(A_WATER, o && !u ? water : 0);
+            snd_ambience(A_TUNNEL, u ? 0.8f : 0);
+        }
         edge_turn(dt);
-        pccap_set(live_pc && has_focus && room_at(P.x, P.z) == R_MASTER && mode != M_PC_IN, CFG.quality == 0);
+        pccap_set(live_pc && has_focus && ((room_at(P.x, P.z) == R_MASTER && !out_active()) || mode == M_PHONE) && mode != M_PC_IN, !smooth_screens);
         npc_update(dt, P.x, P.z);
         find_target();
         for (int i = 0; i < 5; i++) if (toasts[i].t > 0) toasts[i].t -= dt;
@@ -2747,18 +3139,55 @@ int main(int argc, char **argv)
         if (vh < 90) vh = 90;
         float skyk;
         Col sky = sky_color(&skyk);
+        bool outdoors = out_active() && !in_transition(mode);
+        if (outdoors) sky = out_sky(&skyk);
+        if (outdoors && out_underground()) { sky = rgb(18, 18, 22); eye.y += -8.0f; }
         glViewport(0, 0, vw, vh);
         glClearColor(sky.r / 255.f, sky.g / 255.f, sky.b / 255.f, 1);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glEnable(GL_DEPTH_TEST);
-        gfx_perspective(CFG.fov, (float)WIN_W / WIN_H, 0.05f, 60);
-        gfx_camera(eye, yaw, pitch);
-        glEnable(GL_LIGHTING);
-        gfx_brightness(mode == M_LIE && NOW_HOURS > 21 ? 0.7f : skyk);
-        world_draw_static();
-        npc_draw(T);
-        world_draw_dynamic(T, skyk);
-        glDisable(GL_LIGHTING);
+        if (outdoors) {
+            float far = out_underground() ? 400.0f : (float)g_draw_dist + 60;
+            gfx_perspective(CFG.fov, (float)WIN_W / WIN_H, 0.25f, far);
+            gfx_camera(eye, yaw, pitch);
+            if (fog_on || out_underground()) {
+                GLfloat fc[4] = {sky.r / 255.f, sky.g / 255.f, sky.b / 255.f, 1};
+                glFogi(GL_FOG_MODE, GL_LINEAR);
+                glFogfv(GL_FOG_COLOR, fc);
+                glFogf(GL_FOG_START, out_underground() ? 30 : far * 0.45f);
+                glFogf(GL_FOG_END, out_underground() ? 160 : far * 0.98f);
+                glEnable(GL_FOG);
+            }
+            glEnable(GL_LIGHTING);
+            gfx_brightness(out_underground() ? 0.95f : fmaxf(skyk, 0.35f));
+            out_draw(P.x, P.z, yaw);
+            glDisable(GL_LIGHTING);
+            glDisable(GL_FOG);
+        } else {
+            gfx_perspective(CFG.fov, (float)WIN_W / WIN_H, 0.05f, 60);
+            gfx_camera(eye, yaw, pitch);
+            glEnable(GL_LIGHTING);
+            gfx_brightness(mode == M_LIE && NOW_HOURS > 21 ? 0.7f : skyk);
+            world_draw_static();
+            if (g_shadows) {
+                /* soft round shadows under the crew */
+                glEnable(GL_BLEND);
+                glDepthMask(GL_FALSE);
+                for (int i = 0; i < NAG; i++) {
+                    if (!AG[i].present || AG[i].y > 0.3f || AG[i].pose == 2) continue;
+                    glBegin(GL_TRIANGLE_FAN);
+                    glColor4ub(0, 0, 0, 70);
+                    glVertex3f(AG[i].x, 0.015f, AG[i].z);
+                    for (int k = 0; k <= 12; k++) { float a = 2 * PI_F * k / 12; glVertex3f(AG[i].x + cosf(a) * 0.36f, 0.015f, AG[i].z + sinf(a) * 0.36f); }
+                    glEnd();
+                }
+                glDepthMask(GL_TRUE);
+                glDisable(GL_BLEND);
+            }
+            npc_draw(T);
+            world_draw_dynamic(T, skyk);
+            glDisable(GL_LIGHTING);
+        }
 
         /* ---- scale the low-res 3D image up to the window */
         if (sc < 0.99f) {
@@ -2827,6 +3256,7 @@ int main(int argc, char **argv)
             if (mode == M_CHAT) draw_chat();
             if (is_panel(mode)) { rect(0, 0, (float)WIN_W, (float)WIN_H, rgba(0, 0, 0, 90)); draw_panels(); }
         }
+        if (mode == M_PHONE) draw_phone(dt);
         if (fade > 0) rect(0, 0, (float)WIN_W, (float)WIN_H, rgba(0, 0, 0, (int)(255 * fade)));
         glDisable(GL_BLEND);
         SDL_GL_SwapWindow(win);
@@ -2851,6 +3281,8 @@ int main(int argc, char **argv)
     chats_save();
     video_stop();
     apps_shutdown(exit_code == EXIT_TO_PC);
+    out_shutdown();
+    snd_shutdown();
     net_shutdown();
     gfx_shutdown();
     SDL_GL_DeleteContext(gl);

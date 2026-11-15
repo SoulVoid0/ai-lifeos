@@ -116,7 +116,7 @@ typedef struct {
 } Spot;
 
 enum { I_NONE, I_AGENT, I_COUCH, I_TV, I_PC, I_BED, I_SHOP, I_FRIDGE, I_SINK, I_WHITEBOARD, I_PIANO, I_ARCADE, I_LIGHT, I_TABLET,
-       I_REMOTE, I_DOOR, I_LETTER, I_CAMERA };
+       I_REMOTE, I_DOOR, I_LETTER, I_CAMERA, I_OUT_HOME, I_OUT_DOWN, I_OUT_UP };
 typedef struct { int kind; V3 pos; float reach; int ref; const char *label; } Inter;
 
 #define MAX_COLLIDERS 256
@@ -300,3 +300,44 @@ extern float NOW_HOURS;   /* local time of day, 0..24 */
 extern int WIN_W, WIN_H;
 const char *state_dir(void);
 void toast(const char *fmt, ...);
+
+/* ------------------------------------------------------------------ outside.c: the explorable Earth (OpenStreetMap) */
+extern bool g_world_on;                    /* Settings: Explorable world (requires internet) */
+extern int g_draw_dist;                    /* meters */
+extern int g_detail;                       /* 0 low .. 3 ultra */
+extern bool g_shadows;
+enum { OT_NONE, OT_HOME, OT_DOWN, OT_UP };
+bool out_active(void);                     /* the player is outside */
+bool out_underground(void);
+void out_go_outside(float *px, float *pz, float *yaw);   /* out the front door: the South Pole */
+void out_teleport(double lat, double lon, float *px, float *pz);
+void out_go_home(void);
+bool out_reorigin(float *px, float *pz);
+void out_update(float dt, float px, float pz);
+void out_draw(float px, float pz, float yaw);
+bool out_collide(float *x, float *z, float r);
+int out_target(float px, float pz, float fx, float fz, char *label, size_t n);
+bool out_use(int kind, float *px, float *pz);
+void out_where(float px, float pz, double *lat, double *lon);
+const char *out_place(float px, float pz);
+int out_loading(bool *offline);
+void out_env(float px, float pz, float *traffic, float *trees, float *water);
+bool out_polar(void);
+float out_sun_elev(void);
+Col out_sky(float *k);
+Col out_ground_color(void);
+void out_settings_changed(void);
+void out_save(const char *path, float px, float pz, float yaw);
+bool out_load(const char *path, float *px, float *pz, float *yaw);
+void out_shutdown(void);
+
+/* ------------------------------------------------------------------ sound.c */
+extern int g_vol_master, g_vol_effects, g_vol_ambient;
+extern bool g_mute;
+enum { S_STEP_WOOD, S_STEP_TILE, S_STEP_SNOW, S_STEP_GRASS, S_STEP_ROAD, S_STEP_CONCRETE, S_DOOR, S_CLICK, S_BLIP, S_OPEN,
+       S_PHONE, S_TELEPORT, S_ERROR, NSND };
+enum { A_ROOM, A_HUM, A_WIND, A_TRAFFIC, A_BIRDS, A_WATER, A_TUNNEL, NAMB };
+void snd_init(void);
+void snd_play(int id, float vol);
+void snd_ambience(int which, float level);  /* 0..1, faded */
+void snd_shutdown(void);

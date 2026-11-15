@@ -1,0 +1,12 @@
+#!/bin/sh
+# Puts LifeOS shortcuts on the KDE desktop (the PC) once per user, at login: the World Map.
+# Deleting one keeps it deleted.
+dir=$(xdg-user-dir DESKTOP 2>/dev/null)
+[ -n "$dir" ] && [ "$dir" != "$HOME" ] || dir="$HOME/Desktop"
+mark="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos/desktop-icons"
+mkdir -p "$dir" "$(dirname "$mark")"
+for app in lifeos-worldmap; do
+  grep -qx "$app" "$mark" 2>/dev/null && continue
+  cp "/usr/share/applications/$app.desktop" "$dir/$app.desktop" && chmod +x "$dir/$app.desktop"
+  echo "$app" >>"$mark"
+done

@@ -624,8 +624,11 @@ bool nest_start(int n, const char *cmd, int w, int h)
             NAMES[n], w, h, ns->envf, ns->envf, ns->envf, cmd);
     fclose(f);
     char **env = make_env(ns, true);
+    /* Arch's sway may raise itself to realtime (cap_sys_nice), but a KDE session hands its programs a realtime
+     * time limit of 0, so the kernel kills it at once: start it without gaining that capability. */
+    const char *argv_np[] = {"setpriv", "--no-new-privs", "sway", "-c", ns->conf, NULL};
     const char *argv[] = {"sway", "-c", ns->conf, NULL};
-    ns->sway = run(argv, env, -1, true);
+    ns->sway = run(access("/usr/bin/setpriv", X_OK) == 0 ? argv_np : argv, env, -1, true);
     free_env(env);
     if (ns->sway <= 0) return false;
     f = fopen(pidf, "w");
