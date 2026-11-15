@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Record the screen
+GenericName=LifeOS camera
+Comment=Start or stop recording everything on the screen into Videos > LifeOS recordings (Shift+F5)
+Exec=/usr/lib/lifeos/lifeos-apartment-bin --record-toggle
+Icon=camera-video
+Terminal=false
+Categories=AudioVideo;Recorder;
+X-KDE-Shortcuts=Shift+F5
+StartupNotify=false

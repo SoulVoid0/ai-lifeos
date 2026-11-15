@@ -154,6 +154,9 @@ DEFAULTS: dict[str, Any] = {
     "doctor": {"weekly": True, "last_run_at": "", "notify": True},
     # learn.py: flashcard reminders.
     "learn": {"daily_reminder": True, "new_per_day": 20, "last_reminder": ""},
+    # ------------------------------------------------ the OS desktop
+    # apartment.py: what the user bought for the 3D apartment and how it's decorated (points are computed).
+    "apartment": {"owned": [], "layout": {}, "bonus": 0},
 }
 
 

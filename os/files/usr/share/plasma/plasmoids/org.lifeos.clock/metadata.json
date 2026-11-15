@@ -1,0 +1,15 @@
+{
+    "KPlugin": {
+        "Id": "org.lifeos.clock",
+        "Name": "LifeOS Clock",
+        "Description": "Big clock with the date, your apartment points and who is working",
+        "Icon": "clock",
+        "Authors": [{ "Name": "AI LifeOS" }],
+        "Category": "Utilities",
+        "License": "MIT",
+        "Version": "1.0",
+        "FormFactors": ["desktop"]
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

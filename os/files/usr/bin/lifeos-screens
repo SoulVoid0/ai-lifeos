@@ -1,0 +1,19 @@
+#!/bin/sh
+# Every extra monitor gets LifeOS info widgets on its Plasma desktop (clock + points, tasks, crew), once.
+# Runs in the background for the whole session so monitors plugged in later get them too. The widgets are
+# ordinary Plasma widgets: move, resize or remove them in Plasma's edit mode; removed ones stay removed.
+js='var ds = desktops();
+for (var i = 0; i < ds.length; i++) {
+  var d = ds[i];
+  if (d.screen <= 0) continue;
+  d.currentConfigGroup = ["General"];
+  if (d.readConfig("lifeosWidgets", "") == "1") continue;
+  d.addWidget("org.lifeos.clock", 48, 48, 460, 300);
+  d.addWidget("org.lifeos.tasks", 48, 380, 460, 520);
+  d.addWidget("org.lifeos.crew", 540, 48, 460, 852);
+  d.writeConfig("lifeosWidgets", "1");
+}'
+while :; do
+  dbus-send --session --print-reply --dest=org.kde.plasmashell /PlasmaShell org.kde.PlasmaShell.evaluateScript "string:$js" >/dev/null 2>&1
+  sleep 60
+done

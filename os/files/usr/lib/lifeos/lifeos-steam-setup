@@ -1,0 +1,28 @@
+#!/bin/bash
+# Installs Steam (run as root by lifeos-steam): turns on [multilib] and picks the 32-bit Vulkan driver by GPU.
+set -e
+if ! grep -q '^\[multilib\]' /etc/pacman.conf; then
+  printf '\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n' >> /etc/pacman.conf
+fi
+pk=(steam ttf-liberation lib32-mesa lib32-systemd)
+for v in /sys/class/drm/card*/device/vendor; do
+  [ -r "$v" ] || continue
+  case $(cat "$v") in
+    0x1002) pk+=(lib32-vulkan-radeon) ;;
+    0x8086) pk+=(lib32-vulkan-intel) ;;
+    0x10de) if pacman -Q nvidia-utils >/dev/null 2>&1; then pk+=(lib32-nvidia-utils); else pk+=(lib32-vulkan-nouveau); fi ;;
+  esac
+done
+printf '%s\n' "${pk[@]}" | grep -q 'lib32-vulkan-\|lib32-nvidia' || pk+=(lib32-vulkan-swrast)
+mapfile -t pk < <(printf '%s\n' "${pk[@]}" | sort -u)
+# Steam wants the en_US.UTF-8 locale
+if ! locale -a 2>/dev/null | grep -qi '^en_US\.utf-\?8$'; then
+  sed -i 's/^#\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+  grep -q '^en_US.UTF-8 UTF-8' /etc/locale.gen || echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
+  locale-gen >/dev/null
+fi
+if [ -d /run/archiso ]; then
+  pacman -Sy --needed --noconfirm "${pk[@]}"
+else
+  pacman -Syu --needed --noconfirm "${pk[@]}"
+fi

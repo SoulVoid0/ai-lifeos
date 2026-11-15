@@ -1,0 +1,39 @@
+#!/bin/bash
+# Steam on the living room TV. "lifeos-steam --setup" (run in a terminal by the apartment) installs Steam: Arch's
+# 32-bit [multilib] repository and the 32-bit graphics driver for this computer's GPU. The apartment then runs Steam
+# Big Picture on the TV's own screen. Without --setup: installs if needed, then opens Big Picture on this desktop.
+if [ "$1" = "--setup" ]; then
+  echo "Setting up Steam"
+  echo "================"
+  if command -v steam >/dev/null; then echo "Steam is already installed."; sleep 2; exit 0; fi
+  echo "Steam isn't installed yet. Installing it needs your password and about 1 GB of downloads."
+  [ -d /run/archiso ] && echo "(Live USB: Steam stays until the computer restarts. Install LifeOS to keep it.)"
+  echo
+  if ! sudo /usr/lib/lifeos/lifeos-steam-setup; then
+    echo; read -rp "Steam wasn't installed. Press Enter to close." _; exit 1
+  fi
+  echo; echo "Steam is installed. Go back to the apartment and press E on the TV to play."
+  sleep 4
+  exit 0
+fi
+if ! command -v steam >/dev/null; then
+  if [ "$1" != "--in-terminal" ]; then
+    exec konsole --hide-menubar --hide-tabbar -e /usr/bin/lifeos-steam --in-terminal
+  fi
+  echo "Setting up Steam"
+  echo "================"
+  echo "Steam isn't installed yet. Installing it needs your password and about 1 GB of downloads."
+  [ -d /run/archiso ] && echo "(Live USB: Steam stays until the computer restarts. Install LifeOS to keep it.)"
+  echo
+  if ! sudo /usr/lib/lifeos/lifeos-steam-setup; then
+    echo; read -rp "Steam wasn't installed. Press Enter to close." _; exit 1
+  fi
+  echo; echo "Steam is installed. Starting Big Picture (the first start downloads Steam's own files)..."
+  setsid -f steam -gamepadui >/dev/null 2>&1 < /dev/null
+  sleep 4
+  exit 0
+fi
+if pgrep -u "$USER" -f 'ubuntu12_32/steam' >/dev/null || pgrep -u "$USER" -x steam >/dev/null; then
+  exec steam steam://open/bigpicture
+fi
+exec steam -gamepadui

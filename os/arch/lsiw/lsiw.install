@@ -1,0 +1,9 @@
+post_install() {
+  systemd-tmpfiles --create /usr/lib/tmpfiles.d/lsiw.conf /usr/lib/tmpfiles.d/lifeos-lsiw.conf >/dev/null 2>&1 || true
+  [ -d /proc/sys/fs/binfmt_misc ] && /usr/lib/systemd/systemd-binfmt /usr/lib/binfmt.d/zz-lsiw.conf >/dev/null 2>&1 || true
+  update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+  update-mime-database /usr/share/mime >/dev/null 2>&1 || true
+}
+post_upgrade() {
+  post_install
+}

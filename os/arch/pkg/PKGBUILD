@@ -9,7 +9,14 @@ license=(custom)
 depends=(python labwc sddm xorg-server firefox foot swaybg xdg-desktop-portal-wlr wlr-randr brightnessctl
          pipewire pipewire-pulse wireplumber networkmanager bluez bluez-utils
          mesa vulkan-radeon vulkan-icd-loader curl git noto-fonts noto-fonts-emoji polkit
-         portaudio espeak-ng grim alsa-utils smartmontools)
+         portaudio espeak-ng grim alsa-utils smartmontools
+         # the 3D apartment and the PC's KDE Plasma desktop
+         sdl2 sdl2_ttf ffmpeg libnotify xdg-user-dirs
+         # the tablet's and the TV's own screens (headless sway sessions)
+         sway xorg-xwayland
+         plasma-desktop plasma-workspace kwin kscreen plasma-nm plasma-pa powerdevil bluedevil breeze breeze-gtk
+         kde-gtk-config xdg-desktop-portal-kde konsole dolphin kate ark loupe
+         lsiw)
 install=lifeos.install
 options=(!strip !debug)
 
@@ -20,5 +27,6 @@ package() {
   cp -a "$stage/web" "$pkgdir/usr/share/lifeos/web"
   cp -a "$stage/ollama/." "$pkgdir/usr/"
   cp -a "$stage/files/." "$pkgdir/"
-  chmod 755 "$pkgdir"/usr/bin/lifeos-* "$pkgdir"/usr/libexec/lifeos-firstuser
+  install -Dm755 "$stage/lifeos-apartment-bin" "$pkgdir/usr/lib/lifeos/lifeos-apartment-bin"
+  chmod 755 "$pkgdir"/usr/bin/lifeos-* "$pkgdir"/usr/libexec/lifeos-firstuser "$pkgdir"/usr/lib/lifeos/lifeos-steam-setup
 }

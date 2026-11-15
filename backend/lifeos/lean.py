@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
 import threading
 import time
@@ -24,7 +25,7 @@ from typing import Any
 
 import httpx
 
-from . import activity, crew, llm, settings
+from . import activity, config, crew, llm, settings
 
 log = logging.getLogger("lifeos.lean")
 
@@ -192,6 +193,39 @@ def remove(model: str) -> dict[str, Any]:
     llm.status(force=True)
     activity.log("system", f"Removed model {model} to free disk space")
     return {"removed": model}
+
+
+# ---------------------------------------------------------------- the starter model
+
+STARTER = crew.FAST_MODEL
+
+
+def starter() -> None:
+    """First start of LifeOS: Ollama comes with the system, so once it answers and has no model at all, download a
+    small model so the crew can talk right away. Skipped on the live USB (downloads would fill its RAM) and once a
+    starter download has finished before."""
+    marker = config.data_dir() / ".starter-model"
+    if marker.exists() or os.path.exists("/run/archiso") or os.environ.get("LIFEOS_NO_STARTER"):
+        return
+    for _ in range(120):
+        st = llm.status(force=True)
+        if st["ok"]:
+            break
+        time.sleep(5)
+    else:
+        return
+    if st["models"]:
+        marker.touch()
+        return
+
+    def done() -> None:
+        marker.touch()
+        if not llm.installed(settings.get("chat_model"), llm.status(force=True)["models"]):
+            settings.update({"chat_model": STARTER})
+        activity.log("system", f"Downloaded the starter model {STARTER}; get more in the AI crew panel (K)")
+
+    log.info("No models yet: downloading the starter model %s", STARTER)
+    pull(STARTER, done)
 
 
 # ---------------------------------------------------------------- the preset

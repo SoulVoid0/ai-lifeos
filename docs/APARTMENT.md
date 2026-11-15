@@ -1,0 +1,104 @@
+# The LifeOS desktop: the 3D apartment
+
+On the LifeOS operating system (Arch-based ISO), logging in to the **AI LifeOS** session starts KDE Plasma with the
+3D apartment full screen on top. The apartment is the desktop; the one-monitor PC in the master bedroom is the real
+KDE Plasma desktop.
+
+| | |
+|---|---|
+| Walk / run / look | WASD or arrows, Shift, mouse |
+| Interact | E (talk to an agent, sit on the couch, TV, bed, tablet, PC, shop kiosk, whiteboard) |
+| Menu (Return to the PC, AI crew, Settings, Quit) / AI crew / shop / decorate / help | Esc / K / P / C / F1 |
+| Look | The mouse: the cursor is hidden and held in the middle. In VMs with an absolute mouse (Hyper-V, VirtualBox, QEMU tablet) it's hidden and pushing it against a screen edge keeps turning. Also Left/Right, PgUp/PgDn, or right-drag |
+| Windows programs | The tablet on the master bed shows LSIW Control live; E picks it up and you use it in your hands (Esc or a click outside puts it down) |
+| TV | E on the remote (or R on the couch) switches Steam mode (Big Picture) and video mode. In Steam mode, E on the TV (Enter on the couch) sits you in front of it and Steam Big Picture runs on it; F11 switches between fullscreen and the TV (remembered), F12 or a click outside the TV gets up (Esc is Steam's Back). Steam keeps running while you use the PC |
+| Record | E on the camera in the hallway (or Shift+F5 anywhere): records everything on screen, PC and tablet included, with sound, to ~/Videos/LifeOS recordings |
+| Graphics quality | F2 cycles the presets (Low, Medium, High, Ultra); every part can be set on its own in Esc > Settings > Graphics |
+| Phone (explorable world) | Q: use the PC from anywhere, World map (teleport anywhere), teleport home |
+| TV fullscreen | F11 while using the TV (Steam Big Picture fills the screen); Steam keeps running while you're at the PC |
+| Use the PC | E at the desk: the apartment closes and Plasma is yours |
+| Back to the apartment | Shift+F4 on the Plasma desktop (or "Back to the apartment" in the menu) |
+
+**Rooms:** living room (couch you can sit on, TV that plays your own videos from ~/Videos, ~/Movies, ~/Downloads or a
+USB stick), master bedroom (bed, PC), kitchen, bathroom, two AI bedrooms (bunk beds, one per agent), work room (a desk
+per agent, whiteboard with running missions and your tasks), hallway (shop kiosk, clock).
+
+**The crew** (from `/api/crew/status`) lives there with a routine on the real clock: asleep in their bunks at night
+(bedtime ~22:30-23:45 per agent, up ~06:15-07:30), meals in the kitchen around 07:30, 12:15 and 18:30, free time
+otherwise. An agent with a task (working, waiting for approval or asking a question) walks to its desk in the work
+room. Press E on one for the chat box; Tab switches to Task mode, which starts a mission for that agent and reports
+back in the chat when it finishes.
+
+**Points** (`backend/lifeos/apartment.py`, `/api/apartment`): 1 per AI call, 1 per 1000 tokens, 2 per message you
+send, 10 per finished task, 20 per finished mission. Spend them on paint, floors, couches, furniture and extras.
+
+**Extra monitors:** every monitor besides the apartment's gets three Plasma widgets once (LifeOS Clock with points,
+LifeOS Tasks, LifeOS Crew). Move or remove them in Plasma's edit mode; add them again from "Add Widgets".
+
+**LSIW** is built in with C: at `/`: `C:\home\you` is `/home/you`, `C:\windows` is `/windows`, `C:\Program Files` is
+`/Program Files`. `lifeos-enable-wine` installs Wine for programs LSIW's own engine can't run yet.
+
+Code: `apartment/` (C, SDL2, OpenGL 1.x, SDL2_ttf, libcurl), session scripts in `os/files/usr/bin/lifeos-apartment*`,
+`lifeos-desktop-setup`, `lifeos-screens`; widgets in `os/files/usr/share/plasma/plasmoids/`; LSIW packaging in
+`os/arch/lsiw/`. Try it on any Linux desktop: `make -C apartment && LIFEOS_APARTMENT_WINDOWED=1 apartment/lifeos-apartment`.
+
+**The PC monitor** shows the live KDE desktop and whatever program is open (Esc > Settings > PC screen: Live or
+Picture). `apartment/src/pccap.c` gets the window stack from a small KWin script and captures each window through
+KWin's ScreenShot2 D-Bus interface (allowed by `/usr/share/applications/lifeos-apartment-bin.desktop`), only while
+you're in the master bedroom.
+
+**AI crew panel** (K, or Esc > AI crew): every AI with its model and on/off switch; add one, or open one to change
+its name, job title, model, color, max steps, description, personality, speaking style and quirks, or remove it
+(built-in AIs can only be switched off). Uses `/api/crew/agents`.
+
+**The tablet's and the TV's own screens** (`apartment/src/nest.c`): each runs its own invisible session, apart
+from the KDE desktop on the PC, with only that program in it: LSIW Control (its own instance) on the tablet, Steam Big
+Picture on the TV. That's sway with the headless backend; the picture comes from grim, the mouse and keys go in through
+a virtual pointer and keyboard. Nothing of them shows on the real screen.
+
+**AI models** (top row of the AI crew panel): the models on this computer (Ollama, built in), a list of good ones to
+download with one Enter, or type any Ollama name. Enter twice removes one. A fresh install downloads a small starter
+model by itself on first start (the full live ISO already carries it).
+
+**Updates:** `lifeos-update` checks GitHub Releases every 6 hours. A new version drops a letter through the front door
+(hallway, opposite the shop); "Update now" installs it over the current one in a terminal (pacman), keeping files,
+settings and crew, and the apartment restarts.
+
+**Explorable world** (Esc > Settings > World > "Explorable world (requires internet)", `apartment/src/outside.c`):
+the apartment building stands at the South Pole and its front door leads outside. The whole Earth is there, built
+from OpenStreetMap as you walk: roads with markings, bridges, buildings with their heights, colors and windows,
+parks, water, forests and single trees, railways, and underground: road and rail tunnels, subway lines and station
+halls (E at a subway entrance or tunnel mouth goes down; green signs lead back up). The sky follows the real sun where
+you are (polar day and night at the pole). Map data comes from the Overpass API (one request at a time, at least
+1.5 s apart, backing off on errors, rotating between public servers) and is cached in `~/.cache/lifeos/osm`, so places
+you've been work offline. Shift runs, Ctrl+Shift sprints (40 m/s). The door of the LifeOS building takes you home.
+
+**The phone** (Q): Use the PC (from anywhere; coming back puts you where you were), World map, Teleport home.
+
+**World Map** (`lifeos-worldmap`, icon on the KDE desktop and in the menu): OpenStreetMap in the browser with search
+(Nominatim, at most one search a second), famous places, "Where am I", "Teleport here" (click the map), "Teleport home"
+and "Back to the apartment". Without internet you can still teleport home or type `lat, lon`. Teleports go through
+`~/.local/state/lifeos/teleport`; the apartment writes where you are to `world-pos.json`.
+
+**Sound** (`apartment/src/sound.c`, made in code): footsteps on wood, tiles, snow, grass, asphalt and concrete, the
+front door, clicks and menu blips, the phone, teleports; ambience that follows where you are (room tone, the fridge,
+wind, traffic near big roads, birds by trees in daytime, water, tunnels). Volumes: master, effects, ambience, TV/media,
+and mute, in Esc > Settings > Sound.
+
+**Settings** (Esc > Settings): Graphics: preset, render scale, draw distance, detail, shadows, anti-aliasing, fog,
+vsync, FPS cap, smooth screens; Sound: the volumes above; World: explorable world on/off; Controls: mouse sensitivity and invert, mouse look (Auto, hidden and locked,
+hidden with edge turning for VMs, or right-drag), walking and turn speed, field of view, frame rate limit (30/45/60/none), "Save power when idle" (5 fps in the
+background, 10 fps after a minute without input unless the TV plays), screen resolution (through KDE), text and menu
+size, PC screen (live or picture), and every movement key can be rebound.
+While the apartment is up, KDE's shortcuts (Meta/start menu, Alt+Tab) are blocked: KDE is reached through the PC only.
+
+## Installing
+
+Each release has two ISOs. **AI-LifeOS** is the live system (the apartment; "Install AI LifeOS" is in its app menu, or
+run `lifeos-install`). **AI-LifeOS-Installer** boots straight into the installer window
+(`os/arch/airootfs/usr/lib/lifeos-installer/`): language, keyboard, time zone, disk (erase it, install in its free
+space next to another system, or replace one partition), your account (name, user name, password, computer name,
+automatic login), LSIW (off, apps only with a C: drive in each home folder, standard with one shared C: drive in a
+folder or partition you choose, or deep with C: at `/`, optionally with the Windows folders on their own partition),
+then GRUB with every other system in its menu. `install.sh` copies the untouched system image from the USB stick
+and removes the live parts. Both ISOs are made by `scripts/mkisos.sh`.

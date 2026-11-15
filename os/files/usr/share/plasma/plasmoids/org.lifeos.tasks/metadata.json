@@ -1,0 +1,15 @@
+{
+    "KPlugin": {
+        "Id": "org.lifeos.tasks",
+        "Name": "LifeOS Tasks",
+        "Description": "Your open tasks and the missions the crew is working on",
+        "Icon": "view-task",
+        "Authors": [{ "Name": "AI LifeOS" }],
+        "Category": "Utilities",
+        "License": "MIT",
+        "Version": "1.0",
+        "FormFactors": ["desktop"]
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

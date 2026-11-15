@@ -1,0 +1,15 @@
+{
+    "KPlugin": {
+        "Id": "org.lifeos.crew",
+        "Name": "LifeOS Crew",
+        "Description": "What each LifeOS agent is doing right now",
+        "Icon": "system-users",
+        "Authors": [{ "Name": "AI LifeOS" }],
+        "Category": "Utilities",
+        "License": "MIT",
+        "Version": "1.0",
+        "FormFactors": ["desktop"]
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

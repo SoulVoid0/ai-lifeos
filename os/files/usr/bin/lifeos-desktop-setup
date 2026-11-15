@@ -1,0 +1,29 @@
+#!/bin/sh
+# Per-user setup for the AI LifeOS session, run at every login (it only changes what isn't set yet):
+# Shift+F4 returns to the apartment, and KWin keeps the apartment full screen without a frame.
+command -v kwriteconfig6 >/dev/null || exit 0
+cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
+mkdir -p "$cfg"
+if ! grep -q 'lifeos-apartment.desktop' "$cfg/kglobalshortcutsrc" 2>/dev/null; then
+  kwriteconfig6 --file kglobalshortcutsrc --group services --group lifeos-apartment.desktop --key _launch "Shift+F4"
+fi
+if ! grep -q '^\[lifeos-apartment\]' "$cfg/kwinrulesrc" 2>/dev/null; then
+  rules=$(kreadconfig6 --file kwinrulesrc --group General --key rules)
+  count=$(kreadconfig6 --file kwinrulesrc --group General --key count)
+  r="kwriteconfig6 --file kwinrulesrc --group lifeos-apartment --key"
+  $r Description "LifeOS Apartment"
+  $r wmclass lifeos-apartment
+  $r wmclassmatch 1
+  $r fullscreen true
+  $r fullscreenrule 2
+  $r noborder true
+  $r noborderrule 2
+  $r fsplevel 0
+  $r fsplevelrule 2
+  $r skipswitcher false
+  kwriteconfig6 --file kwinrulesrc --group General --key count $(( ${count:-0} + 1 ))
+  kwriteconfig6 --file kwinrulesrc --group General --key rules "${rules:+$rules,}lifeos-apartment"
+fi
+# The Windows folders LSIW shows under C:\ (C: is / on LifeOS).
+command -v lsiw >/dev/null && lsiw sync >/dev/null 2>&1
+exit 0

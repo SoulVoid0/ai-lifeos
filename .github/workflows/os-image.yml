@@ -1,6 +1,6 @@
-# Builds the AI LifeOS operating system: an Arch Linux live/installer ISO (archiso) that boots straight into
+# Builds the AI LifeOS operating system: an Arch Linux live ISO and an installer ISO (archiso) that boots straight into
 # LifeOS, plus the `lifeos` pacman package it installs. Runs when a pushed commit message contains [os-image],
-# or from Actions -> OS image -> Run workflow. Published as a pre-release (one .iso when it fits under 2 GB).
+# or from Actions -> OS image -> Run workflow. Published as a pre-release (ISOs over 2 GB in parts).
 name: OS image
 
 on:
@@ -23,10 +23,17 @@ jobs:
     container:
       image: archlinux:latest
       options: --privileged
+      # the runner's preinstalled SDKs, deleted below for disk space (the live ISO carries an AI model)
+      volumes:
+        - /usr/share/dotnet:/host/dotnet
+        - /usr/local/lib/android:/host/android
+        - /opt/hostedtoolcache:/host/toolcache
     steps:
       - name: Tools
         run: |
-          pacman -Syu --noconfirm --needed archiso base-devel python python-pip nodejs npm git zstd github-cli
+          rm -rf /host/dotnet/* /host/android/* /host/toolcache/* || true
+          df -h / | tail -1
+          pacman -Syu --noconfirm --needed archiso base-devel python python-pip nodejs npm git zstd github-cli sdl2 sdl2_ttf gtk4 pkgconf dbus
           useradd -m builder
 
       - uses: actions/checkout@v4
@@ -48,28 +55,42 @@ jobs:
           rm -rf $S/ollama/lib/ollama/cuda_* $S/ollama/lib/ollama/*cuda* 2>/dev/null || true
           du -sh $S/*
 
+      - name: Put the starter AI model on the live system
+        run: |
+          # The full live ISO ships Ollama with a small model, so the crew talks without downloading anything
+          # (it may be in parts; the installer ISO stays one file and downloads the model on first start).
+          S=os/arch/pkg/src-stage
+          M=/tmp/live-extra/var/lib/ollama/models
+          mkdir -p $M
+          OLLAMA_MODELS=$M $S/ollama/bin/ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 30); do curl -fs http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 1; done
+          $S/ollama/bin/ollama pull qwen3:4b-instruct-2507-q4_K_M || echo "starter model download failed; the live ISO goes without it"
+          kill %1 || true
+          du -sh /tmp/live-extra
+
+      - name: Build the 3D apartment
+        run: |
+          make -C apartment
+          cp apartment/lifeos-apartment os/arch/pkg/src-stage/lifeos-apartment-bin
+
+      - name: "Build the lsiw package (LSIW with C: at /)"
+        run: |
+          chown -R builder os/arch/lsiw
+          cd os/arch/lsiw && sudo -u builder makepkg --nodeps --noconfirm
+          mkdir -p /repo && cp lsiw-*.pkg.tar.zst /repo/
+
       - name: Build the lifeos package
         run: |
           VER=0.1.${{ github.run_number }}
           sed -i "s/^pkgver=.*/pkgver=$VER/" os/arch/pkg/PKGBUILD
           chown -R builder os/arch/pkg
           cd os/arch/pkg && sudo -u builder makepkg --nodeps --noconfirm
-          mkdir -p /repo && cp lifeos-*.pkg.tar.zst /repo/ && repo-add /repo/lifeos.db.tar.gz /repo/lifeos-*.pkg.tar.zst
+          mkdir -p /repo && cp lifeos-*.pkg.tar.zst /repo/ && repo-add /repo/lifeos.db.tar.gz /repo/*.pkg.tar.zst
 
-      - name: Build the ISO
+      - name: Build the ISOs (live and installer)
         run: |
-          P=/tmp/profile
-          cp -r /usr/share/archiso/configs/releng $P
-          cat os/arch/packages.extra >> $P/packages.x86_64 && sort -u -o $P/packages.x86_64 $P/packages.x86_64 && sed -i "/^virtualbox-guest-utils-nox$/d" $P/packages.x86_64
-          printf '\n[lifeos]\nSigLevel = Optional TrustAll\nServer = file:///repo\n' >> $P/pacman.conf
-          cp -a os/arch/airootfs/. $P/airootfs/
-          mkdir -p $P/airootfs/opt/lifeos-repo && cp /repo/* $P/airootfs/opt/lifeos-repo/
-          sed -i 's/^iso_name=.*/iso_name="AI-LifeOS"/; s/^iso_label=.*/iso_label="LIFEOS"/; s/^iso_publisher=.*/iso_publisher="AI LifeOS"/; s/^iso_application=.*/iso_application="AI LifeOS live and installer"/' $P/profiledef.sh
-          sed -i "s/^iso_version=.*/iso_version=\"${{ github.run_number }}\"/" $P/profiledef.sh
-          sed -i 's|file_permissions=(|file_permissions=(\n  ["/etc/sudoers.d/10-live"]="0:0:440"\n  ["/usr/local/bin/lifeos-install"]="0:0:755"|' $P/profiledef.sh
-          sed -i "s/^airootfs_image_tool_options=.*/airootfs_image_tool_options=('-comp' 'xz' '-Xbcj' 'x86' '-b' '1M' '-Xdict-size' '1M')/" $P/profiledef.sh
-          mkarchiso -v -w /tmp/work -o out $P
-          mv out/*.iso "out/AI-LifeOS-${{ github.run_number }}.iso"
+          rm -rf /var/cache/pacman/pkg/*
+          LIVE_OVERLAY=/tmp/live-extra bash scripts/mkisos.sh "${{ github.run_number }}" out
           ls -lh out
 
       - name: Publish as a pre-release
@@ -77,14 +98,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          ISO=$(ls out/*.iso | head -n 1)
-          rm -rf /tmp/work /var/cache/pacman/pkg/*  # mkarchiso's work tree fills the runner's disk
+          rm -rf /tmp/lifeos-work /var/cache/pacman/pkg/*  # mkarchiso's work tree fills the runner's disk
           mkdir -p publish
-          sha256sum "$ISO" | awk '{print $1}' > "publish/$(basename "$ISO").sha256"
-          cp /repo/lifeos-*.pkg.tar.zst publish/
-          if [ "$(stat -c %s "$ISO")" -lt 2000000000 ]; then mv "$ISO" publish/
-          else split -b 1900M -d -a 1 "$ISO" "publish/$(basename "$ISO").part" && rm "$ISO"; fi
+          cp /repo/*.pkg.tar.zst publish/
+          for ISO in out/*.iso; do
+            sha256sum "$ISO" | awk '{print $1}' > "publish/$(basename "$ISO").sha256"
+            if [ "$(stat -c %s "$ISO")" -lt 2000000000 ]; then mv "$ISO" publish/
+            else split -b 1900M -d -a 1 "$ISO" "publish/$(basename "$ISO").part" && rm "$ISO"; fi
+          done
           ls -lh publish
           gh release create "os-arch-${{ github.run_number }}" publish/* --repo "${{ github.repository }}" --prerelease \
             --target "${{ github.sha }}" --title "AI LifeOS (Arch) ${{ github.run_number }} (test build)" \
-            --notes "Boots straight into LifeOS from a USB stick (write the .iso with Rufus, DD mode). To install it on a disk, open a terminal (Super+Enter) and run lifeos-install; the disk you choose is erased."
+            --notes "Two ISOs (write either to a USB stick with Rufus in DD mode; if an ISO is in parts, join them first). AI-LifeOS: the live system, boots straight into the LifeOS 3D apartment (walk with WASD, E on the PC in the master bedroom for the KDE desktop, Shift+F4 back; Install AI LifeOS is in its app menu). AI-LifeOS-Installer: boots straight into the installer (language, keyboard, time zone, disk: erase, next to another system or one partition, your account, LSIW level and location, GRUB)."

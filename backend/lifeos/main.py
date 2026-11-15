@@ -20,6 +20,7 @@ from . import (__version__, actions, activity, agent, config, conversations, db,
 from . import apps, backup, cloud, custom_tools, devices, notify_bus, renamer, system, workspaces
 from . import arena, common, gamemode, recall, remote, screen, tidy, upgrade, voice
 from . import council, doctor, learn, mood, panic, story, toolsmith, usbbackup, xp
+from . import apartment
 
 log = logging.getLogger("lifeos")
 _scheduler = scheduler.Scheduler()
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
         services.start_background()
         threading.Thread(target=apps.list_apps, daemon=True, name="apps-preload").start()
         notify_bus.start()
+        threading.Thread(target=lean.starter, daemon=True, name="starter-model").start()
         gamemode.start()
         voice.sync_listener()
         remote.sync()
@@ -1810,6 +1812,27 @@ def mood_config(body: dict[str, Any]) -> dict[str, Any]:
         c["volume"] = max(0.0, min(float(c["volume"]), 1.0))
     common.save_group("mood", body, check)
     return mood.current()
+
+
+# ---------------------------------------------------------------- the 3D apartment (OS desktop)
+
+class BuyIn(BaseModel):
+    item: str = Field(..., min_length=1, max_length=100)
+
+
+@app.get("/api/apartment")
+def apartment_state() -> dict[str, Any]:
+    return apartment.state()
+
+
+@app.post("/api/apartment/buy")
+def apartment_buy(body: BuyIn) -> dict[str, Any]:
+    return apartment.buy(body.item)
+
+
+@app.patch("/api/apartment/layout")
+def apartment_layout(body: dict[str, Any]) -> dict[str, Any]:
+    return apartment.save_layout(body)
 
 
 @app.get("/api/xp")

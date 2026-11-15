@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=LifeOS desktop shortcuts
+Exec=/usr/bin/lifeos-desktop-icons
+NoDisplay=true
+X-KDE-autostart-phase=1
+OnlyShowIn=KDE;
