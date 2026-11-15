@@ -230,15 +230,32 @@ void pccap_hide_from_pc(const char *window_id);
 void pccap_kwin(const char *js);           /* run a KWin script (the body of a function) */
 bool pccap_kwin_ok(void);
 
+/* ------------------------------------------------------------------ nest.c: separate screens (tablet, TV) */
+enum { NEST_TAB, NEST_TV, NEST_N };
+bool nest_available(void);                 /* sway and grim are installed */
+bool nest_start(int n, const char *cmd, int w, int h);
+bool nest_running(int n);
+bool nest_ready(int n);                    /* has a picture */
+void nest_set_fps(int n, int fps);         /* 0: no pictures */
+GLuint nest_texture(int n, float *u, float *v);
+void nest_pointer(int n, float fx, float fy);   /* 0..1 across the screen */
+void nest_button(int n, int button, bool down); /* 1 left, 2 middle, 3 right */
+void nest_scroll(int n, int dy);
+void nest_text(int n, const char *utf8);
+bool nest_key(int n, SDL_Keycode k, Uint16 mod);
+int nest_update(void);                     /* bit per screen that ended */
+void nest_stop(int n);
+void nest_shutdown(void);
+
 /* ------------------------------------------------------------------ apps.c */
 enum { JOB_NONE, JOB_STEAM, JOB_UPDATE };
 enum { TV_VIDEO, TV_STEAM };
 void apps_init(void);
 void apps_update(float dt, int room, bool focused);
 void apps_shutdown(void);                  /* gives the tablet's window back; calls pccap_shutdown */
-bool tablet_live(void);                    /* LSIW Control can be shown on the tablet (KWin scripting works) */
-bool tablet_ready(void);                   /* its window is open */
-bool tablet_hold(void);                    /* bring it in front, on the held tablet's screen */
+bool tablet_live(void);                    /* LSIW Control can run on the tablet's own screen */
+bool tablet_ready(void);                   /* its screen has a picture */
+bool tablet_hold(void);                    /* picked up: full speed pictures */
 void tablet_put_down(void);
 void tablet_rect(float *x, float *y, float *w, float *h);   /* the held tablet's screen, in window pixels */
 GLuint tablet_texture(float *u, float *v);
@@ -249,6 +266,8 @@ void job_end(void);
 int tv_get_mode(void);
 void tv_set_mode(int m);
 bool steam_installed(void);
+bool steam_tv_start(void);                 /* Steam Big Picture in the TV's own screen */
+void steam_tv_use(bool on);                /* sitting in front of it, using it */
 void steam_tv_draw(V3 tl, V3 tr, V3 br, V3 bl, float h, float t);
 bool letter_here(void);
 float letter_age(void);

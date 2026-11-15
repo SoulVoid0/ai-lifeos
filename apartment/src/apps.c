@@ -1,11 +1,10 @@
 /* Real programs inside the apartment: the tablet on the bed (LSIW Control), Steam Big Picture on the living room TV,
  * and the letter that comes through the front door when a new LifeOS is out.
  *
- * The programs are ordinary KDE windows. KWin scripts (pccap_kwin) move them: the tablet's window is "parked" behind
- * the full-screen apartment at the size of the tablet you hold, and its picture is drawn on the tablet on the bed
- * (pccap_feed). Picking up the tablet brings that window in front of the apartment, inside a drawn tablet held in
- * your hands, so you see only the LSIW Control panel and not the whole desktop. Steam and the update terminal are
- * brought in front the same way when they open, and the apartment comes back when they close.
+ * The tablet and the TV each have their own screen (nest.c): a separate, invisible session with only that program
+ * in it, not the KDE desktop of the PC. Their pictures are drawn on the tablet and the TV, and while you use one
+ * (holding the tablet, or sitting in front of the TV) your mouse and keys go to it. Setting Steam up and updating
+ * LifeOS run in a terminal on the KDE desktop, brought in front of the apartment (KWin scripts, pccap_kwin).
  */
 #define _GNU_SOURCE
 #include "app.h"
@@ -49,13 +48,6 @@ static pid_t spawn(const char *const argv[])
     if (r) { fprintf(stderr, "apartment: couldn't start %s: %s\n", argv[0], strerror(r)); return -1; }
     for (int i = 0; i < MAX_KIDS; i++) if (!kids[i]) { kids[i] = pid; break; }
     return pid;
-}
-
-static bool alive(pid_t pid)
-{
-    if (pid <= 0) return false;
-    for (int i = 0; i < MAX_KIDS; i++) if (kids[i] == pid) return true;
-    return false;
 }
 
 static void reap(void)
@@ -103,30 +95,17 @@ static WinInfo wins[64];
 static int nwins = -1;
 static Uint32 wins_age = 0xffffffffu;
 
-static const WinInfo *top_of(const char *cls_sub, const char *cap_sub)
-{
-    for (int i = nwins - 1; i >= 0; i--) {
-        const WinInfo *w = &wins[i];
-        if (w->kind != 0) continue;
-        if (cls_sub && !strcasestr(w->cls, cls_sub)) continue;
-        if (cap_sub && !strcasestr(w->cap, cap_sub)) continue;
-        return w;
-    }
-    return NULL;
-}
-
 /* ------------------------------------------------------------------ the tablet (LSIW Control) */
 
-static struct {
-    pid_t pid;
-    int spawns;
-    Uint32 spawned_at, parked_at, missing_since;
-    char id[64];
-    bool held;
-} tab;
+static struct { int starts; Uint32 started_at; bool held; } tab;
 
-bool tablet_live(void) { return installed("/usr/bin/lsiw-control") && pccap_kwin_ok(); }
-bool tablet_ready(void) { return tab.id[0] != 0; }
+/* LSIW Control in its own screen, restarted when it's closed; its own session bus makes it a separate instance
+ * from one opened on the PC. */
+#define TAB_CMD "sh -c 'while [ -S $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY ]; do GDK_DEBUG=no-portals GTK_A11Y=none GTK_THEME=Breeze " \
+                "dbus-run-session -- lsiw-control; sleep 1; done'"
+
+bool tablet_live(void) { return installed("/usr/bin/lsiw-control") && nest_available(); }
+bool tablet_ready(void) { return nest_ready(NEST_TAB); }
 
 void tablet_rect(float *x, float *y, float *w, float *h)
 {
@@ -137,61 +116,49 @@ void tablet_rect(float *x, float *y, float *w, float *h)
     *y = (WIN_H - hh) / 2 - WIN_H * 0.03f;
 }
 
-static void tablet_park(void)
+static void tablet_start(void)
 {
-    kwin("var ws=F(/lsiw/i),r=R();for(var i=0;i<ws.length;i++){var w=ws[i];w.minimized=false;w.noBorder=true;"
-         "w.skipTaskbar=true;w.skipPager=true;w.skipSwitcher=true;w.keepAbove=false;w.keepBelow=true;w.frameGeometry=r;}home();");
-    tab.parked_at = SDL_GetTicks();
+    if (nest_running(NEST_TAB) || !tablet_live() || tab.starts >= 4) return;
+    Uint32 now = SDL_GetTicks();
+    if (tab.started_at && now - tab.started_at < 10000) return;
+    tab.starts++;
+    tab.started_at = now;
+    nest_start(NEST_TAB, TAB_CMD, 1280, 800);
 }
 
 bool tablet_hold(void)
 {
-    if (!safe_id(tab.id)) return false;
-    kwin("var w=I('%s');if(w){w.minimized=false;w.noBorder=true;w.keepBelow=false;w.keepAbove=true;w.frameGeometry=R();front(w);}", tab.id);
+    tablet_start();
     tab.held = true;
-    return true;
+    return nest_running(NEST_TAB);
 }
 
-void tablet_put_down(void)
-{
-    tab.held = false;
-    tablet_park();
-}
+void tablet_put_down(void) { tab.held = false; }
 
-/* Every frame. near: the player is in the master bedroom (the tablet's picture is wanted). */
 static void tablet_update(bool near)
 {
-    bool want = (near || tab.held) && tablet_live();
-    pccap_feed(FEED_TABLET, "lsiw", "", want);
-    if (!want || nwins < 0 || wins_age > 2500) return;
-    const WinInfo *w = top_of("lsiw", NULL);
-    Uint32 now = SDL_GetTicks();
-    if (!w) {
-        if (tab.id[0]) { tab.id[0] = 0; pccap_hide_from_pc(""); tab.missing_since = now; }
-        /* start LSIW Control (again, if it was closed), a few times at most */
-        if (!alive(tab.pid) && tab.spawns < 4 && (!tab.spawned_at || now - tab.spawned_at > 15000)) {
-            const char *argv[] = {"lsiw-control", NULL};
-            tab.pid = spawn(argv);
-            tab.spawns++;
-            tab.spawned_at = now;
-        }
-        return;
-    }
-    if (strcmp(tab.id, w->id)) {
-        snprintf(tab.id, sizeof tab.id, "%s", w->id);
-        pccap_hide_from_pc(tab.id);
-        tab.parked_at = 0;
-    }
-    if (!tab.held && (!w->below || w->minimized) && now - tab.parked_at > 1500) tablet_park();
+    if (near || tab.held) tablet_start();
+    nest_set_fps(NEST_TAB, tab.held ? 20 : near ? 3 : 0);
 }
 
-GLuint tablet_texture(float *u, float *v)
+GLuint tablet_texture(float *u, float *v) { return nest_ready(NEST_TAB) ? nest_texture(NEST_TAB, u, v) : 0; }
+
+/* ------------------------------------------------------------------ Steam on the TV */
+
+static struct { bool using_; Uint32 started_at; } tvs;
+
+/* Steam Big Picture in the TV's own screen; when Steam quits, the screen closes */
+#define TV_CMD "sh -c 'steam -gamepadui; swaymsg exit'"
+
+bool steam_tv_start(void)
 {
-    if (!tab.id[0]) return 0;
-    Uint32 age;
-    GLuint t = pccap_feed_texture(FEED_TABLET, u, v, &age);
-    return t;
+    if (nest_running(NEST_TV)) return true;
+    if (!nest_available()) return false;
+    tvs.started_at = SDL_GetTicks();
+    return nest_start(NEST_TV, TV_CMD, 1280, 720);
 }
+
+void steam_tv_use(bool on) { tvs.using_ = on; }
 
 /* ------------------------------------------------------------------ windows brought in front (Steam, the updater) */
 
@@ -203,8 +170,7 @@ static struct {
     int nknown;
     char fronted[8][64];
     int nfronted;
-    bool seen_bp, lost_focus;
-    Uint32 bp_missing;
+    bool lost_focus;
 } job;
 
 int job_kind(void) { return job.kind; }
@@ -241,9 +207,9 @@ void job_end(void) { job.kind = JOB_NONE; }
 static void job_launch(void)
 {
     if (job.kind == JOB_STEAM) {
-        const char *argv[] = {"lifeos-steam", NULL};
-        if (spawn(argv) < 0) { toast("Couldn't start Steam"); job_end(); return; }
-        toast("Starting Steam Big Picture. Exit Big Picture (or press Shift+F4) to come back.");
+        const char *argv[] = {"konsole", "--hide-menubar", "--hide-tabbar", "-e", "/usr/bin/lifeos-steam", "--setup", NULL};
+        if (spawn(argv) < 0) { toast("Couldn't open the Steam setup"); job_end(); return; }
+        toast("Setting Steam up in a terminal window...");
     } else if (job.kind == JOB_UPDATE) {
         const char *argv[] = {"konsole", "--hide-menubar", "--hide-tabbar", "-e", "/usr/bin/lifeos-update", "--install", NULL};
         if (spawn(argv) < 0) { toast("Couldn't open the updater"); job_end(); return; }
@@ -269,26 +235,13 @@ static void job_update(bool focused)
     else if (job.lost_focus) { job_end(); return; }          /* back in the apartment */
     if (now - job.started > 600000) { job_end(); return; }
     if (nwins < 0 || wins_age > 2000) return;
-    const WinInfo *bp = NULL, *fresh = NULL;
+    const WinInfo *fresh = NULL;
     for (int i = nwins - 1; i >= 0; i--) {
         const WinInfo *w = &wins[i];
-        if (w->kind != 0 || !strncmp(w->cls, "lifeos-apartment", 16)) continue;
-        bool steam = !strcasecmp(w->cls, "steam") || strcasestr(w->cls, "steamwebhelper");
-        if (job.kind == JOB_STEAM && steam && strcasestr(w->cap, "Big Picture")) { if (!bp) bp = w; continue; }
-        if (was_known(w->id)) continue;
-        if (job.kind == JOB_STEAM && (steam || strcasestr(w->cls, "konsole")) && !fresh) fresh = w;
-        if (job.kind == JOB_UPDATE && strcasestr(w->cls, "konsole") && !fresh) fresh = w;
+        if (w->kind != 0 || !strncmp(w->cls, "lifeos-apartment", 16) || was_known(w->id)) continue;
+        if (strcasestr(w->cls, "konsole") && !fresh) fresh = w;
     }
-    if (bp) { job.seen_bp = true; job.bp_missing = 0; front_once(bp); }
-    else if (fresh) front_once(fresh);
-    if (job.kind == JOB_STEAM && job.seen_bp && !bp) {
-        if (!job.bp_missing) job.bp_missing = now;
-        else if (now - job.bp_missing > 1500) {
-            /* Big Picture closed: hide what's left of Steam and come back */
-            kwin("var ws=F(/^steam$/i);for(var i=0;i<ws.length;i++)ws[i].minimized=true;home();");
-            job_end();
-        }
-    }
+    if (fresh) front_once(fresh);
 }
 
 /* ------------------------------------------------------------------ the TV */
@@ -368,8 +321,14 @@ void apps_update(float dt, int room, bool focused)
     reap();
     bool near = room == R_MASTER;
     bool tv = tv_mode == TV_STEAM && room == R_LIVING;
-    pccap_feed(FEED_TV, "=steam", "Big Picture", tv && pccap_kwin_ok());
-    pccap_watch(job.kind != JOB_NONE || ((near || tab.held) && tablet_live()));
+    int ended = nest_update();
+    if (ended & (1 << NEST_TV)) {
+        tvs.using_ = false;
+        if (SDL_GetTicks() - tvs.started_at < 15000)
+            toast("Steam closed right away. If it's open on the PC, quit it there first (Steam runs once).");
+    }
+    nest_set_fps(NEST_TV, tvs.using_ ? 24 : tv ? 4 : 0);
+    pccap_watch(job.kind != JOB_NONE);
     nwins = pccap_windows(wins, 64, &wins_age);
     tablet_update(near);
     job_update(focused);
@@ -390,11 +349,8 @@ void apps_update(float dt, int room, bool focused)
 
 void apps_shutdown(void)
 {
-    /* give the tablet's window back to the desktop, or close it if the apartment opened it */
-    if (tab.id[0]) kwin("var ws=F(/lsiw/i);for(var i=0;i<ws.length;i++){var w=ws[i];w.noBorder=false;w.skipTaskbar=false;"
-                        "w.skipPager=false;w.skipSwitcher=false;w.keepBelow=false;w.keepAbove=false;w.minimized=true;}");
+    nest_shutdown();
     pccap_shutdown();
-    if (alive(tab.pid)) kill(tab.pid, SIGTERM);
 }
 
 /* ------------------------------------------------------------------ drawing */
@@ -434,8 +390,7 @@ static void hand(float x, float y, float s, int side)
     ellipse(x - side * s * 0.04f, y - s * 0.2f, s * 0.1f, s * 0.08f, rgb(240, 200, 180));
 }
 
-/* The tablet held in both hands, over a dimmed room. The real LSIW Control window sits exactly on the screen part;
- * until it's there, its last picture is drawn instead. */
+/* The tablet held in both hands, over a dimmed room, with LSIW Control's own screen on it. */
 void tablet_draw_held(float t, const char *hint)
 {
     float x, y, w, h;
@@ -477,13 +432,12 @@ void tablet_draw_held(float t, const char *hint)
     }
 }
 
-/* Steam mode on the TV: Big Picture's live picture when it's open, else a home screen. Corners as draw_tv_screen. */
+/* Steam mode on the TV: its own screen's live picture when Steam runs there, else a home screen. Corners as draw_tv_screen. */
 void steam_tv_draw(V3 tl, V3 tr, V3 br, V3 bl, float h, float t)
 {
     float u, v;
-    Uint32 age = 0;
-    GLuint tex = pccap_feed_texture(FEED_TV, &u, &v, &age);
-    if (tex && age < 4000) { tex_quad(tex, u, v, tl, tr, br, bl); return; }
+    GLuint tex = nest_ready(NEST_TV) ? nest_texture(NEST_TV, &u, &v) : 0;
+    if (tex) { tex_quad(tex, u, v, tl, tr, br, bl); return; }
     glow_quad(tl, tr, br, bl, rgb(16, 22, 34));
     /* the screen faces -z; right on screen is -x */
     V3 right = v3(-1, 0, 0), down = v3(0, -1, 0);
@@ -513,7 +467,7 @@ void steam_tv_draw(V3 tl, V3 tr, V3 br, V3 bl, float h, float t)
                       v3(tx - tw - grow - 0.008f, ty - th - grow - 0.008f, z + 0.0015f), v3(tx + grow + 0.008f, ty - th - grow - 0.008f, z + 0.0015f),
                       rgb(230, 240, 255));
     }
-    const char *msg = job.kind == JOB_STEAM ? "Starting Steam..." : steam_installed() ? "Press E to play  (remote: switch to videos)"
+    const char *msg = job.kind == JOB_STEAM ? "Setting Steam up..." : nest_running(NEST_TV) ? "Starting Steam..." : steam_installed() ? "Press E to play  (remote: switch to videos)"
                                                                                      : "Press E to set up Steam  (remote: switch to videos)";
     float px2 = h * 0.05f / text_h(F_BODY);
     text3d(F_BODY, v3(x0 - w * 0.05f, y0 - h * 0.74f, z), right, down, px2, "Library", rgb(160, 175, 200));

@@ -12,6 +12,8 @@ depends=(python labwc sddm xorg-server firefox foot swaybg xdg-desktop-portal-wl
          portaudio espeak-ng grim alsa-utils smartmontools
          # the 3D apartment and the PC's KDE Plasma desktop
          sdl2 sdl2_ttf ffmpeg libnotify xdg-user-dirs
+         # the tablet's and the TV's own screens (headless sway sessions)
+         sway xorg-xwayland
          plasma-desktop plasma-workspace kwin kscreen plasma-nm plasma-pa powerdevil bluedevil breeze breeze-gtk
          kde-gtk-config xdg-desktop-portal-kde konsole dolphin kate ark loupe
          lsiw)

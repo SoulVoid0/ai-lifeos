@@ -64,13 +64,13 @@ static bool abs_pointer;          /* detected at start: the only pointer is an a
 static bool live_pc = true;       /* the PC monitor shows the live KDE desktop */
 
 enum { M_WALK, M_CHAT, M_MENU, M_SHOP, M_DECOR, M_VIDEOS, M_SETTINGS, M_SIT, M_LIE, M_PC_IN, M_PC_OUT, M_HELP, M_BOARD, M_QUIT,
-       M_TAB_IN, M_TAB_OUT, M_CREW, M_AGENT, M_TAB_HOLD, M_LETTER, M_MODELS };
+       M_TAB_IN, M_TAB_OUT, M_CREW, M_AGENT, M_TAB_HOLD, M_LETTER, M_MODELS, M_TV_USE };
 bool g_recording;
 static time_t rec_since;
 static bool tab_live_anim;        /* the tablet opens in the apartment (held), not by leaving it */
 static float hold_t;
-static bool hold_lost;            /* the held tablet's window got the keyboard at least once */
-static Uint32 tab_missing_ms;
+static int tv_prev;               /* the mode to go back to after using the TV */
+static float use_x, use_y, use_w, use_h;   /* the screen in use (held tablet or TV), in window pixels */
 static bool in_transition(int m) { return m == M_PC_IN || m == M_PC_OUT || m == M_TAB_IN || m == M_TAB_OUT; }
 static int mode = M_WALK, back_mode = M_WALK;
 static float anim_t;
@@ -822,13 +822,13 @@ static void enter_pc(void)
     set_relative(false);
 }
 
-/* The tablet on the bed opens LSIW Control (Windows programs) on the KDE desktop; the apartment comes back when
- * it closes. */
+/* Picking up the tablet on the bed: LSIW Control (Windows programs) on the tablet's own screen, in your hands. */
 static void enter_tablet(void)
 {
     if (access("/usr/bin/lsiw-control", X_OK) != 0) { toast("LSIW isn't installed on this system"); return; }
+    if (!tablet_live()) { toast("The tablet's screen needs sway and grim (sudo pacman -S sway grim)"); return; }
     if (mode == M_LIE) stand_up_bed();
-    tab_live_anim = tablet_live();
+    tab_live_anim = true;
     mode = M_TAB_IN;
     anim_t = 0;
     anim_from = v3(P.x, P.eye, P.z);
@@ -836,11 +836,30 @@ static void enter_tablet(void)
     set_relative(false);
 }
 
+/* Steam on the TV: set it up the first time (a terminal on the desktop), else sit in front of the TV and use
+ * Steam Big Picture on the TV's own screen. */
 static void steam_play(void)
 {
-    if (job_kind() == JOB_STEAM) { toast("Steam is starting..."); return; }
+    if (job_kind() == JOB_STEAM) { toast("Steam is being set up in the terminal..."); return; }
     if (video_active()) video_stop();
-    job_start(JOB_STEAM);
+    if (!steam_installed()) { job_start(JOB_STEAM); return; }
+    if (!steam_tv_start()) { toast("The TV's screen needs sway and grim (sudo pacman -S sway grim)"); return; }
+    tv_prev = mode == M_SIT ? M_SIT : M_WALK;
+    mode = M_TV_USE;
+    anim_t = 0;
+    anim_from = v3(P.x, P.eye, P.z);
+    anim_yaw0 = P.yaw; anim_pitch0 = P.pitch;
+    set_relative(false);
+    SDL_StartTextInput();
+    steam_tv_use(true);
+}
+
+static void tv_leave(void)
+{
+    steam_tv_use(false);
+    SDL_StopTextInput();
+    mode = tv_prev;
+    set_relative(true);
 }
 
 static void remote_toggle(void)
@@ -2207,9 +2226,22 @@ static void utf8_pop(char *s)
 
 static bool is_panel(int m) { return m == M_QUIT || m == M_MENU || m == M_SHOP || m == M_DECOR || m == M_VIDEOS || m == M_SETTINGS || m == M_HELP || m == M_BOARD || m == M_CREW || m == M_AGENT || m == M_LETTER || m == M_MODELS; }
 
+/* Window position (event coordinates) to a spot on the screen in use, 0..1; false outside it. */
+static bool use_at(int ex, int ey, float *fx, float *fy)
+{
+    int ww, wh;
+    SDL_GetWindowSize(win, &ww, &wh);
+    float mx = ex * (float)WIN_W / (ww ? ww : 1), my = ey * (float)WIN_H / (wh ? wh : 1);
+    if (mode == M_TAB_HOLD) tablet_rect(&use_x, &use_y, &use_w, &use_h);
+    if (use_w <= 0 || use_h <= 0) return false;
+    *fx = (mx - use_x) / use_w; *fy = (my - use_y) / use_h;
+    return *fx >= 0 && *fy >= 0 && *fx <= 1 && *fy <= 1;
+}
+
 static void tablet_down(void)
 {
     tablet_put_down();
+    SDL_StopTextInput();
     mode = M_TAB_OUT;
     anim_t = 0;
     tab_live_anim = true;
@@ -2219,7 +2251,8 @@ static void handle_key(SDL_Keysym k)
 {
     SDL_Keycode key = k.sym;
     if (in_transition(mode)) return;
-    if (mode == M_TAB_HOLD) { if (key == SDLK_ESCAPE) tablet_down(); return; }
+    if (mode == M_TAB_HOLD) { if (key == SDLK_ESCAPE) tablet_down(); else nest_key(NEST_TAB, key, k.mod); return; }
+    if (mode == M_TV_USE) { if (key == SDLK_F12 || (key == SDLK_ESCAPE && (k.mod & KMOD_SHIFT))) tv_leave(); else nest_key(NEST_TV, key, k.mod); return; }
     if (mdl_typing) {
         if (key == SDLK_ESCAPE) { mdl_typing = false; SDL_StopTextInput(); }
         else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
@@ -2404,14 +2437,13 @@ static void camera_for_frame(V3 *eye, float *yaw, float *pitch, float *fade, flo
         *yaw = anim_yaw0 + wrap_angle(want_yaw - anim_yaw0) * t;
         *pitch = lerpf(anim_pitch0, want_pitch, t);
         if (tab_live_anim) {
-            /* pick the tablet up: its window comes in front, on the tablet in your hands */
-            if (anim_t > 0.8f && tablet_ready() && tablet_hold()) {
-                mode = M_TAB_HOLD; hold_t = 0; hold_lost = false; tab_missing_ms = 0;
+            /* pick the tablet up: its screen, in your hands */
+            if (anim_t > 0.8f) {
+                tablet_hold();
+                mode = M_TAB_HOLD; hold_t = 0;
                 P.x = 3.2f; P.z = 1.86f; P.yaw = -PI_F / 2; P.pitch = -0.3f;
                 set_relative(false);
-            } else if (anim_t > 8.0f) {
-                tab_live_anim = false;   /* the window never came: open LSIW Control the old way */
-                anim_t = 0.7f;
+                SDL_StartTextInput();
             }
             return;
         }
@@ -2423,6 +2455,19 @@ static void camera_for_frame(V3 *eye, float *yaw, float *pitch, float *fade, flo
             exit_code = EXIT_TO_TABLET;
             running = false;
         }
+    } else if (mode == M_TV_USE) {
+        /* in front of the TV, close enough that it fills most of the view */
+        float A = (float)WIN_W / WIN_H, th = tanf(CFG.fov * PI_F / 360);
+        float d = W.tv_w / (1.4f * th * A);
+        if (W.tv_h / (2 * d) > 0.75f * th) d = W.tv_h / (1.5f * th);
+        V3 e = v3(W.tv_center.x, W.tv_center.y, W.tv_center.z - d);
+        anim_t += dt;
+        float t = smooth(clampf(anim_t / 0.6f, 0, 1));
+        *eye = v3(lerpf(anim_from.x, e.x, t), lerpf(anim_from.y, e.y, t), lerpf(anim_from.z, e.z, t));
+        *yaw = anim_yaw0 + wrap_angle(0 - anim_yaw0) * t;
+        *pitch = lerpf(anim_pitch0, 0, t);
+        float hw = (W.tv_w / 2 / d) / (th * A) * WIN_W / 2, hh = (W.tv_h / 2 / d) / th * WIN_H / 2;
+        use_x = WIN_W / 2.0f - hw; use_y = WIN_H / 2.0f - hh; use_w = 2 * hw; use_h = 2 * hh;
     } else if (mode == M_TAB_HOLD) {
         V3 e = W.tablet_eye;
         *eye = v3(e.x, e.y + 0.1f, e.z);
@@ -2566,12 +2611,20 @@ int main(int argc, char **argv)
             case SDL_QUIT: running = false; break;
             case SDL_KEYDOWN: handle_key(ev.key.keysym); break;
             case SDL_TEXTINPUT:
-                if (mdl_typing) { if (strlen(mdl_buf) + strlen(ev.text.text) < sizeof mdl_buf - 1) strcat(mdl_buf, ev.text.text); }
+                if (getenv("LIFEOS_APT_DEBUG")) fprintf(stderr, "text input [%s] mode %d\n", ev.text.text, mode);
+                if (mode == M_TAB_HOLD) nest_text(NEST_TAB, ev.text.text);
+                else if (mode == M_TV_USE) nest_text(NEST_TV, ev.text.text);
+                else if (mdl_typing) { if (strlen(mdl_buf) + strlen(ev.text.text) < sizeof mdl_buf - 1) strcat(mdl_buf, ev.text.text); }
                 else if (ed_field >= 0) { if (strlen(ed_buf) + strlen(ev.text.text) < sizeof ed_buf - 1) strcat(ed_buf, ev.text.text); }
                 else if (mode == M_CHAT && strlen(input) + strlen(ev.text.text) < sizeof input - 1) strcat(input, ev.text.text);
                 break;
             case SDL_MOUSEMOTION:
                 mouse_x = ev.motion.x; mouse_y = ev.motion.y;
+                if (mode == M_TAB_HOLD || mode == M_TV_USE) {
+                    float fx, fy;
+                    if (use_at(ev.motion.x, ev.motion.y, &fx, &fy)) nest_pointer(mode == M_TV_USE ? NEST_TV : NEST_TAB, fx, fy);
+                    break;
+                }
                 if (SDL_GetRelativeMouseMode()) look(ev.motion.xrel, ev.motion.yrel);
                 else if (dragging) { look((ev.motion.x - drag_x) * 2, (ev.motion.y - drag_y) * 2); drag_x = ev.motion.x; drag_y = ev.motion.y; }
                 else if (look_active && eff_look() == LOOK_VM) {
@@ -2586,20 +2639,28 @@ int main(int argc, char **argv)
                 }
                 break;
             case SDL_MOUSEBUTTONUP:
+                if (mode == M_TAB_HOLD || mode == M_TV_USE) {
+                    int b = ev.button.button == SDL_BUTTON_RIGHT ? 3 : ev.button.button == SDL_BUTTON_MIDDLE ? 2 : 1;
+                    nest_button(mode == M_TV_USE ? NEST_TV : NEST_TAB, b, false);
+                    break;
+                }
                 if (ev.button.button == SDL_BUTTON_RIGHT) dragging = false;
                 break;
             case SDL_MOUSEBUTTONDOWN:
+                if (mode == M_TAB_HOLD || (mode == M_TV_USE && anim_t > 0.6f)) {
+                    int n = mode == M_TV_USE ? NEST_TV : NEST_TAB;
+                    float fx, fy;
+                    if (!use_at(ev.button.x, ev.button.y, &fx, &fy)) { if (n == NEST_TV) tv_leave(); else tablet_down(); break; }
+                    int b = ev.button.button == SDL_BUTTON_RIGHT ? 3 : ev.button.button == SDL_BUTTON_MIDDLE ? 2 : 1;
+                    nest_pointer(n, fx, fy);
+                    nest_button(n, b, true);
+                    break;
+                }
                 if (ev.button.button == SDL_BUTTON_RIGHT && (mode == M_WALK || mode == M_SIT || mode == M_LIE) && !SDL_GetRelativeMouseMode()) {
                     dragging = true;
                     drag_x = ev.button.x; drag_y = ev.button.y;
                 } else if (ev.button.button == SDL_BUTTON_LEFT) {
-                    if (mode == M_TAB_HOLD) {
-                        int ww, wh; SDL_GetWindowSize(win, &ww, &wh);
-                        float mx = ev.button.x * (float)WIN_W / (ww ? ww : 1), my = ev.button.y * (float)WIN_H / (wh ? wh : 1), tx, ty, tw, th;
-                        tablet_rect(&tx, &ty, &tw, &th);
-                        if (mx < tx || my < ty || mx > tx + tw || my > ty + th) tablet_down();
-                        else tablet_hold();   /* it went behind: bring it back */
-                    } else if (is_panel(mode)) {
+                    if (is_panel(mode)) {
                         int ww, wh; SDL_GetWindowSize(win, &ww, &wh);
                         handle_click(ev.button.x * WIN_W / (ww ? ww : 1), ev.button.y * WIN_H / (wh ? wh : 1));
                     } else if (mode == M_WALK) {
@@ -2609,7 +2670,9 @@ int main(int argc, char **argv)
                 }
                 break;
             case SDL_MOUSEWHEEL:
-                if (mode == M_CHAT) { chat_scroll += ev.wheel.y; if (chat_scroll < 0) chat_scroll = 0; }
+                if (mode == M_TAB_HOLD) nest_scroll(NEST_TAB, ev.wheel.y);
+                else if (mode == M_TV_USE) nest_scroll(NEST_TV, ev.wheel.y);
+                else if (mode == M_CHAT) { chat_scroll += ev.wheel.y; if (chat_scroll < 0) chat_scroll = 0; }
                 else if (is_panel(mode)) { int n = list_len(); if (n) menu_sel = (int)clampf((float)(menu_sel - ev.wheel.y), 0, (float)(n - 1)); }
                 break;
             case SDL_WINDOWEVENT:
@@ -2619,7 +2682,6 @@ int main(int argc, char **argv)
                     apply_quality();
                 } else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) { has_focus = false; if (mode == M_WALK) set_relative(false); }
                 else if (ev.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) { has_focus = true; last_input_ms = SDL_GetTicks();
-                    if (mode == M_TAB_HOLD && hold_lost) tablet_down();
                     if (mode == M_WALK || mode == M_SIT || mode == M_LIE) set_relative(true); }
                 break;
             }
@@ -2634,12 +2696,9 @@ int main(int argc, char **argv)
         if (mode == M_MODELS && (mdl_poll -= dt) <= 0) { mdl_poll = 2; models_refresh(); }
         if (mode == M_TAB_HOLD) {
             hold_t += dt;
-            if (!has_focus) hold_lost = true;
-            if (!tablet_ready()) {
-                if (!tab_missing_ms) tab_missing_ms = SDL_GetTicks();
-                else if (SDL_GetTicks() - tab_missing_ms > 1500) tablet_down();
-            } else tab_missing_ms = 0;
+            if (!nest_running(NEST_TAB) && hold_t > 3) tablet_down();
         }
+        if (mode == M_TV_USE && !nest_running(NEST_TV) && anim_t > 1) tv_leave();
         if (update_done() && running) {
             toast("LifeOS is updated: restarting the apartment");
             save_state(false);
@@ -2713,7 +2772,14 @@ int main(int argc, char **argv)
         glDisable(GL_DEPTH_TEST);
         gfx_ortho(WIN_W, WIN_H);
         glEnable(GL_BLEND);
-        if (mode == M_TAB_HOLD) tablet_draw_held(T, hold_lost ? "Click outside the tablet to put it down" : "Click the screen to use it  ·  Esc or click outside to put it down");
+        if (mode == M_TAB_HOLD) tablet_draw_held(T, "Esc or click outside the tablet to put it down");
+        if (mode == M_TV_USE && anim_t > 0.6f) {
+            const char *hint = "F12 or click outside the TV: stop using it  ·  Esc is Back in Steam";
+            int tw = text_w(F_SMALL, hint) + 24;
+            float ty = WIN_H - text_h(F_SMALL) - 18.0f;
+            rect(WIN_W / 2.0f - tw / 2.0f, ty, (float)tw, text_h(F_SMALL) + 8.0f, rgba(10, 12, 18, 200));
+            text_center(F_SMALL, WIN_W / 2.0f, ty + 4, hint, rgb(235, 238, 245));
+        }
         else if (!in_transition(mode)) {
             draw_labels(vw, vh, (float)WIN_W / vw, (float)WIN_H / vh);
             draw_hud(fps);

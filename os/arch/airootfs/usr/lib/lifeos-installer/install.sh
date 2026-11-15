@@ -276,7 +276,21 @@ if [ "$UEFI" = 1 ]; then
   arch-chroot "$T" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=LifeOS --recheck ||
     arch-chroot "$T" grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=LifeOS --no-nvram --removable
   # firmware that forgets its boot entries (and most VMs) start the fallback path; only claim it on our own disk
-  [ "$MODE" = erase ] && arch-chroot "$T" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable >/dev/null 2>&1 || true
+  # (on a shared EFI partition too when nothing else claimed the fallback path yet)
+  if [ "$MODE" = erase ] || [ ! -e "$T/boot/efi/EFI/BOOT/BOOTX64.EFI" ]; then
+    arch-chroot "$T" grub-install --target=x86_64-efi --efi-directory=/boot/efi --removable >/dev/null 2>&1 || true
+  fi
+  # Boot LifeOS next and first, before the installer's USB stick or DVD (Hyper-V and many PCs keep the installer
+  # media ahead of the disk, so the restart would otherwise open the installer again).
+  if command -v efibootmgr >/dev/null; then
+    num=$(efibootmgr 2>/dev/null | sed -n 's/^Boot\([0-9A-Fa-f]\{4\}\)\*\? LifeOS.*/\1/p' | head -n 1)
+    if [ -n "$num" ]; then
+      order=$(efibootmgr 2>/dev/null | sed -n 's/^BootOrder: //p' | tr ',' '\n' | grep -vix "$num" | paste -sd, -)
+      efibootmgr -q -o "$num${order:+,$order}" 2>/dev/null || true
+      efibootmgr -q -n "$num" 2>/dev/null || true
+      log "boot entry Boot$num is first"
+    fi
+  fi
 else
   arch-chroot "$T" grub-install --target=i386-pc --recheck "$BIOSDISK"
 fi

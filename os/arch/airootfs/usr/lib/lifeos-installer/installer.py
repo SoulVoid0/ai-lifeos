@@ -635,7 +635,8 @@ class Installer(Gtk.ApplicationWindow):
         self.installing = False
         if ok:
             self.bar.set_fraction(1)
-            self.status.set_text("LifeOS is installed. Restart, and take the USB stick out when the screen goes dark.")
+            self.status.set_text(("LifeOS is installed and set to start first. Restart, and take the USB stick out when the screen goes dark "
+                                 "(in a virtual machine: eject the installer ISO from its DVD drive)."))
             self.finish.set_visible(True)
         else:
             self.status.set_text("The installation failed: " + (error or "see Details") + " Nothing else was changed after that point.")

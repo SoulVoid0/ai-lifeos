@@ -10,8 +10,8 @@ KDE Plasma desktop.
 | Interact | E (talk to an agent, sit on the couch, TV, bed, tablet, PC, shop kiosk, whiteboard) |
 | Menu (Return to the PC, AI crew, Settings, Quit) / AI crew / shop / decorate / help | Esc / K / P / C / F1 |
 | Look | The mouse: the cursor is hidden and held in the middle. In VMs with an absolute mouse (Hyper-V, VirtualBox, QEMU tablet) it's hidden and pushing it against a screen edge keeps turning. Also Left/Right, PgUp/PgDn, or right-drag |
-| Windows programs | The tablet on the master bed shows LSIW Control live; E picks it up and you use the real LSIW Control in your hands (Esc or a click outside puts it down) |
-| TV | E on the remote (or R on the couch) switches Steam mode (Big Picture) and video mode; Enter on the couch plays Steam |
+| Windows programs | The tablet on the master bed shows LSIW Control live; E picks it up and you use it in your hands (Esc or a click outside puts it down) |
+| TV | E on the remote (or R on the couch) switches Steam mode (Big Picture) and video mode. In Steam mode, E on the TV (Enter on the couch) sits you in front of it and Steam Big Picture runs on it; F12 or a click outside the TV gets up (Esc is Steam's Back) |
 | Record | E on the camera in the hallway (or Shift+F5 anywhere): records everything on screen, PC and tablet included, with sound, to ~/Videos/LifeOS recordings |
 | Graphics quality | F2 (Low renders at half resolution and 30 fps; picked automatically on software rendering) |
 | Use the PC | E at the desk: the apartment closes and Plasma is yours |
@@ -48,6 +48,11 @@ you're in the master bedroom.
 **AI crew panel** (K, or Esc > AI crew): every AI with its model and on/off switch; add one, or open one to change
 its name, job title, model, color, max steps, description, personality, speaking style and quirks, or remove it
 (built-in AIs can only be switched off). Uses `/api/crew/agents`.
+
+**The tablet's and the TV's own screens** (`apartment/src/nest.c`): each runs its own invisible session, apart
+from the KDE desktop on the PC, with only that program in it: LSIW Control (its own instance) on the tablet, Steam Big
+Picture on the TV. That's sway with the headless backend; the picture comes from grim, the mouse and keys go in through
+a virtual pointer and keyboard. Nothing of them shows on the real screen.
 
 **AI models** (top row of the AI crew panel): the models on this computer (Ollama, built in), a list of good ones to
 download with one Enter, or type any Ollama name. Enter twice removes one. A fresh install downloads a small starter
