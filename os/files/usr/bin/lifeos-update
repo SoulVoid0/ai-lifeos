@@ -1,0 +1,85 @@
+#!/bin/bash
+# Updates LifeOS in place from its GitHub releases (no reinstall): the letter at the apartment's front door.
+#   lifeos-update --check    prints "available <version>", "none", "live" (the live USB can't update) or "error"
+#   lifeos-update --install  downloads the newest lifeos (and lsiw) packages and installs them with pacman
+REPO=${LIFEOS_UPDATE_REPO:-SoulVoid0/ai-lifeos}
+API="https://api.github.com/repos/$REPO/releases?per_page=30"
+CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/lifeos-update
+
+current() { pacman -Q lifeos 2>/dev/null | awk '{print $2}' | sed 's/-[0-9]*$//'; }
+
+# newest release with a lifeos package: "<version> <url> [<lsiw url>]"
+newest() {
+  curl -fsSL --max-time 30 -H 'Accept: application/vnd.github+json' "$API" | python3 -c '
+import json, re, sys
+best = None
+for rel in json.load(sys.stdin):
+    if rel.get("draft"):
+        continue
+    pkgs = {}
+    for a in rel.get("assets", []):
+        m = re.fullmatch(r"(lifeos|lsiw)-([0-9][^-]*)-[0-9]+-(x86_64|any)\.pkg\.tar\.zst", a["name"])
+        if m:
+            pkgs[m.group(1)] = (m.group(2), a["browser_download_url"])
+    if "lifeos" in pkgs:
+        ver = pkgs["lifeos"][0]
+        key = tuple(int(x) for x in re.findall(r"\d+", ver))
+        if best is None or key > best[0]:
+            best = (key, ver, pkgs["lifeos"][1], pkgs.get("lsiw", ("", ""))[1])
+if best:
+    print(best[1], best[2], best[3])
+'
+}
+
+newer() {  # is $1 newer than $2?
+  [ "$(vercmp "$1" "$2" 2>/dev/null)" = 1 ]
+}
+
+case "$1" in
+--check)
+  if [ -d /run/archiso ]; then echo live; exit 0; fi
+  cur=$(current)
+  [ -n "$cur" ] || { echo none; exit 0; }
+  read -r ver _ _ < <(newest) || { echo error; exit 1; }
+  if [ -n "$ver" ] && newer "$ver" "$cur"; then echo "available $ver"; else echo none; fi
+  ;;
+--install)
+  echo "LifeOS update"
+  echo "============="
+  if [ -d /run/archiso ]; then
+    echo "This is the live USB: install LifeOS first (Install AI LifeOS on the desktop), then updates work."
+    read -rp "Press Enter to close." _; exit 1
+  fi
+  cur=$(current)
+  read -r ver url lsiw < <(newest)
+  if [ -z "$ver" ]; then echo "Couldn't reach GitHub. Check the internet connection and try again."; read -rp "Press Enter to close." _; exit 1; fi
+  if ! newer "$ver" "$cur"; then echo "LifeOS $cur is already the newest version."; read -rp "Press Enter to close." _; exit 0; fi
+  echo "Installed: $cur   New: $ver"
+  echo
+  rm -rf "$CACHE" && mkdir -p "$CACHE"
+  files=()
+  for u in "$url" "$lsiw"; do
+    [ -n "$u" ] || continue
+    f="$CACHE/${u##*/}"
+    echo "Downloading ${u##*/}..."
+    if ! curl -fL --retry 3 -o "$f" "$u"; then echo "The download failed."; read -rp "Press Enter to close." _; exit 1; fi
+    files+=("$f")
+  done
+  echo
+  echo "Installing (your password is needed). System packages are brought up to date first, as Arch needs."
+  if ! sudo bash -c 'pacman -Syu --noconfirm && pacman -U --noconfirm --needed "$@"' _ "${files[@]}"; then
+    echo; echo "The update didn't finish. Nothing of yours was touched; you can try again from the letter."
+    read -rp "Press Enter to close." _; exit 1
+  fi
+  rm -rf "$CACHE"
+  systemctl --user daemon-reload 2>/dev/null
+  systemctl --user restart lifeos-backend.service 2>/dev/null
+  touch "${XDG_RUNTIME_DIR:-/tmp}/lifeos-updated"
+  echo
+  echo "Done: LifeOS $ver is installed. The apartment restarts by itself."
+  echo "Some system parts (the kernel, KDE) are only used after a restart of the computer."
+  read -rp "Press Enter to close." -t 120 _
+  ;;
+*)
+  echo "usage: lifeos-update --check | --install" >&2; exit 2 ;;
+esac

@@ -26,5 +26,5 @@ package() {
   cp -a "$stage/ollama/." "$pkgdir/usr/"
   cp -a "$stage/files/." "$pkgdir/"
   install -Dm755 "$stage/lifeos-apartment-bin" "$pkgdir/usr/lib/lifeos/lifeos-apartment-bin"
-  chmod 755 "$pkgdir"/usr/bin/lifeos-* "$pkgdir"/usr/libexec/lifeos-firstuser
+  chmod 755 "$pkgdir"/usr/bin/lifeos-* "$pkgdir"/usr/libexec/lifeos-firstuser "$pkgdir"/usr/lib/lifeos/lifeos-steam-setup
 }

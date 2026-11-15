@@ -40,6 +40,7 @@ async def lifespan(app: FastAPI):
         services.start_background()
         threading.Thread(target=apps.list_apps, daemon=True, name="apps-preload").start()
         notify_bus.start()
+        threading.Thread(target=lean.starter, daemon=True, name="starter-model").start()
         gamemode.start()
         voice.sync_listener()
         remote.sync()

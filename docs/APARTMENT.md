@@ -10,7 +10,9 @@ KDE Plasma desktop.
 | Interact | E (talk to an agent, sit on the couch, TV, bed, tablet, PC, shop kiosk, whiteboard) |
 | Menu (Return to the PC, AI crew, Settings, Quit) / AI crew / shop / decorate / help | Esc / K / P / C / F1 |
 | Look | The mouse: the cursor is hidden and held in the middle. In VMs with an absolute mouse (Hyper-V, VirtualBox, QEMU tablet) it's hidden and pushing it against a screen edge keeps turning. Also Left/Right, PgUp/PgDn, or right-drag |
-| Windows programs | E on the tablet on the master bed (or T while lying in bed): LSIW Control opens; close it to come back |
+| Windows programs | The tablet on the master bed shows LSIW Control live; E picks it up and you use the real LSIW Control in your hands (Esc or a click outside puts it down) |
+| TV | E on the remote (or R on the couch) switches Steam mode (Big Picture) and video mode; Enter on the couch plays Steam |
+| Record | E on the camera in the hallway (or Shift+F5 anywhere): records everything on screen, PC and tablet included, with sound, to ~/Videos/LifeOS recordings |
 | Graphics quality | F2 (Low renders at half resolution and 30 fps; picked automatically on software rendering) |
 | Use the PC | E at the desk: the apartment closes and Plasma is yours |
 | Back to the apartment | Shift+F4 on the Plasma desktop (or "Back to the apartment" in the menu) |
@@ -46,6 +48,14 @@ you're in the master bedroom.
 **AI crew panel** (K, or Esc > AI crew): every AI with its model and on/off switch; add one, or open one to change
 its name, job title, model, color, max steps, description, personality, speaking style and quirks, or remove it
 (built-in AIs can only be switched off). Uses `/api/crew/agents`.
+
+**AI models** (top row of the AI crew panel): the models on this computer (Ollama, built in), a list of good ones to
+download with one Enter, or type any Ollama name. Enter twice removes one. A fresh install downloads a small starter
+model by itself on first start (the full live ISO already carries it).
+
+**Updates:** `lifeos-update` checks GitHub Releases every 6 hours. A new version drops a letter through the front door
+(hallway, opposite the shop); "Update now" installs it over the current one in a terminal (pacman), keeping files,
+settings and crew, and the apartment restarts.
 
 **Settings** (Esc > Settings): graphics quality, mouse sensitivity and invert, mouse look (Auto, hidden and locked,
 hidden with edge turning for VMs, or right-drag), walking and turn speed, field of view, frame rate limit (30/45/60/none), "Save power when idle" (5 fps in the

@@ -8,11 +8,21 @@ BIN=/usr/lib/lifeos/lifeos-apartment-bin
 RUN=${XDG_RUNTIME_DIR:-/tmp}
 if [ "$1" = "--autostart" ]; then
   [ -e "$RUN/lifeos-apartment-session" ] || exit 0
+  autostart=1
   shift
 fi
 # one apartment at a time
 exec 9>"$RUN/lifeos-apartment.lock"
-flock -n 9 || exit 0
+if ! flock -n 9; then
+  # Already running, behind another program (Steam, the update terminal...): bring it back to the front.
+  [ -n "$autostart" ] && exit 0
+  js="$RUN/lifeos-apartment-front.js"
+  echo "var l=workspace.stackingOrder;for(var i=0;i<l.length;i++)if(String(l[i].resourceClass||'').indexOf('lifeos-apartment')===0){l[i].minimized=false;workspace.activeWindow=l[i];}" >"$js"
+  dbus-send --session --print-reply --dest=org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript string:lifeos-apartment-front >/dev/null 2>&1
+  id=$(dbus-send --session --print-reply --dest=org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript string:"$js" string:lifeos-apartment-front 2>/dev/null | awk '/int32/ {print $2}')
+  [ -n "$id" ] && dbus-send --session --print-reply --dest=org.kde.KWin "/Scripting/Script$id" org.kde.kwin.Script.run >/dev/null 2>&1
+  exit 0
+fi
 log="${XDG_STATE_HOME:-$HOME/.local/state}/lifeos"
 mkdir -p "$log"
 args="$*"
@@ -31,11 +41,13 @@ while :; do
   # 0: closed or logged out, 10: the user went to the PC (KDE desktop), 11: the tablet on the bed (LSIW Control,
   # then back to the apartment when it closes). Anything else is a crash.
   if [ "$code" -eq 11 ]; then
-    lsiw-control >>"$log/lsiw-control.log" 2>&1
+    lsiw-control >>"$log/lsiw-control.log" 2>&1 9>&-
     args="--from-tablet"
     crashes=0
     continue
   fi
+  # 13: LifeOS was just updated: start the new apartment
+  if [ "$code" -eq 13 ]; then args=""; crashes=0; continue; fi
   [ "$code" -eq 0 ] || [ "$code" -eq 10 ] && exit 0  # the EXIT trap gives the Meta key back to KDE
   [ $(( $(date +%s) - started )) -lt 30 ] && crashes=$((crashes + 1)) || crashes=0
   if [ "$crashes" -ge 3 ]; then

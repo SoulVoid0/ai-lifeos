@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/types.h>
+#include <time.h>
 
 #define PI_F 3.14159265f
 #define DEG(x) ((x) * PI_F / 180.0f)
@@ -113,12 +115,13 @@ typedef struct {
     int pose;        /* 0 stand, 1 sit, 2 lie */
 } Spot;
 
-enum { I_NONE, I_AGENT, I_COUCH, I_TV, I_PC, I_BED, I_SHOP, I_FRIDGE, I_SINK, I_WHITEBOARD, I_PIANO, I_ARCADE, I_LIGHT, I_TABLET };
+enum { I_NONE, I_AGENT, I_COUCH, I_TV, I_PC, I_BED, I_SHOP, I_FRIDGE, I_SINK, I_WHITEBOARD, I_PIANO, I_ARCADE, I_LIGHT, I_TABLET,
+       I_REMOTE, I_DOOR, I_LETTER, I_CAMERA };
 typedef struct { int kind; V3 pos; float reach; int ref; const char *label; } Inter;
 
 #define MAX_COLLIDERS 256
 #define MAX_SPOTS 96
-#define MAX_INTERS 48
+#define MAX_INTERS 64
 typedef struct {
     Rect colliders[MAX_COLLIDERS]; int ncolliders;
     Rect walls[MAX_COLLIDERS]; int nwalls;          /* subset: walls only (sight lines) */
@@ -215,7 +218,50 @@ void video_poll(void);                     /* notices the end of a file */
 void pccap_set(bool on, bool low_power);   /* capture the live KDE desktop for the PC monitor (worker thread) */
 GLuint pccap_texture(float *u, float *v);  /* the newest picture; 0 while there is none */
 bool pccap_failed(void);                   /* KWin refused or isn't there: show the drawn picture */
-void pccap_shutdown(void);
+void pccap_shutdown(void);                 /* runs the queued KWin scripts first */
+/* Windows and single-window pictures (the tablet shows LSIW Control, the TV shows Steam). */
+enum { FEED_TABLET, FEED_TV, NFEEDS };
+typedef struct { char id[64]; char cls[96]; char cap[128]; int x, y, w, h, kind; bool minimized, active, below, other_desktop; } WinInfo;
+void pccap_watch(bool on);                 /* keep the window list fresh */
+int pccap_windows(WinInfo *out, int max, Uint32 *age_ms);   /* bottom-to-top; -1 before the first list */
+void pccap_feed(int feed, const char *cls, const char *caption_pref, bool on);  /* cls: substring, or "=exact" */
+GLuint pccap_feed_texture(int feed, float *u, float *v, Uint32 *age_ms);
+void pccap_hide_from_pc(const char *window_id);
+void pccap_kwin(const char *js);           /* run a KWin script (the body of a function) */
+bool pccap_kwin_ok(void);
+
+/* ------------------------------------------------------------------ apps.c */
+enum { JOB_NONE, JOB_STEAM, JOB_UPDATE };
+enum { TV_VIDEO, TV_STEAM };
+void apps_init(void);
+void apps_update(float dt, int room, bool focused);
+void apps_shutdown(void);                  /* gives the tablet's window back; calls pccap_shutdown */
+bool tablet_live(void);                    /* LSIW Control can be shown on the tablet (KWin scripting works) */
+bool tablet_ready(void);                   /* its window is open */
+bool tablet_hold(void);                    /* bring it in front, on the held tablet's screen */
+void tablet_put_down(void);
+void tablet_rect(float *x, float *y, float *w, float *h);   /* the held tablet's screen, in window pixels */
+GLuint tablet_texture(float *u, float *v);
+void tablet_draw_held(float t, const char *hint);
+int job_kind(void);
+void job_start(int kind);                  /* JOB_STEAM: Big Picture, JOB_UPDATE: the update terminal */
+void job_end(void);
+int tv_get_mode(void);
+void tv_set_mode(int m);
+bool steam_installed(void);
+void steam_tv_draw(V3 tl, V3 tr, V3 br, V3 bl, float h, float t);
+bool letter_here(void);
+float letter_age(void);
+const char *letter_version(void);
+void letter_draw(void);
+void update_start(void);
+bool update_done(void);                    /* the update finished: restart the apartment */
+
+/* ------------------------------------------------------------------ rec.c */
+pid_t rec_running(time_t *since, char *file, size_t n);
+int rec_toggle(const char *self);
+int rec_main(void);
+extern bool g_recording;                   /* refreshed by main.c about once a second */
 
 /* ------------------------------------------------------------------ main.c (shared state) */
 typedef struct {

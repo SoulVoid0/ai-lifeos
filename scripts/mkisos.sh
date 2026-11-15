@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Makes the two LifeOS ISOs from the packages in /repo (built first by build-iso.sh or the "OS image" workflow):
 #   AI-LifeOS-<ver>.iso            live system: boots into the 3D apartment; "Install AI LifeOS" installs it
+#                                  (LIVE_OVERLAY: extra files for it only, like the starter AI model; may pass 2 GB)
 #   AI-LifeOS-Installer-<ver>.iso  installer USB: boots straight into the installer window
 # Usage (as root, from the repo):  bash scripts/mkisos.sh <version> <output-dir>
 set -euo pipefail
@@ -23,6 +24,8 @@ build() {   # name label application overlay
   [ -n "$overlay" ] && cp -a "$overlay/." "$P/airootfs/"
   # Our name in the boot menus and on the text console instead of Arch's install-medium wording
   grep -rlZ "Arch Linux install medium" "$P/efiboot" "$P/grub" "$P/syslinux" | xargs -0 -r sed -i "s/Arch Linux install medium/$app/g" || true
+  # Room on the live system for Steam and other programs installed while it runs (archiso's default is 256 MB)
+  grep -rlZ "archisobasedir=" "$P/efiboot" "$P/grub" "$P/syslinux" | xargs -0 -r sed -i "s/archisobasedir=%INSTALL_DIR%/& cow_spacesize=75%/g" || true
   printf '\nWelcome to %s.\nThe desktop starts on its own. To install, run: lifeos-install\n\n' "$app" > "$P/airootfs/etc/motd"
   sed -i "s/^iso_name=.*/iso_name=\"$name\"/; s/^iso_label=.*/iso_label=\"$label\"/; s/^iso_publisher=.*/iso_publisher=\"AI LifeOS\"/; s/^iso_application=.*/iso_application=\"$app\"/" "$P/profiledef.sh"
   sed -i "s/^iso_version=.*/iso_version=\"$VER\"/" "$P/profiledef.sh"
@@ -33,5 +36,5 @@ build() {   # name label application overlay
   mv /tmp/lifeos-isoout/*.iso "$OUT/$name-$VER.iso"
   echo "Made $OUT/$name-$VER.iso"
 }
-build AI-LifeOS LIFEOS "AI LifeOS live system" ""
+build AI-LifeOS LIFEOS "AI LifeOS live system" "${LIVE_OVERLAY:-}"
 build AI-LifeOS-Installer LIFEOS_INSTALL "AI LifeOS installer" os/arch/installer-airootfs

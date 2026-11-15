@@ -569,7 +569,10 @@ static void living_room(void)
     box(4.2f, 0.38f, 13.2f, 5.8f, 0.44f, 13.9f, C_WOOD);
     for (int k = 0; k < 4; k++) boxc(k & 1 ? 5.7f : 4.3f, 0, k & 2 ? 13.8f : 13.3f, 0.06f, 0.38f, 0.06f, C_WOOD);
     boxc(4.6f, 0.44f, 13.5f, 0.12f, 0.1f, 0.12f, rgb(200, 80, 60));   /* a mug */
-    boxc(5.3f, 0.44f, 13.6f, 0.3f, 0.02f, 0.2f, rgb(40, 40, 46));    /* the remote */
+    /* the TV remote: switches the TV between videos and Steam */
+    boxc(5.3f, 0.44f, 13.6f, 0.06f, 0.022f, 0.2f, rgb(30, 30, 34));
+    boxc(5.3f, 0.462f, 13.52f, 0.02f, 0.006f, 0.02f, rgb(200, 40, 40));
+    for (int b = 0; b < 3; b++) boxc(5.3f, 0.462f, 13.58f + b * 0.035f, 0.035f, 0.004f, 0.018f, rgb(90, 90, 100));
     add_collider(4.2f, 13.2f, 5.8f, 13.9f, false);
     /* armchair */
     box(8.6f, 0.1f, 12.2f, 9.5f, 0.45f, 13.1f, shade(couch, 0.85f));
@@ -623,6 +626,7 @@ static void living_room(void)
     }
     if (lay_has("decor:plants")) { plant(7.4f, 15.5f, 1.2f); plant(0.6f, 9.6f, 1.0f); }
     add_inter(I_TV, 5, 1.2f, 15.6f, 3.2f, 0, "Choose a video");
+    add_inter(I_REMOTE, 5.3f, 0.45f, 13.6f, 1.5f, 0, "Pick up the remote");
     for (int i = 0; i < 3; i++) {
         W.couch_seats[i] = add_spot(SPOT_RELAX, R_LIVING, 4.25f + i * 0.85f, 0.5f, 12.05f, 0, 1, -1);
         approach(W.couch_seats[i], 7.6f, 12.85f);
@@ -816,7 +820,39 @@ static void hallway(void)
     add_inter(I_SHOP, 0.6f, 1.3f, 8.0f, 1.9f, 0, "Open the shop");
     float xs[4] = {4, 11, 16, 21};
     for (int i = 0; i < 4; i++) add_spot(SPOT_STAND, R_HALL, xs[i], 0, i % 2 ? 7.6f : 8.4f, i % 2 ? PI_F : 0, 0, -1);
-    if (lay_has("decor:plants")) plant(23.5f, 8.0f, 1.0f);
+    if (lay_has("decor:plants")) plant(22.7f, 8.62f, 0.9f);
+    /* the front door at the east end, across from the shop, with a mail slot */
+    float dx = 24 - HT;
+    box(dx - 0.08f, 0, 7.42f, dx, 2.2f, 7.5f, C_TRIM);
+    box(dx - 0.08f, 0, 8.5f, dx, 2.2f, 8.58f, C_TRIM);
+    box(dx - 0.08f, 2.12f, 7.42f, dx, 2.2f, 8.58f, C_TRIM);
+    box(dx - 0.05f, 0, 7.5f, dx, 2.12f, 8.5f, rgb(120, 70, 40));
+    for (int i = 0; i < 2; i++) {
+        float y0 = i ? 1.15f : 0.25f, y1 = i ? 1.95f : 1.0f;
+        box(dx - 0.06f, y0, 7.62f, dx - 0.05f, y1, 8.38f, rgb(105, 60, 34));
+    }
+    box(dx - 0.07f, 1.04f, 7.84f, dx - 0.05f, 1.12f, 8.16f, rgb(200, 170, 80));      /* the mail slot */
+    box(dx - 0.071f, 1.06f, 7.87f, dx - 0.069f, 1.1f, 8.13f, rgb(20, 16, 12));
+    ball(dx - 0.09f, 1.0f, 8.38f, 0.035f, rgb(210, 180, 90));                      /* handle */
+    box(dx - 0.06f, 1.45f, 7.99f, dx - 0.05f, 1.49f, 8.01f, rgb(20, 20, 20));      /* peephole */
+    box(23.05f, 0.012f, 7.55f, dx - 0.04f, 0.022f, 8.45f, rgb(150, 110, 60));        /* doormat */
+    add_inter(I_DOOR, dx - 0.1f, 1.2f, 8.0f, 1.8f, 0, "Open the front door");
+    add_inter(I_LETTER, 23.42f, 0.05f, 8.0f, 1.8f, 0, "Read the letter");
+    /* the camera on its tripod: records everything you see */
+    float cx = 8.0f, cz = 7.35f;
+    for (int l = 0; l < 3; l++) {
+        float a = l * 2.094f + 0.5f, fx = cx + cosf(a) * 0.22f, fz = cz + sinf(a) * 0.22f;
+        for (int k = 0; k < 6; k++) {
+            float t0 = k / 6.0f, t1 = (k + 1) / 6.0f;
+            float x0 = lerpf(fx, cx, t0), z0 = lerpf(fz, cz, t0), x1 = lerpf(fx, cx, t1), z1 = lerpf(fz, cz, t1);
+            box(fminf(x0, x1) - 0.012f, t0 * 1.2f, fminf(z0, z1) - 0.012f, fmaxf(x0, x1) + 0.012f, t1 * 1.2f, fmaxf(z0, z1) + 0.012f, rgb(40, 40, 44));
+        }
+    }
+    boxc(cx, 1.2f, cz, 0.12f, 0.04f, 0.12f, rgb(50, 50, 55));
+    boxc(cx, 1.24f, cz, 0.14f, 0.12f, 0.28f, rgb(30, 30, 34));
+    box(cx - 0.045f, 1.255f, cz + 0.14f, cx + 0.045f, 1.345f, cz + 0.2f, rgb(20, 20, 24));
+    add_collider(cx - 0.22f, cz - 0.22f, cx + 0.22f, cz + 0.22f, false);
+    add_inter(I_CAMERA, cx, 1.25f, cz, 1.6f, 0, "Start recording");
     if (lay_has("decor:posters")) {
         Col art[4] = {rgb(230, 120, 80), rgb(80, 150, 200), rgb(240, 200, 80), rgb(140, 90, 180)};
         for (int i = 0; i < 4; i++) {
@@ -997,6 +1033,13 @@ void world_draw_dynamic(float t, float sky_k)
     draw_tv_screen(W.tv_center, W.tv_w, W.tv_h);
     draw_pc_screen(W.pc_screen, 1.04f, 0.56f);
     draw_tablet_screen(W.tablet);
+    letter_draw();
+    {
+        /* the camera's light: red while recording */
+        Col lc = g_recording ? (fmodf(t, 1.0f) < 0.6f ? rgb(255, 30, 30) : rgb(90, 10, 10)) : rgb(40, 90, 40);
+        glow_quad(v3(8.08f, 1.345f, 7.492f), v3(8.05f, 1.345f, 7.492f), v3(8.05f, 1.325f, 7.492f), v3(8.08f, 1.325f, 7.492f), lc);
+        glow_quad(v3(8.05f, 1.36f, 7.3f), v3(8.08f, 1.36f, 7.3f), v3(8.08f, 1.36f, 7.33f), v3(8.05f, 1.36f, 7.33f), lc);
+    }
     draw_whiteboard(W.whiteboard);
     desk_screens(t);
     clock_and_kiosk();

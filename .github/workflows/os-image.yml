@@ -23,9 +23,16 @@ jobs:
     container:
       image: archlinux:latest
       options: --privileged
+      # the runner's preinstalled SDKs, deleted below for disk space (the live ISO carries an AI model)
+      volumes:
+        - /usr/share/dotnet:/host/dotnet
+        - /usr/local/lib/android:/host/android
+        - /opt/hostedtoolcache:/host/toolcache
     steps:
       - name: Tools
         run: |
+          rm -rf /host/dotnet/* /host/android/* /host/toolcache/* || true
+          df -h / | tail -1
           pacman -Syu --noconfirm --needed archiso base-devel python python-pip nodejs npm git zstd github-cli sdl2 sdl2_ttf gtk4 pkgconf dbus
           useradd -m builder
 
@@ -47,6 +54,19 @@ jobs:
           else curl -fsSL "$base/ollama-linux-amd64.tgz" | tar -xz -C $S/ollama; fi
           rm -rf $S/ollama/lib/ollama/cuda_* $S/ollama/lib/ollama/*cuda* 2>/dev/null || true
           du -sh $S/*
+
+      - name: Put the starter AI model on the live system
+        run: |
+          # The full live ISO ships Ollama with a small model, so the crew talks without downloading anything
+          # (it may be in parts; the installer ISO stays one file and downloads the model on first start).
+          S=os/arch/pkg/src-stage
+          M=/tmp/live-extra/var/lib/ollama/models
+          mkdir -p $M
+          OLLAMA_MODELS=$M $S/ollama/bin/ollama serve >/tmp/ollama.log 2>&1 &
+          for i in $(seq 30); do curl -fs http://127.0.0.1:11434/api/tags >/dev/null && break; sleep 1; done
+          $S/ollama/bin/ollama pull qwen3:4b-instruct-2507-q4_K_M || echo "starter model download failed; the live ISO goes without it"
+          kill %1 || true
+          du -sh /tmp/live-extra
 
       - name: Build the 3D apartment
         run: |
@@ -70,7 +90,7 @@ jobs:
       - name: Build the ISOs (live and installer)
         run: |
           rm -rf /var/cache/pacman/pkg/*
-          bash scripts/mkisos.sh "${{ github.run_number }}" out
+          LIVE_OVERLAY=/tmp/live-extra bash scripts/mkisos.sh "${{ github.run_number }}" out
           ls -lh out
 
       - name: Publish as a pre-release
